@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { ChevronLeft, ChevronRight, ArrowUp, Zap } from "lucide-react";
 
 interface Props {
@@ -12,7 +12,7 @@ interface Props {
 }
 
 const btnClass =
-  "flex h-16 w-16 items-center justify-center rounded-full border border-white/15 bg-black/45 text-white/80 backdrop-blur-sm active:bg-white/20 active:text-white touch-none select-none";
+  "flex h-16 w-16 items-center justify-center rounded-full border border-white/10 bg-black/50 text-white/80 backdrop-blur-sm active:bg-white/20 active:text-white touch-none select-none";
 
 export default function TouchControls({
   onMoveStart,
@@ -23,7 +23,22 @@ export default function TouchControls({
   onAimMove,
   onAimEnd,
 }: Props) {
-  const aiming = useRef(false);
+  // pointerId of the finger that owns the aim drag, or null when idle. Using
+  // the id (rather than a bare boolean) keeps a second finger touching the
+  // aim surface from ending the first finger's drag.
+  const aimPointer = useRef<number | null>(null);
+
+  // If this component unmounts while a finger is still down (a level-up or
+  // pause can flip mid-gesture), no pointerup/pointercancel ever fires — so
+  // release the held move key and stop firing on the way out. Without this
+  // the engine keeps auto-firing or auto-running with nothing on screen.
+  useEffect(() => {
+    return () => {
+      aimPointer.current = null;
+      onMoveEnd();
+      onAimEnd();
+    };
+  }, [onMoveEnd, onAimEnd]);
 
   return (
     <div className="pointer-events-none absolute inset-0 z-30">
@@ -31,25 +46,28 @@ export default function TouchControls({
       <div
         className="pointer-events-auto absolute right-0 top-0 h-full w-2/3 touch-none"
         onPointerDown={(e) => {
-          aiming.current = true;
+          if (aimPointer.current !== null) return;
+          aimPointer.current = e.pointerId;
           (e.target as HTMLElement).setPointerCapture(e.pointerId);
           onAimStart(e.clientX, e.clientY);
         }}
         onPointerMove={(e) => {
-          if (aiming.current) onAimMove(e.clientX, e.clientY);
+          if (aimPointer.current === e.pointerId) onAimMove(e.clientX, e.clientY);
         }}
-        onPointerUp={() => {
-          aiming.current = false;
+        onPointerUp={(e) => {
+          if (aimPointer.current !== e.pointerId) return;
+          aimPointer.current = null;
           onAimEnd();
         }}
-        onPointerCancel={() => {
-          aiming.current = false;
+        onPointerCancel={(e) => {
+          if (aimPointer.current !== e.pointerId) return;
+          aimPointer.current = null;
           onAimEnd();
         }}
       />
 
-      {/* bottom-left: move buttons */}
-      <div className="pointer-events-auto absolute bottom-8 left-6 flex gap-4">
+      {/* bottom-left: move buttons (bottom-24 clears the HUD weapon panel at bottom-6) */}
+      <div className="pointer-events-auto absolute bottom-24 left-6 flex gap-4">
         <button
           className={btnClass}
           onPointerDown={(e) => {
@@ -78,8 +96,8 @@ export default function TouchControls({
         </button>
       </div>
 
-      {/* bottom-right: jump + dash */}
-      <div className="pointer-events-auto absolute bottom-8 right-6 flex gap-4">
+      {/* bottom-right: jump + dash (bottom-24 clears the HUD dash panel at bottom-6) */}
+      <div className="pointer-events-auto absolute bottom-24 right-6 flex gap-4">
         <button
           className={btnClass}
           onPointerDown={(e) => {

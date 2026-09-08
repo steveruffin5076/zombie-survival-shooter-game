@@ -274,6 +274,9 @@ export class Engine {
     this.cam = clamp(this.pl.x - W / 2, 0, WORLD_W - W);
     this.mouse.x = W / 2;
     this.mouse.y = 280;
+    // Clear held input so a key/fire state stuck by a touch gesture that never
+    // saw its pointerup can't be inherited by a fresh run (death -> Restart).
+    this.keys.clear();
     this.mouse.down = false;
   }
 

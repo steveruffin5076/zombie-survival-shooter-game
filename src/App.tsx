@@ -113,7 +113,9 @@ export default function App() {
         <div className="grain pointer-events-none absolute inset-0 z-10" />
         <div className="scanlines pointer-events-none absolute inset-0 z-10 opacity-60" />
 
-        {screen === "game" && hud && <Hud hud={hud} onMute={toggleMute} onPause={togglePause} />}
+        {screen === "game" && hud && (
+          <Hud hud={hud} onMute={toggleMute} onPause={togglePause} touch={touch} />
+        )}
         {screen === "game" && touch && !paused && !choices && !over && (
           <TouchControls
             onMoveStart={moveStart}
