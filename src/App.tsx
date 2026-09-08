@@ -3,6 +3,8 @@ import { Engine } from "./game/engine";
 import type { EngineEvent, GameStats, HudState, UpgradeChoice } from "./game/types";
 import Hud from "./components/Hud";
 import { Menu, LevelUpModal, PauseMenu, GameOver } from "./components/Overlays";
+import TouchControls from "./components/TouchControls";
+import { isTouchCapable } from "./game/input";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -13,6 +15,9 @@ export default function App() {
   const [choices, setChoices] = useState<UpgradeChoice[] | null>(null);
   const [over, setOver] = useState<GameStats | null>(null);
   const [paused, setPaused] = useState(false);
+  const [touch] = useState(() =>
+    isTouchCapable(navigator.maxTouchPoints, window.matchMedia("(pointer: coarse)").matches)
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -71,6 +76,22 @@ export default function App() {
   const togglePause = useCallback(() => engineRef.current?.togglePause(), []);
   const toggleMute = useCallback(() => engineRef.current?.toggleMute(), []);
 
+  const moveStart = useCallback((dir: -1 | 1) => {
+    engineRef.current?.pressKey(dir === -1 ? "KeyA" : "KeyD");
+  }, []);
+  const moveEnd = useCallback(() => {
+    engineRef.current?.releaseKey("KeyA");
+    engineRef.current?.releaseKey("KeyD");
+  }, []);
+  const triggerJump = useCallback(() => engineRef.current?.triggerJump(), []);
+  const triggerDash = useCallback(() => engineRef.current?.triggerDash(), []);
+  const aimStart = useCallback((x: number, y: number) => {
+    engineRef.current?.setAimFromClient(x, y);
+    engineRef.current?.setFiring(true);
+  }, []);
+  const aimMove = useCallback((x: number, y: number) => engineRef.current?.setAimFromClient(x, y), []);
+  const aimEnd = useCallback(() => engineRef.current?.setFiring(false), []);
+
   // keyboard shortcuts for upgrade choices
   useEffect(() => {
     if (!choices) return;
@@ -93,6 +114,17 @@ export default function App() {
         <div className="scanlines pointer-events-none absolute inset-0 z-10 opacity-60" />
 
         {screen === "game" && hud && <Hud hud={hud} onMute={toggleMute} onPause={togglePause} />}
+        {screen === "game" && touch && !paused && !choices && !over && (
+          <TouchControls
+            onMoveStart={moveStart}
+            onMoveEnd={moveEnd}
+            onJump={triggerJump}
+            onDash={triggerDash}
+            onAimStart={aimStart}
+            onAimMove={aimMove}
+            onAimEnd={aimEnd}
+          />
+        )}
 
         {screen === "menu" && (
           <Menu onStart={start} high={hud?.high ?? 0} muted={hud?.muted ?? false} onMute={toggleMute} />
