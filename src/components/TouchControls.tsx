@@ -47,8 +47,14 @@ export default function TouchControls({
         className="pointer-events-auto absolute right-0 top-0 h-full w-2/3 touch-none"
         onPointerDown={(e) => {
           if (aimPointer.current !== null) return;
+          // Capture is best-effort: if it throws we still want the drag to
+          // start, otherwise the id below would wedge aiming permanently.
+          try {
+            (e.target as HTMLElement).setPointerCapture(e.pointerId);
+          } catch {
+            /* pointer already gone — keep aiming anyway */
+          }
           aimPointer.current = e.pointerId;
-          (e.target as HTMLElement).setPointerCapture(e.pointerId);
           onAimStart(e.clientX, e.clientY);
         }}
         onPointerMove={(e) => {
