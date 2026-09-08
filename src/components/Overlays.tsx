@@ -1,0 +1,243 @@
+import type { GameStats, Rarity, UpgradeChoice } from "../game/types";
+import {
+  Play, RotateCcw, Home, Trophy, Timer, Skull, TrendingUp, Volume2, VolumeX,
+  Crosshair, Gauge, Layers, ChevronsRight, Target, Wind, HeartPulse, Footprints,
+  Droplets, Magnet, Activity, Ghost, type LucideIcon,
+} from "lucide-react";
+
+const ICONS: Record<string, LucideIcon> = {
+  Crosshair, Gauge, Layers, ChevronsRight, Target, Wind, HeartPulse,
+  Footprints, Droplets, Magnet, Activity, Ghost,
+};
+
+const RARITY_STYLE: Record<Rarity, { border: string; glow: string; tag: string; label: string }> = {
+  common: { border: "border-zinc-500/40", glow: "hover:shadow-[0_0_40px_rgba(161,161,170,0.15)]", tag: "bg-zinc-500/15 text-zinc-300", label: "COMMON" },
+  rare: { border: "border-cyan-400/50", glow: "hover:shadow-[0_0_40px_rgba(34,211,238,0.2)]", tag: "bg-cyan-400/15 text-cyan-300", label: "RARE" },
+  epic: { border: "border-fuchsia-400/50", glow: "hover:shadow-[0_0_40px_rgba(232,121,249,0.25)]", tag: "bg-fuchsia-400/15 text-fuchsia-300", label: "EPIC" },
+};
+
+/* ------------------------------------------------------------------ */
+
+export function Menu({ onStart, high, muted, onMute }: { onStart: () => void; high: number; muted: boolean; onMute: () => void }) {
+  return (
+    <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-gradient-to-b from-black/60 via-transparent to-black/85">
+      <button
+        onClick={onMute}
+        className="absolute right-6 top-6 flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white"
+        aria-label="Mute"
+      >
+        {muted ? <VolumeX className="h-4.5 w-4.5" /> : <Volume2 className="h-4.5 w-4.5" />}
+      </button>
+
+      <div className="anim-rise mb-5 flex items-center gap-3 text-[11px] font-bold tracking-[0.5em] text-amber-400/90">
+        <span className="h-px w-10 bg-amber-400/40" />
+        THE DEAD DON'T SLEEP
+        <span className="h-px w-10 bg-amber-400/40" />
+      </div>
+
+      <h1 className="anim-rise text-center font-display leading-[0.9]" style={{ animationDelay: "60ms" }}>
+        <span className="title-outline anim-flicker block text-[clamp(3.5rem,10vw,7.5rem)] tracking-[0.06em]">
+          GRAVEYARD
+        </span>
+        <span className="title-blood anim-title-glow block text-[clamp(4.5rem,13vw,10rem)] tracking-[0.08em]">
+          SHIFT
+        </span>
+      </h1>
+
+      <p className="anim-rise mt-5 max-w-md text-center text-sm leading-relaxed text-zinc-400" style={{ animationDelay: "120ms" }}>
+        Armed with whatever you can scrape together, survive wave after wave of the
+        shambling horde. Level up, forge your arsenal, and don't stop moving.
+      </p>
+
+      <button
+        onClick={onStart}
+        className="anim-rise group relative mt-9 flex items-center gap-3 overflow-hidden rounded-xl bg-gradient-to-b from-amber-400 to-amber-600 px-12 py-4 text-lg font-bold tracking-[0.25em] text-amber-950 shadow-[0_0_50px_rgba(245,158,11,0.35)] transition-all duration-200 hover:scale-[1.04] hover:shadow-[0_0_70px_rgba(245,158,11,0.5)] active:scale-[0.98]"
+        style={{ animationDelay: "180ms" }}
+      >
+        <Play className="h-5 w-5 transition-transform group-hover:translate-x-0.5" fill="currentColor" />
+        START SHIFT
+      </button>
+
+      {high > 0 && (
+        <div className="anim-rise mt-5 flex items-center gap-2 text-xs font-semibold tracking-widest text-zinc-500" style={{ animationDelay: "220ms" }}>
+          <Trophy className="h-3.5 w-3.5 text-amber-400/80" />
+          BEST SCORE {high.toLocaleString()}
+        </div>
+      )}
+
+      <div className="anim-rise mt-10 flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-[10px] font-semibold tracking-wider text-white/40" style={{ animationDelay: "260ms" }}>
+        <span className="flex items-center gap-1.5"><span className="kbd">A</span><span className="kbd">D</span> MOVE</span>
+        <span className="flex items-center gap-1.5"><span className="kbd">W</span> DOUBLE JUMP</span>
+        <span className="flex items-center gap-1.5"><span className="kbd">SHIFT</span> DASH</span>
+        <span className="flex items-center gap-1.5"><span className="kbd">MOUSE</span> AIM · HOLD TO FIRE</span>
+        <span className="flex items-center gap-1.5"><span className="kbd">ESC</span> PAUSE</span>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+export function LevelUpModal({
+  choices, level, onPick,
+}: { choices: UpgradeChoice[]; level: number; onPick: (id: string) => void }) {
+  return (
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/75 backdrop-blur-[6px]">
+      <div className="anim-pop w-full max-w-3xl px-8">
+        <div className="mb-2 text-center text-[11px] font-bold tracking-[0.5em] text-violet-300/80">
+          LEVEL {level} REACHED
+        </div>
+        <h2 className="title-blood mb-1 text-center font-display text-5xl tracking-[0.1em]">
+          CHOOSE AN UPGRADE
+        </h2>
+        <p className="mb-8 text-center text-xs tracking-widest text-zinc-500">
+          PRESS 1 · 2 · 3 OR CLICK TO EQUIP
+        </p>
+
+        <div className="grid grid-cols-3 gap-5">
+          {choices.map((u, i) => {
+            const Icon = ICONS[u.icon] ?? Crosshair;
+            const r = RARITY_STYLE[u.rarity];
+            return (
+              <button
+                key={u.id}
+                onClick={() => onPick(u.id)}
+                className={`anim-rise group relative flex flex-col rounded-2xl border bg-zinc-950/90 p-6 text-left transition-all duration-200 hover:-translate-y-1.5 ${r.border} ${r.glow}`}
+                style={{ animationDelay: `${i * 70}ms` }}
+              >
+                <div className="mb-4 flex items-center justify-between">
+                  <div className={`rounded-md px-2 py-0.5 text-[9px] font-bold tracking-[0.2em] ${r.tag}`}>
+                    {r.label}
+                  </div>
+                  <span className="kbd opacity-60">{i + 1}</span>
+                </div>
+                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-amber-300 transition-colors group-hover:border-amber-300/40 group-hover:bg-amber-400/10">
+                  <Icon className="h-7 w-7" />
+                </div>
+                <div className="text-base font-bold tracking-wide text-zinc-100">{u.name}</div>
+                <div className="mt-1.5 min-h-9 text-xs leading-relaxed text-zinc-400">{u.desc}</div>
+                <div className="mt-4 flex gap-1">
+                  {Array.from({ length: u.max }).map((_, j) => (
+                    <span
+                      key={j}
+                      className={`h-1 flex-1 rounded-full ${
+                        j < u.stacks ? "bg-amber-400" : j === u.stacks ? "bg-amber-400/40 animate-pulse" : "bg-white/10"
+                      }`}
+                    />
+                  ))}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+export function PauseMenu({
+  onResume, onRestart, onQuit, muted, onMute,
+}: { onResume: () => void; onRestart: () => void; onQuit: () => void; muted: boolean; onMute: () => void }) {
+  return (
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-[6px]">
+      <div className="anim-pop flex w-72 flex-col items-stretch gap-3">
+        <h2 className="mb-3 text-center font-display text-4xl tracking-[0.2em] text-zinc-100">
+          PAUSED
+        </h2>
+        <MenuButton primary onClick={onResume} icon={<Play className="h-4 w-4" fill="currentColor" />} label="RESUME" />
+        <MenuButton onClick={onRestart} icon={<RotateCcw className="h-4 w-4" />} label="RESTART" />
+        <MenuButton onClick={onQuit} icon={<Home className="h-4 w-4" />} label="MAIN MENU" />
+        <MenuButton
+          onClick={onMute}
+          icon={muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+          label={muted ? "UNMUTE" : "MUTE"}
+        />
+      </div>
+    </div>
+  );
+}
+
+function MenuButton({ primary, onClick, icon, label }: { primary?: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center justify-center gap-2.5 rounded-xl px-6 py-3 text-sm font-bold tracking-[0.2em] transition-all duration-150 active:scale-[0.98] ${
+        primary
+          ? "bg-gradient-to-b from-amber-400 to-amber-600 text-amber-950 shadow-[0_0_30px_rgba(245,158,11,0.3)] hover:scale-[1.02]"
+          : "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/25 hover:bg-white/10"
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+export function GameOver({ stats, onRestart, onQuit }: { stats: GameStats; onRestart: () => void; onQuit: () => void }) {
+  const mins = Math.floor(stats.time / 60);
+  const secs = Math.floor(stats.time % 60);
+  return (
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-gradient-to-b from-red-950/40 via-black/75 to-black/90 backdrop-blur-[4px]">
+      <div className="anim-pop flex w-full max-w-md flex-col items-center px-8">
+        <div className="anim-rise mb-2 flex h-16 w-16 items-center justify-center rounded-2xl border border-red-500/30 bg-red-950/50">
+          <Skull className="h-8 w-8 text-red-400" />
+        </div>
+        <h2 className="anim-rise font-display text-6xl tracking-[0.12em] text-red-500 drop-shadow-[0_0_30px_rgba(220,38,38,0.5)]" style={{ animationDelay: "60ms" }}>
+          OVERRUN
+        </h2>
+        <p className="anim-rise mt-2 text-xs tracking-[0.35em] text-zinc-500" style={{ animationDelay: "100ms" }}>
+          THE HORDE TAKES ANOTHER
+        </p>
+
+        {stats.isBest && (
+          <div className="anim-pop mt-4 flex items-center gap-2 rounded-full border border-amber-400/40 bg-amber-400/10 px-4 py-1.5 text-[11px] font-bold tracking-[0.25em] text-amber-300" style={{ animationDelay: "150ms" }}>
+            <Trophy className="h-3.5 w-3.5" />
+            NEW BEST SCORE
+          </div>
+        )}
+
+        <div className="anim-rise mt-7 grid w-full grid-cols-3 gap-3" style={{ animationDelay: "180ms" }}>
+          <StatBox icon={<TrendingUp className="h-4 w-4" />} label="WAVE" value={String(stats.wave)} />
+          <StatBox icon={<Skull className="h-4 w-4" />} label="KILLS" value={stats.kills.toLocaleString()} />
+          <StatBox icon={<Timer className="h-4 w-4" />} label="TIME" value={`${mins}:${String(secs).padStart(2, "0")}`} />
+          <StatBox icon={<Trophy className="h-4 w-4" />} label="SCORE" value={stats.score.toLocaleString()} accent />
+          <StatBox icon={<Gauge className="h-4 w-4" />} label="LEVEL" value={String(stats.level)} />
+          <StatBox icon={<Trophy className="h-4 w-4" />} label="BEST" value={stats.best.toLocaleString()} />
+        </div>
+
+        <div className="anim-rise mt-8 flex w-full gap-3" style={{ animationDelay: "240ms" }}>
+          <button
+            onClick={onRestart}
+            className="flex flex-1 items-center justify-center gap-2.5 rounded-xl bg-gradient-to-b from-amber-400 to-amber-600 px-6 py-3.5 text-sm font-bold tracking-[0.2em] text-amber-950 shadow-[0_0_40px_rgba(245,158,11,0.35)] transition-all hover:scale-[1.03] active:scale-[0.98]"
+          >
+            <RotateCcw className="h-4 w-4" />
+            RETRY
+          </button>
+          <button
+            onClick={onQuit}
+            className="flex flex-1 items-center justify-center gap-2.5 rounded-xl border border-white/10 bg-white/5 px-6 py-3.5 text-sm font-bold tracking-[0.2em] text-zinc-200 transition-all hover:border-white/25 hover:bg-white/10 active:scale-[0.98]"
+          >
+            <Home className="h-4 w-4" />
+            MENU
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatBox({ icon, label, value, accent }: { icon: React.ReactNode; label: string; value: string; accent?: boolean }) {
+  return (
+    <div className={`flex flex-col items-center gap-1 rounded-xl border px-2 py-3 ${
+      accent ? "border-amber-400/30 bg-amber-400/5" : "border-white/10 bg-white/[0.03]"
+    }`}>
+      <div className={accent ? "text-amber-300" : "text-zinc-500"}>{icon}</div>
+      <div className={`font-display text-xl tracking-wider tabular-nums ${accent ? "text-amber-300" : "text-zinc-100"}`}>{value}</div>
+      <div className="text-[9px] font-bold tracking-[0.25em] text-zinc-500">{label}</div>
+    </div>
+  );
+}
