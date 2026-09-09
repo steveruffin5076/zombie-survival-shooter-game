@@ -2,12 +2,12 @@
  * The 6-Act campaign structure from `enhancement-1.md`. Pure data — `stages.ts`
  * flattens this into the 24-row `STAGES` table the engine actually reads.
  *
- * Only Act I is real content (it's today's already-tuned 4 stages, relabeled).
- * Acts II-VI are thin stub rows — reused themes, the existing Juggernaut as a
- * placeholder boss — so the mission is winnable end-to-end before each act's
- * own phase lands. `bossId` is forward-compat only in Phase 8: `spawnBoss()`
- * doesn't consult it yet (Phase 9 wires that up), so today's boss spawns
- * unchanged regardless of what's written here.
+ * Only Act I is real content (it's today's already-tuned 4 stages, relabeled,
+ * now fighting The Neighborhood Watch and facing the act-specific Screamer).
+ * Acts II-VI are thin stub rows — reused themes, each naming its own intended
+ * future boss (no `BOSS_DEFS` entry yet, so `spawnBoss()` falls back to the
+ * Juggernaut) — so the mission is winnable end-to-end before each act's own
+ * phase lands.
  */
 
 export interface ActStageDef {
@@ -28,7 +28,7 @@ export interface ActDef {
   bossId: string;
   /** exactly 4: 3 exploration stages + 1 Terminal Defense (index 3, fixedCamera) */
   stages: ActStageDef[];
-  /** act-specific spawn weights (e.g. the Screamer), keyed by ZType id — Phase 10 */
+  /** act-specific spawn weights (e.g. the Screamer), keyed by ZType id */
   enemyPool?: Partial<Record<string, number>>;
 }
 
@@ -36,6 +36,10 @@ export const ACTS: ActDef[] = [
   {
     id: 1, numeral: "I", name: "THE SUBURBAN STATIC", sub: "day 90 after redshift",
     bossId: "neighborhood_watch",
+    // the Screamer — a fragile, act-specific enemy per enhancement-1.md;
+    // a flat weight (not power-scaled like the base roster) keeps her a
+    // rare, deliberate encounter rather than common fodder
+    enemyPool: { screamer: 0.18 },
     stages: [
       { name: "THE CEMETERY", sub: "where it all began", themeId: "cemetery", worldW: 2880 },
       { name: "RUINED SUBURBS", sub: "nothing left to save", themeId: "suburbs", worldW: 2880 },
@@ -97,3 +101,25 @@ export const ACTS: ActDef[] = [
     ],
   },
 ];
+
+/** An act's extra spawn weights (e.g. the Screamer), or {} if it has none. */
+export function enemyPoolFor(actId: number): Partial<Record<string, number>> {
+  return ACTS[actId - 1]?.enemyPool ?? {};
+}
+
+/**
+ * Weighted pick across a spawn-weight table, keyed by ZType id (kept as a
+ * plain string here — acts.ts doesn't depend on engine.ts's private types).
+ * `rng` is injected so this is deterministic under test, same pattern as
+ * `rollLoot` in loot.ts.
+ */
+export function rollEnemy(weights: Partial<Record<string, number>>, rng: () => number = Math.random): string {
+  const entries = Object.entries(weights).filter((e): e is [string, number] => (e[1] ?? 0) > 0);
+  const total = entries.reduce((sum, [, w]) => sum + w, 0);
+  let roll = rng() * total;
+  for (const [type, w] of entries) {
+    roll -= w;
+    if (roll < 0) return type;
+  }
+  return entries[entries.length - 1][0];
+}

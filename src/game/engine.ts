@@ -5,6 +5,7 @@ import {
 } from "./weapons";
 import { Sfx } from "./audio";
 import { stageDefFor, cumulativeWaveIndex, difficultyFor, STAGES, type StageDef, type RunMode } from "./stages";
+import { enemyPoolFor, rollEnemy } from "./acts";
 import { THEMES, type ThemeDef } from "./themes";
 import { BACKPACK_SIZE, moveItem, placeItem, removeItem, type PlacedItem } from "./grid";
 import { ITEMS, shapeOfItem, itemForHotkey, type ConsumableKey } from "./items";
@@ -43,7 +44,7 @@ const shadeHex = (hex: string, factor: number) => {
   return `rgb(${ch(16)}, ${ch(8)}, ${ch(0)})`;
 };
 
-type ZType = "walker" | "runner" | "brute" | "spitter";
+type ZType = "walker" | "runner" | "brute" | "spitter" | "screamer";
 type ModalKind = "levelup" | "stageclear";
 
 interface ZConf {
@@ -55,6 +56,9 @@ const ZCONF: Record<ZType, ZConf> = {
   runner: { hp: 20, speed: 128, dmg: 7, r: 15, scale: 0.88, xp: 2, score: 14 },
   spitter: { hp: 30, speed: 46, dmg: 8, r: 16, scale: 0.95, xp: 2, score: 22 },
   brute: { hp: 150, speed: 36, dmg: 22, r: 30, scale: 1.5, xp: 6, score: 45 },
+  // Act I's Screamer — fragile and slow, but punishes a sloppy kill hard
+  // (an ambush), so worth notably more than her stats alone suggest
+  screamer: { hp: 18, speed: 40, dmg: 6, r: 15, scale: 0.85, xp: 4, score: 35 },
 };
 
 const WAVE_SUBS = [
@@ -78,6 +82,8 @@ interface Zombie {
   tint: number; boss: boolean; wob: number;
   /** sleeper: inert until woken by threat, damage, or a fast player passing close */
   dormant: boolean;
+  /** screamer only: 0 idle, >0 counting down to her scream, -1 already spent */
+  alertT: number;
   /** arena only — id of the barricade currently blocking this zombie's advance */
   blockedBy: string | null;
   /** arena only — razor wire slow remaining, seconds */
@@ -1144,6 +1150,23 @@ export class Engine {
         if (this.threat > 0.5 || (near && movingFast)) this.wakeZombie(z);
         else continue; // still asleep — no movement, no attack timer, no contact damage
       }
+      // the Screamer: crossing her path or gunfire nearby starts a windup; if
+      // she's still alive when it expires she shrieks — addNoise(1) spikes the
+      // meter to Loud and (via its own existing threshold check) triggers the
+      // same ambush a maxed-out noise meter always does, so a second Screamer
+      // mid-ambush can't stack one — the ambushT guard is already shared
+      if (z.type === "screamer" && z.alertT >= 0) {
+        if (z.alertT === 0) {
+          const close = Math.abs(p.x - z.x) < 260 && Math.abs(p.y - z.y) < 90;
+          if (close || this.threat > 0.3) z.alertT = 1.4;
+        } else {
+          z.alertT -= dt;
+          if (z.alertT <= 0) {
+            z.alertT = -1; // spent — a killed-or-survived Screamer never re-triggers
+            this.addNoise(1);
+          }
+        }
+      }
       z.atk -= dt;
       if (z.slowT > 0) z.slowT -= dt;
       const dx = p.x - z.x;
@@ -2005,20 +2028,15 @@ export class Engine {
     const count = boss
       ? Math.min(30, Math.round(6 + power * 1.3))
       : Math.min(52, Math.round(5 + power * 2.6 + power * power * 0.1));
-    const wWalker = 1;
-    const wRunner = power >= 2 ? 0.42 + power * 0.02 : 0;
-    const wSpitter = power >= 4 ? 0.3 : 0;
-    const wBrute = power >= 3 ? 0.14 + power * 0.015 : 0;
-    const total = wWalker + wRunner + wSpitter + wBrute;
-    for (let i = 0; i < count; i++) {
-      let roll = Math.random() * total;
-      let type: ZType = "walker";
-      if ((roll -= wWalker) < 0) type = "walker";
-      else if ((roll -= wRunner) < 0) type = "runner";
-      else if ((roll -= wSpitter) < 0) type = "spitter";
-      else type = "brute";
-      items.push({ type });
-    }
+    const weights: Partial<Record<string, number>> = {
+      walker: 1,
+      runner: power >= 2 ? 0.42 + power * 0.02 : 0,
+      spitter: power >= 4 ? 0.3 : 0,
+      brute: power >= 3 ? 0.14 + power * 0.015 : 0,
+      // act-specific extras (e.g. the Screamer, Act I only) fold into the same roll
+      ...enemyPoolFor(this.stageDef.actId),
+    };
+    for (let i = 0; i < count; i++) items.push({ type: rollEnemy(weights) as ZType });
     // shuffle the fodder
     for (let i = items.length - 1; i > 0; i--) {
       const j = RI(0, i);
@@ -2386,6 +2404,7 @@ export class Engine {
       type, xp: c.xp, score: c.score,
       t: R(0, 10), atk: R(0, 0.4), flash: 0, face: 1, dead: false, spit: R(1, 2.4),
       tint: Math.random(), boss: false, wob: R(0, TAU), dormant: false, blockedBy: null, slowT: 0,
+      alertT: 0,
     };
   }
 
@@ -3458,9 +3477,13 @@ export class Engine {
     c.fillStyle = "rgba(0,0,0,0.45)";
     for (let i = 0; i < 2; i++) c.fillRect(1 + i * 2.2, 1.6, 1.4, 3);
     c.restore();
-    // eyes — glowing, unless asleep (closed, no glow to give it away)
+    // eyes — glowing, unless asleep (closed, no glow to give it away). The
+    // Screamer's eyes stay a normal yellow until she's actually alerted, then
+    // escalate to crimson as her scream windup counts down — the only tell
+    // she gives before it fires
     if (!z.dormant) {
-      const eye = z.boss || z.type === "brute" ? "#ef4444" : "#fde047";
+      const eye = z.boss || z.type === "brute" || (z.type === "screamer" && z.alertT > 0)
+        ? "#ef4444" : "#fde047";
       c.globalAlpha = 0.3;
       c.fillStyle = eye;
       c.beginPath(); c.arc(headX + 4.5, headY - 2.4, 3.4, 0, TAU); c.fill();
@@ -3526,6 +3549,19 @@ export class Engine {
         c.globalAlpha = clamp(1 - ph / 2.7, 0, 1) * 0.7;
         c.fillText("z", px + 6 * z.scale + i * 3, py - 86 * z.scale - ph * 10);
       }
+      c.restore();
+    }
+
+    // Screamer windup tell — a tightening, faster-pulsing ring as the scream nears
+    if (z.type === "screamer" && z.alertT > 0) {
+      const pct = 1 - clamp(z.alertT / 1.4, 0, 1);
+      c.save();
+      c.globalAlpha = 0.3 + 0.4 * pct + 0.2 * Math.sin(t * (10 + pct * 20));
+      c.strokeStyle = "#ef4444";
+      c.lineWidth = 2;
+      c.beginPath();
+      c.arc(px, py - 80 * z.scale, 10 + pct * 4, 0, TAU);
+      c.stroke();
       c.restore();
     }
   }
