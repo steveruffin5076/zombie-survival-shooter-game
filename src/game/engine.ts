@@ -7,7 +7,11 @@ import { Sfx } from "./audio";
 import { canvasPointFromClient } from "./input";
 import { stageDefFor, cumulativeWaveIndex, STAGES, type StageDef, type RunMode } from "./stages";
 import { THEMES, type ThemeDef } from "./themes";
-import type { EngineEvent, GameStats, HudState, UpgradeChoice } from "./types";
+import { BACKPACK_SIZE, moveItem, placeItem, removeItem, type PlacedItem } from "./grid";
+import { ITEMS, shapeOfItem, itemForHotkey, type ConsumableKey } from "./items";
+import { rollLoot, type CrateTier } from "./loot";
+import { saveRun, loadRun, clearRun, SAVE_VERSION, type SaveData } from "./save";
+import type { EngineEvent, GameStats, HudState, InventorySnapshot, UpgradeChoice } from "./types";
 
 /* ------------------------------------------------------------------ */
 /* constants + helpers                                                 */
@@ -83,6 +87,8 @@ interface Building { x: number; w: number; h: number; win: number }
 interface Decor { x: number; kind: number; s: number; ph: number }
 interface Star { x: number; y: number; r: number; ph: number; tw: number }
 interface Gate { x: number; opened: boolean }
+interface Crate { x: number; y: number; tier: CrateTier; opened: boolean }
+interface GrenadeProj { x: number; y: number; vx: number; vy: number; fuse: number }
 
 /* ------------------------------------------------------------------ */
 /* engine                                                              */
@@ -184,6 +190,21 @@ export class Engine {
   private travelMinX = 26;
   private travelProgressX = 0;
   private travelIdleT = 0;
+
+  /* --- inventory: fixed 4x4 backpack, a persistent safe-house stash, loot crates --- */
+  private backpack: PlacedItem[] = [];
+  private deposit: string[] = [];
+  private intel = 0;
+  /** bumped on every backpack/deposit mutation — the UI polls this, not HudState */
+  private invVer = 0;
+  private nextItemSeq = 1;
+  private crates: Crate[] = [];
+  /** hold-to-open progress (seconds held) on whichever crate is currently in range */
+  private crateOpenT = 0;
+  private crateWarnT = 0;
+  private grenades: GrenadeProj[] = [];
+  /** active Tactical Stim buff remaining, seconds */
+  private stimT = 0;
 
   private score = 0;
   private kills = 0;
@@ -289,6 +310,8 @@ export class Engine {
       face: 1, aim: 0, cd: 0, ifr: 0, flash: 0, hurtT: 0,
       dashT: 0, dashCd: 0, dashDir: 1,
       jumps: 0, grounded: true, walk: 0,
+      /** blocks fire() while > 0 — consumable "use" animation lockout */
+      useT: 0,
     };
   }
 
@@ -347,6 +370,15 @@ export class Engine {
     this.travelMinX = 26;
     this.travelProgressX = 0;
     this.travelIdleT = 0;
+    this.backpack = [];
+    this.deposit = [];
+    this.intel = 0;
+    this.invVer++;
+    this.crates = [];
+    this.crateOpenT = 0;
+    this.crateWarnT = 0;
+    this.grenades = [];
+    this.stimT = 0;
     this.score = 0;
     this.kills = 0;
     this.playTime = 0;
@@ -444,6 +476,10 @@ export class Engine {
     if (c === "KeyQ") this.cycleWeapon(1);
     if (c === "KeyR") this.startReload(true);
     if (c === "KeyF" || c === "KeyV") this.toggleFireMode();
+    if (c === "KeyG") this.useConsumable("G");
+    if (c === "KeyB") this.useConsumable("B");
+    if (c === "KeyN") this.useConsumable("N");
+    if (c === "KeyT") this.useConsumable("T");
   };
 
   private onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.code);
@@ -619,7 +655,9 @@ export class Engine {
     this.motes(dt);
 
     // timers
-    p.cd -= dt; p.ifr -= dt; p.hurtT -= dt; p.flash -= dt; p.dashCd -= dt;
+    p.cd -= dt; p.ifr -= dt; p.hurtT -= dt; p.flash -= dt; p.dashCd -= dt; p.useT -= dt;
+    if (this.stimT > 0) this.stimT -= dt;
+    if (this.crateWarnT > 0) this.crateWarnT -= dt;
 
     // horizontal
     const mov = this.inputDir();
@@ -628,7 +666,8 @@ export class Engine {
       p.vx = p.dashDir * 1350;
       this.particles.push({ x: p.x - p.dashDir * 10, y: p.y - 34, vx: -p.dashDir * R(30, 90), vy: R(-30, 30), life: 0.3, max: 0.3, size: R(4, 10), color: "#67e8f9", grav: 0, add: true });
     } else {
-      const target = mov * this.st.speed;
+      // Tactical Stim: temporary speed rush
+      const target = mov * this.st.speed * (this.stimT > 0 ? 1.35 : 1);
       const rate = p.grounded ? 14 : 7;
       p.vx = lerp(p.vx, target, Math.min(1, rate * dt));
     }
@@ -665,7 +704,7 @@ export class Engine {
       // can't shoot mid-reload
     } else if (this.ammo[this.kind] <= 0) {
       this.startReload(); // auto reload the instant the mag runs dry
-    } else if (p.cd <= 0 && this.pivotT <= 0) {
+    } else if (p.cd <= 0 && this.pivotT <= 0 && p.useT <= 0) {
       // AUTO-FIRE ON: shoot only when a zombie is on the laser line.
       // AUTO-FIRE OFF: manual trigger via mouse.
       if (this.autoFire ? this.onTarget : this.mouse.down) this.fire();
@@ -676,6 +715,9 @@ export class Engine {
 
     // regen
     if (this.st.regen > 0) p.hp = Math.min(this.st.maxHp, p.hp + this.st.regen * dt);
+
+    this.updateCrates(dt);
+    this.updateGrenades(dt);
 
     // waves / travel
     if (this.phase === "break") {
@@ -699,6 +741,8 @@ export class Engine {
           this.phase = "break";
           this.breakT = 3.4;
           p.hp = Math.min(this.st.maxHp, p.hp + 12);
+          const boss = this.stageDef.bossWaves.includes(this.waveInStage);
+          this.spawnCrate(boss ? (chance(0.5) ? 3 : 2) : 1);
           this.announce(
             `WAVE ${this.waveInStage} CLEARED`,
             `${this.stageDef.wavesPerStage - this.waveInStage} to go — breathe while you can`
@@ -830,14 +874,27 @@ export class Engine {
     }
     // limited reserve weapons need spare rounds (pistols are unlimited)
     if (this.reserve[this.kind] === 0) {
-      if (manual) {
-        this.sfx.dryFire();
+      // a class-typed ammo box in the backpack auto-loads before giving up
+      const boxInst = this.backpack.find((it) => ITEMS[it.itemId]?.ammoClass === w.cls);
+      if (boxInst) {
+        const def = ITEMS[boxInst.itemId];
+        this.backpack = removeItem(this.backpack, boxInst.id);
+        this.invVer++;
+        this.reserve[this.kind] = def.ammoAmount ?? 0;
         this.texts.push({
-          x: this.pl.x, y: this.pl.y - 88, vy: -46, life: 0.9, max: 0.9,
-          text: "NO RESERVE AMMO", color: "#f87171", size: 12,
+          x: this.pl.x, y: this.pl.y - 88, vy: -46, life: 0.8, max: 0.8,
+          text: `+${def.ammoAmount} RESERVE`, color: "#67e8f9", size: 12,
         });
+      } else {
+        if (manual) {
+          this.sfx.dryFire();
+          this.texts.push({
+            x: this.pl.x, y: this.pl.y - 88, vy: -46, life: 0.9, max: 0.9,
+            text: "NO RESERVE AMMO", color: "#f87171", size: 12,
+          });
+        }
+        return;
       }
-      return;
     }
     this.reloading = true;
     this.reloadDur = w.reload;
@@ -888,7 +945,8 @@ export class Engine {
       return;
     }
     this.ammo[this.kind]--;
-    p.cd = 1 / st.fireRate;
+    // Tactical Stim: temporary fire-rate rush
+    p.cd = 1 / (st.fireRate * (this.stimT > 0 ? 1.4 : 1));
     p.flash = 0.07;
     // eject a spent casing
     this.particles.push({
@@ -1140,12 +1198,20 @@ export class Engine {
   }
 
   private die() {
-    this.over = true;
     this.shake(13);
     this.sfx.die();
     const p = this.pl;
     for (let i = 0; i < 40; i++)
       this.particles.push({ x: p.x, y: p.y - 34, vx: R(-260, 260), vy: R(-320, 40), life: R(0.4, 1), max: 1, size: R(2, 6), color: chance(0.6) ? BLOOD[RI(0, BLOOD.length - 1)] : "#0e7490", grav: 1100, add: false });
+    // Decisions locked: restart at the last safe house, keep level/XP/upgrades/
+    // weapons/deposit/progression, lose the carried backpack. Only a genuine
+    // game-over (no checkpoint reached yet) ends the run.
+    const checkpoint = loadRun(this.runMode);
+    if (checkpoint) {
+      this.retryStage(checkpoint);
+      return;
+    }
+    this.over = true;
     const isBest = this.score > this.high;
     if (isBest) {
       this.high = this.score;
@@ -1156,6 +1222,46 @@ export class Engine {
       score: this.score, time: this.playTime, best: this.high, isBest,
     };
     this.onEvent({ type: "gameover", stats });
+  }
+
+  /** reset() then restore progression from the last safe-house checkpoint. */
+  private retryStage(checkpoint: SaveData) {
+    this.reset();
+    this.setStage(checkpoint.stage);
+    this.pl.level = checkpoint.level;
+    this.pl.xp = checkpoint.xp;
+    this.pl.xpNext = checkpoint.xpNext;
+    this.score = checkpoint.score;
+    this.kills = checkpoint.kills;
+    this.playTime = checkpoint.playTime;
+    this.owned = new Set(checkpoint.owned);
+    this.equipped = { ...checkpoint.equipped };
+    this.kind = checkpoint.kind;
+    this.stacks = { ...checkpoint.stacks };
+    this.deposit = checkpoint.deposit;
+    this.intel = checkpoint.intel;
+    // backpack is deliberately dropped — that's the whole point of the penalty
+    this.backpack = [];
+    this.invVer++;
+    this.recompute();
+    this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
+    this.cam = clamp(this.pl.x - W / 2, 0, this.worldW - W);
+    this.mode = "play";
+    this.phase = "break";
+    this.breakT = 2.4;
+    this.announce("YOU DIED", `back at the safe house — ${this.stageDef.name}`, 2.8);
+  }
+
+  private writeCheckpoint(nextStage: number) {
+    const data: SaveData = {
+      version: SAVE_VERSION, runMode: this.runMode, stage: nextStage,
+      level: this.pl.level, xp: this.pl.xp, xpNext: this.pl.xpNext,
+      score: this.score, kills: this.kills, playTime: this.playTime,
+      owned: [...this.owned], equipped: { ...this.equipped }, kind: this.kind,
+      stacks: { ...this.stacks }, deposit: this.deposit, backpack: this.backpack,
+      intel: this.intel, hideout: null,
+    };
+    saveRun(data);
   }
 
   /* ---------------- xp / level / upgrades ---------------- */
@@ -1315,6 +1421,177 @@ export class Engine {
     };
   }
 
+  /* ---------------- inventory: crates, backpack, consumables ---------------- */
+
+  private spawnCrate(tier: CrateTier) {
+    const x = clamp(this.pl.x + R(-160, 160), 30, this.worldW - 30);
+    this.crates.push({ x, y: GROUND, tier, opened: false });
+  }
+
+  private updateCrates(dt: number) {
+    const p = this.pl;
+    let near: Crate | null = null;
+    for (const cr of this.crates) {
+      if (cr.opened) continue;
+      if (Math.abs(cr.x - p.x) < 40) { near = cr; break; }
+    }
+    if (near && this.keys.has("KeyE") && this.phase !== "travel") {
+      if ((near.tier === 2 || near.tier === 3) && this.threat > 0.5) {
+        this.crateOpenT = 0;
+        if (this.crateWarnT <= 0) {
+          this.crateWarnT = 1.4;
+          this.texts.push({
+            x: p.x, y: p.y - 92, vy: -46, life: 1, max: 1,
+            text: "TOO LOUD TO OPEN", color: "#f87171", size: 12,
+          });
+        }
+      } else {
+        this.crateOpenT += dt;
+        if (this.crateOpenT >= 1.2) {
+          this.openCrate(near);
+          this.crateOpenT = 0;
+        }
+      }
+    } else {
+      this.crateOpenT = Math.max(0, this.crateOpenT - dt * 2);
+    }
+  }
+
+  private openCrate(cr: Crate) {
+    cr.opened = true;
+    const drops = rollLoot(cr.tier);
+    let gained = 0, lost = 0;
+    for (const d of drops) {
+      const placed = placeItem(BACKPACK_SIZE, this.backpack, shapeOfItem, {
+        id: `it${this.nextItemSeq++}`, itemId: d.itemId,
+      });
+      if (placed) { this.backpack = placed; gained++; } else lost++;
+    }
+    this.invVer++;
+    this.sfx.levelup();
+    this.shake(2);
+    this.announce(
+      "CRATE OPENED",
+      lost > 0 ? `+${gained} item(s) — backpack full, ${lost} left behind` : `+${gained} item(s)`,
+      1.8
+    );
+    for (let i = 0; i < 14; i++)
+      this.particles.push({
+        x: cr.x, y: GROUND - 10, vx: R(-90, 90), vy: R(-220, -60),
+        life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#fbbf24", grav: 700, add: true,
+      });
+  }
+
+  private useConsumable(key: ConsumableKey) {
+    if (this.mode !== "play" || this.over || this.paused || this.modalOpen) return;
+    if (this.pl.useT > 0) return;
+    const def = itemForHotkey(key);
+    if (!def) return;
+    const inst = this.backpack.find((it) => it.itemId === def.id);
+    if (!inst) {
+      this.texts.push({
+        x: this.pl.x, y: this.pl.y - 88, vy: -44, life: 0.7, max: 0.7,
+        text: `NO ${def.short}`, color: "#f87171", size: 11,
+      });
+      return;
+    }
+    this.backpack = removeItem(this.backpack, inst.id);
+    this.invVer++;
+    this.pl.useT = 0.5;
+    switch (def.id) {
+      case "bandage":
+        this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + this.st.maxHp * 0.4);
+        break;
+      case "grenade":
+        this.throwGrenade();
+        break;
+      case "decoy":
+        this.threat = 0;
+        this.ambushT = 0;
+        break;
+      case "stim":
+        this.stimT = 6;
+        break;
+    }
+    this.sfx.upgrade();
+    this.texts.push({
+      x: this.pl.x, y: this.pl.y - 88, vy: -44, life: 0.8, max: 0.8,
+      text: def.short, color: "#67e8f9", size: 12,
+    });
+  }
+
+  private throwGrenade() {
+    const p = this.pl;
+    this.grenades.push({ x: p.x, y: p.y - 40, vx: this.facing * 420, vy: -260, fuse: 1.1 });
+    this.sfx.shoot();
+  }
+
+  private updateGrenades(dt: number) {
+    for (const g of this.grenades) {
+      g.fuse -= dt;
+      g.vy += GRAV * 0.6 * dt;
+      g.x += g.vx * dt;
+      g.y += g.vy * dt;
+      if (g.y > GROUND) { g.y = GROUND; g.vy *= -0.4; g.vx *= 0.7; }
+      if (chance(0.5))
+        this.particles.push({ x: g.x, y: g.y, vx: R(-10, 10), vy: R(-10, 10), life: 0.2, max: 0.2, size: 1.6, color: "#9ca3af", grav: 0, add: false });
+      if (g.fuse <= 0) this.explodeGrenade(g);
+    }
+    this.grenades = this.grenades.filter((g) => g.fuse > 0);
+  }
+
+  private explodeGrenade(g: GrenadeProj) {
+    const blast = 130;
+    for (const z of this.zombies) {
+      if (z.dead) continue;
+      const d = Math.hypot(z.x - g.x, z.y - 34 * z.scale - g.y);
+      if (d < blast) {
+        const dmg = 140 * (1 - d / blast);
+        z.hp -= dmg;
+        z.flash = 0.09;
+        const dir = Math.sign(z.x - g.x) || 1;
+        z.vx += dir * 260;
+        this.texts.push({ x: z.x, y: z.y - 74 * z.scale, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(dmg)), color: "#fbbf24", size: 14 });
+        if (z.hp <= 0) this.killZombie(z, dir);
+      }
+    }
+    this.shake(8);
+    this.sfx.hurt();
+    for (let i = 0; i < 24; i++)
+      this.particles.push({
+        x: g.x, y: g.y, vx: R(-260, 260), vy: R(-260, 20), life: R(0.3, 0.7), max: 0.7,
+        size: R(2, 6), color: chance(0.5) ? "#f97316" : "#fde68a", grav: 900, add: true,
+      });
+  }
+
+  /** Repositions a backpack item; returns whether the target cell was legal. */
+  moveBackpackItem(id: string, x: number, y: number): boolean {
+    const moved = moveItem(BACKPACK_SIZE, this.backpack, shapeOfItem, id, x, y);
+    if (!moved) return false;
+    this.backpack = moved;
+    this.invVer++;
+    return true;
+  }
+
+  /** Moves the whole backpack into the persistent safe-house stash. */
+  depositAll() {
+    if (this.backpack.length === 0) return;
+    this.deposit = [...this.deposit, ...this.backpack.map((it) => it.itemId)];
+    this.backpack = [];
+    this.invVer++;
+    this.sfx.click();
+  }
+
+  getInventory(): InventorySnapshot {
+    return {
+      invVer: this.invVer,
+      backpack: this.backpack.map((it) => ({ id: it.id, itemId: it.itemId, x: it.x, y: it.y })),
+      deposit: this.deposit,
+      intel: this.intel,
+      backpackSize: BACKPACK_SIZE,
+    };
+  }
+
   /* ---------------- waves ---------------- */
 
   private buildWave(power: number, inStage: number): SpawnItem[] {
@@ -1441,6 +1718,12 @@ export class Engine {
     const bonus = 500 * cleared;
     this.score += bonus;
     this.pl.hp = this.st.maxHp; // full heal between stages
+    // safe house resupply: reserve tops up to 50% (not full), suppressors renewed
+    for (const id of WEAPON_IDS) {
+      if (this.reserve[id] >= 0) this.reserve[id] = Math.max(this.reserve[id], Math.round(WDEF[id].reserve * 0.5));
+      this.supp[id] = WDEF[id].supp;
+    }
+    this.writeCheckpoint(cleared + 1);
     this.sfx.levelup();
     this.onEvent({
       type: "stageclear", stage: cleared, next: cleared + 1,
@@ -1454,6 +1737,7 @@ export class Engine {
     this.phase = "break";
     this.shake(6);
     this.sfx.levelup();
+    clearRun(this.runMode); // mission's over — no more checkpoint to retry from
     const bestTime = Number(localStorage.getItem("graveyard-shift-best-time") || 0);
     const isBestTime = bestTime === 0 || this.playTime < bestTime;
     if (isBestTime) localStorage.setItem("graveyard-shift-best-time", String(this.playTime));
@@ -1548,6 +1832,7 @@ export class Engine {
 
   getHud(): HudState {
     const p = this.pl;
+    const nearCrate = this.crates.find((c) => !c.opened && Math.abs(c.x - p.x) < 40) ?? null;
     return {
       hp: Math.max(0, Math.ceil(p.hp)),
       maxHp: this.st.maxHp,
@@ -1607,6 +1892,10 @@ export class Engine {
       paused: this.paused,
       muted: this.sfx.muted,
       playing: this.mode === "play" && !this.over,
+      crateNear: nearCrate !== null,
+      crateTier: nearCrate?.tier ?? 0,
+      crateOpenPct: clamp(this.crateOpenT / 1.2, 0, 1),
+      crateLocked: nearCrate !== null && (nearCrate.tier === 2 || nearCrate.tier === 3) && this.threat > 0.5,
     };
   }
 
@@ -1784,10 +2073,11 @@ export class Engine {
       c.restore();
     }
 
-    /* --- gems / zombies / player / projectiles --- */
+    /* --- gems / crates / zombies / player / projectiles --- */
     c.save();
     c.translate(-cam, camY);
     for (const g of this.gems) this.drawGem(g, t);
+    for (const cr of this.crates) if (!cr.opened) this.drawCrate(cr, t);
     c.restore();
 
     for (const z of this.zombies) this.drawZombie(z, cam, camY, t);
@@ -1810,6 +2100,18 @@ export class Engine {
       c.fill();
     }
     c.globalCompositeOperation = "source-over";
+    // thrown grenades
+    for (const g of this.grenades) {
+      const spin = t * 14;
+      c.save();
+      c.translate(g.x, g.y);
+      c.rotate(spin);
+      c.fillStyle = g.fuse < 0.35 ? (Math.sin(t * 40) > 0 ? "#f87171" : "#7f1d1d") : "#3f6212";
+      c.beginPath();
+      c.arc(0, 0, 4, 0, TAU);
+      c.fill();
+      c.restore();
+    }
     // enemy shots
     for (const s of this.eshots) {
       const gr = c.createRadialGradient(s.x, s.y, 0, s.x, s.y, 12);
@@ -2267,6 +2569,50 @@ export class Engine {
     c.lineTo(g.x - s * 0.35, y);
     c.closePath();
     c.fill();
+  }
+
+  private drawCrate(cr: Crate, t: number) {
+    const c = this.ctx;
+    const tierColor = cr.tier === 3 ? "#fbbf24" : cr.tier === 2 ? "#a78bfa" : "#94a3b8";
+    const bob = Math.sin(t * 2 + cr.x) * 1.5;
+    c.save();
+    c.translate(cr.x, cr.y - 12 + bob);
+    // shadow
+    c.fillStyle = "rgba(0,0,0,0.4)";
+    c.beginPath();
+    c.ellipse(0, 14, 16, 4, 0, 0, TAU);
+    c.fill();
+    // crate body
+    c.fillStyle = "#3f2a18";
+    this.rr(-15, -14, 30, 28, 3);
+    c.fill();
+    c.strokeStyle = tierColor;
+    c.lineWidth = 2;
+    this.rr(-15, -14, 30, 28, 3);
+    c.stroke();
+    // strap cross
+    c.strokeStyle = "rgba(0,0,0,0.35)";
+    c.lineWidth = 3;
+    c.beginPath();
+    c.moveTo(-15, 0); c.lineTo(15, 0);
+    c.moveTo(0, -14); c.lineTo(0, 14);
+    c.stroke();
+    // tier pips
+    for (let i = 0; i < cr.tier; i++) {
+      c.fillStyle = tierColor;
+      c.beginPath();
+      c.arc(-6 + i * 6, -20, 2, 0, TAU);
+      c.fill();
+    }
+    // glow
+    c.globalCompositeOperation = "lighter";
+    const glow = c.createRadialGradient(0, 0, 2, 0, 0, 30);
+    glow.addColorStop(0, `${tierColor}33`);
+    glow.addColorStop(1, `${tierColor}00`);
+    c.fillStyle = glow;
+    c.fillRect(-30, -30, 60, 60);
+    c.globalCompositeOperation = "source-over";
+    c.restore();
   }
 
   private limb(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, w1: number, w2: number, color: string) {

@@ -64,6 +64,13 @@ export interface HudState {
   paused: boolean;
   muted: boolean;
   playing: boolean;
+  /** simple scalar crate feedback — bulk grid contents go through getInventory(), not here */
+  crateNear: boolean;
+  crateTier: 0 | 1 | 2 | 3;
+  /** 0..1 hold-to-open progress */
+  crateOpenPct: number;
+  /** tier 2/3 crate refusing to open because threat is too high */
+  crateLocked: boolean;
 }
 
 export type Rarity = "common" | "rare" | "epic" | "weapon";
@@ -96,6 +103,26 @@ export interface MissionStats {
   time: number;
   bestTime: number;
   isBestTime: boolean;
+}
+
+export interface InventoryItem {
+  id: string;
+  itemId: string;
+  x: number;
+  y: number;
+}
+
+/**
+ * Polled through Engine.getInventory(), never folded into HudState — the
+ * backpack/deposit arrays are bulkier and change far less often than the
+ * 66ms combat HUD poll, so the UI gates re-renders on `invVer` instead.
+ */
+export interface InventorySnapshot {
+  invVer: number;
+  backpack: InventoryItem[];
+  deposit: string[];
+  intel: number;
+  backpackSize: { w: number; h: number };
 }
 
 export type EngineEvent =
