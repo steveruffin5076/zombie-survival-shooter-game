@@ -62,6 +62,8 @@ interface Zombie {
   type: ZType; xp: number; score: number;
   t: number; atk: number; flash: number; face: number; dead: boolean; spit: number;
   tint: number; boss: boolean; wob: number;
+  /** sleeper: inert until woken by threat, damage, or a fast player passing close */
+  dormant: boolean;
 }
 
 interface Bullet {
@@ -89,6 +91,8 @@ interface Star { x: number; y: number; r: number; ph: number; tw: number }
 interface Gate { x: number; opened: boolean }
 interface Crate { x: number; y: number; tier: CrateTier; opened: boolean }
 interface GrenadeProj { x: number; y: number; vx: number; vy: number; fuse: number }
+type HazardKind = "alarm" | "glass" | "flare";
+interface Hazard { x: number; y: number; kind: HazardKind; triggered: boolean }
 
 /* ------------------------------------------------------------------ */
 /* engine                                                              */
@@ -190,6 +194,9 @@ export class Engine {
   private travelMinX = 26;
   private travelProgressX = 0;
   private travelIdleT = 0;
+  /** hold-to-open progress on whichever gate is in quiet-bypass range */
+  private gateBypassT = 0;
+  private hazards: Hazard[] = [];
 
   /* --- inventory: fixed 4x4 backpack, a persistent safe-house stash, loot crates --- */
   private backpack: PlacedItem[] = [];
@@ -370,6 +377,8 @@ export class Engine {
     this.travelMinX = 26;
     this.travelProgressX = 0;
     this.travelIdleT = 0;
+    this.gateBypassT = 0;
+    this.hazards = [];
     this.backpack = [];
     this.deposit = [];
     this.intel = 0;
@@ -990,10 +999,17 @@ export class Engine {
 
   private updateZombies(dt: number) {
     const p = this.pl;
+    const movingFast = Math.abs(p.vx) > 220;
     for (const z of this.zombies) {
       z.t += dt;
-      z.atk -= dt;
       z.flash -= dt;
+      if (z.dormant) {
+        // sleepers wake on: threat spiking, or the player passing close while running/dashing
+        const near = Math.abs(p.x - z.x) < 90;
+        if (this.threat > 0.5 || (near && movingFast)) this.wakeZombie(z);
+        else continue; // still asleep — no movement, no attack timer, no contact damage
+      }
+      z.atk -= dt;
       const dx = p.x - z.x;
       const dir = dx > 0 ? 1 : -1;
       z.face = dir;
@@ -1034,6 +1050,23 @@ export class Engine {
     this.zombies = zs.filter((z) => !z.dead);
   }
 
+  /** Rouses one sleeper. A loud wake (gunfire, high threat) spreads to nearby sleepers too. */
+  private wakeZombie(z: Zombie, spread = false) {
+    if (!z.dormant) return;
+    z.dormant = false;
+    z.atk = R(0, 0.3);
+    for (let i = 0; i < 5; i++)
+      this.particles.push({
+        x: z.x, y: z.y - 50 * z.scale, vx: R(-30, 30), vy: R(-50, -10),
+        life: 0.4, max: 0.4, size: 2, color: "#fde047", grav: 0, add: true,
+      });
+    if (spread) {
+      for (const other of this.zombies) {
+        if (other !== z && other.dormant && Math.abs(other.x - z.x) < 220) this.wakeZombie(other);
+      }
+    }
+  }
+
   private spitAt(z: Zombie) {
     const p = this.pl;
     const dx = p.x - z.x;
@@ -1064,7 +1097,16 @@ export class Engine {
         const dx = b.x - z.x, dy = b.y - cy;
         if (dx * dx + dy * dy < rr * rr * 1.25) {
           b.hits.add(z);
-          this.hitZombie(z, b);
+          if (z.dormant) {
+            const w = WDEF[this.kind];
+            const suppressed = w.supp >= 999 || (this.supp[this.kind] ?? 0) > 0;
+            // a suppressed shot on a sleeper is a takedown, not a firefight —
+            // gives the suppressor a reason to exist beyond just staying quiet
+            if (suppressed) this.quietKill(z);
+            else { this.wakeZombie(z, true); this.hitZombie(z, b); }
+          } else {
+            this.hitZombie(z, b);
+          }
           if (b.pierce > 0) b.pierce--;
           else { b.life = 0; break; }
         }
@@ -1176,6 +1218,17 @@ export class Engine {
     const n = Math.min(8, Math.max(1, Math.round(total)));
     for (let i = 0; i < n; i++)
       this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: total / n, t: R(0, 9), rest: false });
+  }
+
+  /** A suppressed hit on a still-dormant sleeper — instant takedown, nearby sleepers stay asleep. */
+  private quietKill(z: Zombie) {
+    z.hp = 0;
+    z.flash = 0.09;
+    this.texts.push({
+      x: z.x, y: z.y - 74 * z.scale, vy: -60, life: 0.6, max: 0.6,
+      text: "QUIET KILL", color: "#67e8f9", size: 12,
+    });
+    this.killZombie(z, this.facing);
   }
 
   private hurtPlayer(dmg: number, kx: number) {
@@ -1553,6 +1606,8 @@ export class Engine {
     const blast = 130;
     for (const z of this.zombies) {
       if (z.dead) continue;
+      // a grenade is loud regardless of range — wakes sleepers well past its blast radius
+      if (z.dormant && Math.hypot(z.x - g.x, z.y - g.y) < blast * 2.5) this.wakeZombie(z, true);
       const d = Math.hypot(z.x - g.x, z.y - 34 * z.scale - g.y);
       if (d < blast) {
         const dmg = 140 * (1 - d / blast);
@@ -1664,6 +1719,7 @@ export class Engine {
     this.travelProgressX = this.pl.x;
     this.travelIdleT = 0;
     this.travelMinX = 26;
+    this.gateBypassT = 0;
     // always reachable: never past the world's hard right clamp, even if
     // combat left the player already near the edge (degrades to ~0 gates)
     this.safeHouseX = Math.min(this.worldW - 60, this.pl.x + R(1500, 1950));
@@ -1671,7 +1727,22 @@ export class Engine {
     let gx = this.pl.x + R(520, 660);
     while (gx < this.safeHouseX - 280) {
       this.gates.push({ x: gx, opened: false });
+      // a sleeper or two guarding most checkpoints — the whole reason to bypass quiet
+      if (chance(0.7)) {
+        const sx = clamp(gx + R(-110, 110), this.pl.x + 80, this.safeHouseX - 80);
+        const z = this.mkZombie("walker", sx, 1 + (this.power - 1) * 0.15, 1);
+        z.dormant = true;
+        this.zombies.push(z);
+      }
       gx += R(520, 720); // gates ≥500px apart
+    }
+    // hazards scattered along the corridor — safe to walk past, dangerous to run through
+    this.hazards = [];
+    const kinds: HazardKind[] = ["alarm", "glass", "flare"];
+    let hx = this.pl.x + R(300, 480);
+    while (hx < this.safeHouseX - 150) {
+      this.hazards.push({ x: hx, y: GROUND, kind: kinds[RI(0, kinds.length - 1)], triggered: false });
+      hx += R(400, 650);
     }
     this.announce("SECTOR CLEAR", "move out — reach the safe house", 2.6);
     this.sfx.wave();
@@ -1679,24 +1750,70 @@ export class Engine {
 
   private updateTravel(dt: number) {
     const p = this.pl;
-    // gates: ratchet the retreat clamp forward on contact, cancel a mid-dash
+    const movingFast = Math.abs(p.vx) > 220;
+    // gates: two verbs. Walk straight into one and it gives — loud, wakes
+    // nearby sleepers, always available. Hold E from just outside contact
+    // range while threat is low and it opens quietly instead — a reward for
+    // patience, never a requirement (stealth failure just falls back to loud).
+    let bypassing = false;
     for (const g of this.gates) {
-      if (g.opened || p.x < g.x - 30) continue;
-      g.opened = true;
-      this.travelMinX = Math.max(this.travelMinX, g.x - 34);
-      if (p.dashT > 0) { p.dashT = 0; p.vx *= 0.25; }
-      this.shake(3);
-      this.sfx.click();
-      this.texts.push({
-        x: p.x, y: p.y - 92, vy: -46, life: 0.7, max: 0.7,
-        text: "GATE CLEARED", color: "#67e8f9", size: 12,
-      });
+      if (g.opened) continue;
+      const d = Math.abs(g.x - p.x);
+      if (d < 30) {
+        g.opened = true;
+        this.travelMinX = Math.max(this.travelMinX, g.x - 34);
+        if (p.dashT > 0) { p.dashT = 0; p.vx *= 0.25; }
+        this.shake(3);
+        this.sfx.click();
+        this.texts.push({
+          x: p.x, y: p.y - 92, vy: -46, life: 0.7, max: 0.7,
+          text: "GATE CLEARED", color: "#67e8f9", size: 12,
+        });
+        for (let i = 0; i < 10; i++)
+          this.particles.push({
+            x: g.x, y: GROUND - R(10, 60), vx: R(-60, 60), vy: R(-90, 10),
+            life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#94a3b8", grav: 500, add: false,
+          });
+        for (const z of this.zombies) if (z.dormant && Math.abs(z.x - g.x) < 240) this.wakeZombie(z);
+        this.gateBypassT = 0;
+      } else if (d < 70 && this.keys.has("KeyE") && this.threat < 0.35) {
+        bypassing = true;
+        this.gateBypassT += dt;
+        if (this.gateBypassT >= 0.9) {
+          g.opened = true;
+          this.travelMinX = Math.max(this.travelMinX, g.x - 34);
+          this.texts.push({
+            x: p.x, y: p.y - 92, vy: -46, life: 0.9, max: 0.9,
+            text: "SLIPPED THROUGH", color: "#a78bfa", size: 12,
+          });
+          for (let i = 0; i < 6; i++)
+            this.particles.push({
+              x: g.x, y: GROUND - R(10, 40), vx: R(-20, 20), vy: R(-30, -5),
+              life: R(0.3, 0.5), max: 0.5, size: R(1.5, 3), color: "#94a3b8", grav: 300, add: true,
+            });
+          this.gateBypassT = 0;
+        }
+      }
+    }
+    if (!bypassing) this.gateBypassT = Math.max(0, this.gateBypassT - dt * 2);
+
+    // hazards: alarms/glass/flares only trip if you're running/dashing through
+    // them — walking calmly by is always safe, no roll or check needed
+    for (const hz of this.hazards) {
+      if (hz.triggered || Math.abs(hz.x - p.x) >= 26 || !movingFast) continue;
+      hz.triggered = true;
+      this.addNoise(0.35);
+      this.shake(4);
+      this.sfx.hurt();
+      const label = hz.kind === "alarm" ? "ALARM TRIPPED" : hz.kind === "glass" ? "GLASS CRUNCHES" : "FLARE HISSES";
+      this.texts.push({ x: p.x, y: p.y - 92, vy: -46, life: 1, max: 1, text: label, color: "#f87171", size: 12 });
       for (let i = 0; i < 10; i++)
         this.particles.push({
-          x: g.x, y: GROUND - R(10, 60), vx: R(-60, 60), vy: R(-90, 10),
-          life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#94a3b8", grav: 500, add: false,
+          x: hz.x, y: GROUND - R(4, 20), vx: R(-70, 70), vy: R(-90, -10),
+          life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#f87171", grav: 600, add: true,
         });
     }
+
     // anti-camping: no rightward progress for 40s starts building threat
     if (p.x > this.travelProgressX + 3) {
       this.travelProgressX = p.x;
@@ -1789,7 +1906,7 @@ export class Engine {
       dmg: c.dmg, r: c.r * scale, scale,
       type, xp: c.xp, score: c.score,
       t: R(0, 10), atk: R(0, 0.4), flash: 0, face: 1, dead: false, spit: R(1, 2.4),
-      tint: Math.random(), boss: false, wob: R(0, TAU),
+      tint: Math.random(), boss: false, wob: R(0, TAU), dormant: false,
     };
   }
 
@@ -1842,6 +1959,7 @@ export class Engine {
   getHud(): HudState {
     const p = this.pl;
     const nearCrate = this.crates.find((c) => !c.opened && Math.abs(c.x - p.x) < 40) ?? null;
+    const nearGate = this.gates.find((g) => !g.opened && Math.abs(g.x - p.x) < 70 && Math.abs(g.x - p.x) >= 30) ?? null;
     return {
       hp: Math.max(0, Math.ceil(p.hp)),
       maxHp: this.st.maxHp,
@@ -1905,6 +2023,9 @@ export class Engine {
       crateTier: nearCrate?.tier ?? 0,
       crateOpenPct: clamp(this.crateOpenT / 1.2, 0, 1),
       crateLocked: nearCrate !== null && (nearCrate.tier === 2 || nearCrate.tier === 3) && this.threat > 0.5,
+      gateBypassNear: nearGate !== null,
+      gateBypassPct: clamp(this.gateBypassT / 0.9, 0, 1),
+      gateBypassLocked: nearGate !== null && this.threat >= 0.35,
     };
   }
 
@@ -2054,6 +2175,39 @@ export class Engine {
           c.moveTo(g.x - 3, GROUND - i * 24);
           c.lineTo(g.x + 3, GROUND - i * 24 - 10);
           c.stroke();
+        }
+      }
+      // hazards — noise traps, avoidable at a walk
+      for (const hz of this.hazards) {
+        if (hz.triggered || hz.x < cam - 60 || hz.x > cam + W + 60) continue;
+        const flick = 0.6 + 0.4 * Math.sin(t * (hz.kind === "flare" ? 8 : 4) + hz.x);
+        if (hz.kind === "alarm") {
+          c.fillStyle = "#3f2a18";
+          c.fillRect(hz.x - 6, GROUND - 20, 12, 20);
+          c.fillStyle = `rgba(248,113,113,${flick})`;
+          c.beginPath(); c.arc(hz.x, GROUND - 24, 3.5, 0, TAU); c.fill();
+        } else if (hz.kind === "glass") {
+          c.fillStyle = `rgba(148,197,224,${0.35 + 0.2 * flick})`;
+          for (let i = -2; i <= 2; i++) {
+            c.beginPath();
+            c.moveTo(hz.x + i * 5, GROUND - 1);
+            c.lineTo(hz.x + i * 5 + 2.5, GROUND - 6 - R(0, 3));
+            c.lineTo(hz.x + i * 5 + 5, GROUND - 1);
+            c.closePath();
+            c.fill();
+          }
+        } else {
+          c.globalCompositeOperation = "lighter";
+          const fg = c.createRadialGradient(hz.x, GROUND - 14, 1, hz.x, GROUND - 14, 26 * flick);
+          fg.addColorStop(0, "rgba(248,113,113,0.5)");
+          fg.addColorStop(1, "rgba(248,113,113,0)");
+          c.fillStyle = fg;
+          c.fillRect(hz.x - 26, GROUND - 40, 52, 52);
+          c.globalCompositeOperation = "source-over";
+          c.fillStyle = "#7f1d1d";
+          c.fillRect(hz.x - 2, GROUND - 20, 4, 20);
+          c.fillStyle = `rgba(251,146,60,${flick})`;
+          c.beginPath(); c.arc(hz.x, GROUND - 22, 3, 0, TAU); c.fill();
         }
       }
       // safe house door
@@ -2659,7 +2813,7 @@ export class Engine {
     // per-type proportions
     const bulk = z.type === "brute" ? 1.35 : z.type === "runner" ? 0.88 : 1;
     const hunch = z.type === "runner" ? 0.3 : z.type === "spitter" ? 0.26 : 0.13;
-    const walk = z.t * (2.4 + z.speed * 0.03);
+    const walk = z.dormant ? 0 : z.t * (2.4 + z.speed * 0.03);
     const shamble = Math.sin(walk);
     const shamble2 = Math.cos(walk * 0.6 + z.wob);
     const attacking = z.atk > (z.type === "brute" ? 0.75 : 0.42);
@@ -2748,16 +2902,18 @@ export class Engine {
     c.fillStyle = "rgba(0,0,0,0.45)";
     for (let i = 0; i < 2; i++) c.fillRect(1 + i * 2.2, 1.6, 1.4, 3);
     c.restore();
-    // eyes — glowing
-    const eye = z.boss || z.type === "brute" ? "#ef4444" : "#fde047";
-    c.globalAlpha = 0.3;
-    c.fillStyle = eye;
-    c.beginPath(); c.arc(headX + 4.5, headY - 2.4, 3.4, 0, TAU); c.fill();
-    c.beginPath(); c.arc(headX + 4.5, headY + 2.6, 2.8, 0, TAU); c.fill();
-    c.globalAlpha = 1;
-    c.fillStyle = eye;
-    c.beginPath(); c.arc(headX + 4.6, headY - 2.4, 1.5, 0, TAU); c.fill();
-    c.beginPath(); c.arc(headX + 4.6, headY + 2.6, 1.2, 0, TAU); c.fill();
+    // eyes — glowing, unless asleep (closed, no glow to give it away)
+    if (!z.dormant) {
+      const eye = z.boss || z.type === "brute" ? "#ef4444" : "#fde047";
+      c.globalAlpha = 0.3;
+      c.fillStyle = eye;
+      c.beginPath(); c.arc(headX + 4.5, headY - 2.4, 3.4, 0, TAU); c.fill();
+      c.beginPath(); c.arc(headX + 4.5, headY + 2.6, 2.8, 0, TAU); c.fill();
+      c.globalAlpha = 1;
+      c.fillStyle = eye;
+      c.beginPath(); c.arc(headX + 4.6, headY - 2.4, 1.5, 0, TAU); c.fill();
+      c.beginPath(); c.arc(headX + 4.6, headY + 2.6, 1.2, 0, TAU); c.fill();
+    }
 
     // spitter sac on chest
     if (z.type === "spitter") {
@@ -2801,6 +2957,20 @@ export class Engine {
       c.fillRect(xBar, yBar, wBar, 3.4);
       c.fillStyle = z.boss ? "#f87171" : "#dc2626";
       c.fillRect(xBar, yBar, wBar * clamp(z.hp / z.maxHp, 0, 1), 3.4);
+    }
+
+    // sleeper tell — drifting zzz, the only hint it's dormant from a distance
+    if (z.dormant) {
+      c.save();
+      c.textAlign = "center";
+      c.font = '700 10px "Space Grotesk", sans-serif';
+      c.fillStyle = "rgba(148,163,184,0.55)";
+      for (let i = 0; i < 3; i++) {
+        const ph = (t * 0.6 + i * 0.9) % 2.7;
+        c.globalAlpha = clamp(1 - ph / 2.7, 0, 1) * 0.7;
+        c.fillText("z", px + 6 * z.scale + i * 3, py - 86 * z.scale - ph * 10);
+      }
+      c.restore();
     }
   }
 

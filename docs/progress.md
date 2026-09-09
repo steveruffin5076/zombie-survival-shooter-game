@@ -4,15 +4,15 @@
 
 - **Full plan:** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
-- **Last updated:** 2026-09-09 (Phase 4 in progress)
+- **Last updated:** 2026-09-09 (Phase 4 complete)
 
 ---
 
 ## Current status
 
-Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–3 are complete.** Phase 4 (stealth vs assault) is in progress. Section 5 of the spec (defend-the-base climax) still has no code — that's Phases 5–7 below.
+Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–4 are complete.** Section 5 of the spec (defend-the-base climax) still has no code — that's Phases 5–7 below.
 
-**Immediate next action:** Phase 4 — stealth vs assault: `Zombie.dormant` sleepers, noise-trap `Hazard`s, `quietKill()`, gates gaining a `[E] BYPASS` verb below `threat < 0.35`, and a `LOOT LOCK` tick on the existing threat bar.
+**Immediate next action:** Phase 5 — Stage 4 arena: lock the camera, add the prep phase (45s + READY skip), deployable placement (barricade/razor wire/claymore), `awardSupply()`, and scrap/repair.
 
 ### Branch state
 
@@ -80,14 +80,14 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 - **Verified end-to-end in-browser** via the `?debug=1` → `window.__engine` hook: crate spawns after a wave clear and hold-`E` opens it with loot landing in the backpack grid; **looting against a full 16-item grid** doesn't crash or overfill it (16 in, 16 out, crate still marks opened); bandage heals 40→80 HP; the fixed grenade now does real blast damage to a zombie 60px from the thrower (200→190.5 HP) once isolated from the player's own gunfire; noise decoy zeroes threat; stim sets a ~6s buff; a class-typed ammo box auto-fills a limited-reserve weapon's reserve on reload (0→60) and is consumed; the full `StageClear → SafeHouseOverlay → ENTER STAGE` flow works, `DEPOSIT ALL` is correctly disabled on an empty backpack, and resupply correctly leaves an unlimited-reserve pistol's reserve at `-1` rather than corrupting it; death **with** a checkpoint restarts at the checkpoint's stage with level/score preserved, backpack emptied, and the run still playing (`over: false`); death **without** one still shows the classic GameOver screen; `InventoryOverlay` opens/closes on `I`; `GridPanel` drag-and-drop moves an item to a free cell and correctly snaps back (no state change) when dropped on an occupied one
 - **Note:** touch affordances for crate-hold/inventory-drag are explicitly Phase 7's job ("Touch affordances for prep placement, inventory drag, interact/loot"), not built here — this phase's new interactions (`E`, `I`, `G`/`B`/`N`/`T`) are keyboard-only for now, consistent with Phase 1/2's `?mode=`/`?debug=` dev-hook pattern of shipping the system before its final input polish
 
-### Phase 4 — Stealth vs Assault (~2.5 days) — IN PROGRESS (2026-09-09)
-- [ ] `Zombie.dormant` sleepers (wake on threat/damage/proximity+speed)
-- [ ] `Hazard` noise traps (car alarms, glass, flares) — noise, not damage
-- [ ] `quietKill(z)` — gives suppressor durability a purpose beyond punishment
-- [ ] Gates get two verbs: `[E] BYPASS` below `threat < 0.35` vs shoot it loud
-- [ ] HUD `LOOT LOCK` tick at 0.35 on the existing threat bar
-- **Verify:** clear one stage-1 gate **both** ways
-- **Rule:** never gate progress on quiet, only reward — stealth failure fails *forward*
+### Phase 4 — Stealth vs Assault (~2.5 days) — DONE (2026-09-09)
+- [x] `Zombie.dormant` sleepers: 0–2 spawn per travel gate (`startTravel()`, `chance(0.7)` each), inert (no movement, no attack timer, no contact damage — `updateZombies()` just `continue`s past them) until woken by `this.threat > 0.5`, or the player passing within 90px while `|vx| > 220` (running/dashing — a slow walk-by never wakes them)
+- [x] `Hazard` noise traps (`alarm`/`glass`/`flare`, 0–N scattered along the travel corridor): trigger `addNoise(0.35)` — noise, never damage — only when the player is within 26px **and** moving fast; walking through at any speed under the threshold never trips one
+- [x] `quietKill(z)`: a suppressed bullet (`supp[kind] > 0` or integral `>= 999`) landing on a still-dormant sleeper instant-kills it without the normal per-hit fx and, critically, without calling the wake-spread — nearby sleepers stay asleep. An unsuppressed hit instead wakes the target **and** spreads the wake to every dormant zombie within 220px (`wakeZombie(z, true)`) — same for a grenade's blast (spread radius 2.5x the blast radius, since an explosion is loud regardless of range). This is the payoff for suppressor durability the Phase 3 note called for
+- [x] Gates now have two verbs in `updateTravel()`: walk within 30px and it opens the old way — instant, wakes nearby sleepers, always available, satisfying "never gate progress on quiet." Or hold `E` from 30–70px out while `threat < 0.35` for ~0.9s and it opens silently ("SLIPPED THROUGH") without waking anyone nearby — a reward, never a requirement
+- [x] HUD: a `LOOT LOCK` tick + label at the 35% mark on the existing NOISE bar; a crate-style hold-progress prompt for the gate bypass (`gateBypassNear`/`gateBypassPct`/`gateBypassLocked` in `HudState`, mirroring the Phase 3 crate prompt pattern); dormant zombies render with closed/no-glow eyes, a frozen idle pose (no shamble animation), and drifting "z" characters as the only tell from a distance
+- **Verified in-browser** via the `?debug=1` hook: standing/walking slowly inside a sleeper's 90px radius leaves it dormant after 250ms; approaching at >220px/s wakes it; `quietKill()` called directly kills a sleeper without waking one 150px away, while `wakeZombie(z, true)` called directly wakes both a 150px-away sleeper and leaves a 500px-away one untouched; the real bullet-hit path confirmed end-to-end — a suppressed pistol auto-engaging a sleeper removes it silently, an unsuppressed one wakes it and deals visible damage instead; a hazard didn't trip on a slow approach but did (with `threat` climbing) on a fast one; **holding E under threat 0.35 opened a gate with the sleeper next to it staying dormant, and separately walking straight into a gate opened it loud and woke that same sleeper** — the explicit "clear one stage-1 gate both ways" verify item · a full 4-stage mission fast-forward afterward confirmed no regressions (gates/sleepers spawned correctly every stage, mission still completed cleanly)
+- **Rule honored:** stealth is never required to progress — the loud path through any gate or past any sleeper is always available and instant; quiet is strictly an optional, better outcome (no wake, no noise)
 
 ### Phase 5 — Stage 4: arena, prep, deployables, scrap (~4 days) — NOT STARTED
 - [ ] Arena: set `this.cam` to a constant origin (no camera mode flag); `worldW ≈ 1600`, not 1280
@@ -122,7 +122,7 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 ## Standing rules
 
 - `npm test` + `npx tsc --noEmit` + `npm run build` every phase. Pure modules get Vitest; engine/UI is verified by playing it in the browser.
-- Keep new subsystem logic as **pure data + pure functions in their own modules**; `engine.ts` holds only arrays and `update*`/`draw*`. It's **3,033 lines now** — Phase 3 kept its data/rules in `grid.ts`/`items.ts`/`loot.ts`/`save.ts` as intended, but the crate/consumable/grenade *engine* glue (spawning, hold-to-open, `useConsumable()`, blast physics) still landed in `engine.ts` alongside the rest of combat, matching how `hitZombie()`/`killZombie()` etc. already live there rather than in a separate module. Phase 5/6 explicitly add `boss.ts` — worth actually using it as a real extraction rather than another `engine.ts` graft, or this file won't stop growing.
+- Keep new subsystem logic as **pure data + pure functions in their own modules**; `engine.ts` holds only arrays and `update*`/`draw*`. It's **3,203 lines now** — Phase 3 kept its data/rules in `grid.ts`/`items.ts`/`loot.ts`/`save.ts` as intended, but the crate/consumable/grenade *engine* glue (spawning, hold-to-open, `useConsumable()`, blast physics) — and now Phase 4's sleeper/hazard/gate-bypass logic too — still landed in `engine.ts` alongside the rest of combat, matching how `hitZombie()`/`killZombie()` etc. already live there rather than in a separate module. Phase 5/6 explicitly add `boss.ts` — worth actually using it as a real extraction rather than another `engine.ts` graft, or this file genuinely won't stop growing.
 - Mission-only systems gate on `runMode === "mission"` at exactly **one** place each.
 - Reuse, don't rebuild: `EngineEvent` union + single `switch` in `App.tsx`, the `getHud()` 66ms poll, callback props (children never get the engine), `announce()`/`drawBanner()`, the `Gem` pickup pipeline, `phase`/`breakT`, `triggerAmbush()`, the `ICONS` map.
 

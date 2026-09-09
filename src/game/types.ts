@@ -71,6 +71,12 @@ export interface HudState {
   crateOpenPct: number;
   /** tier 2/3 crate refusing to open because threat is too high */
   crateLocked: boolean;
+  /** an unopened gate is in quiet-bypass range (hold E) */
+  gateBypassNear: boolean;
+  /** 0..1 hold-to-bypass progress */
+  gateBypassPct: number;
+  /** a bypassable gate is in range but threat is too high to use it */
+  gateBypassLocked: boolean;
 }
 
 export type Rarity = "common" | "rare" | "epic" | "weapon";

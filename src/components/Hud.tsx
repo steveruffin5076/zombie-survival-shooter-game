@@ -319,7 +319,7 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch 
               {hud.threat > 0.75 ? "DETECTED" : hud.threat > 0.4 ? "HEARD" : "QUIET"}
             </span>
           </div>
-          <div className="h-2 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
+          <div className="relative h-2 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
             <div
               className={`h-full rounded-full transition-[width] duration-150 ${
                 hud.threat > 0.75
@@ -330,6 +330,11 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch 
               }`}
               style={{ width: `${hud.threat * 100}%` }}
             />
+            {/* LOOT LOCK tick — bypass/quiet-kill windows close past this threat */}
+            <div className="absolute inset-y-0 w-px bg-white/50" style={{ left: "35%" }} />
+          </div>
+          <div className="relative mt-0.5 h-2.5 text-[7px] font-bold tracking-widest text-white/35">
+            <span className="absolute -translate-x-1/2" style={{ left: "35%" }}>LOOT LOCK</span>
           </div>
         </div>
 
@@ -409,6 +414,35 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch 
               <div
                 className="h-full rounded-full bg-amber-400 transition-[width] duration-75"
                 style={{ width: `${hud.crateOpenPct * 100}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* bottom-center: gate bypass prompt — always optional, never required */}
+      {hud.gateBypassNear && !hud.crateNear && (
+        <div className="absolute bottom-40 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
+          <div
+            className={`flex items-center gap-2 rounded-full border px-4 py-1.5 text-[11px] font-bold tracking-[0.15em] backdrop-blur-sm ${
+              hud.gateBypassLocked
+                ? "border-red-400/40 bg-red-950/50 text-red-300"
+                : "border-violet-400/30 bg-violet-950/40 text-violet-200"
+            }`}
+          >
+            {hud.gateBypassLocked ? (
+              "TOO LOUD TO SLIP THROUGH"
+            ) : (
+              <>
+                <span className="kbd">E</span> HOLD TO BYPASS QUIETLY
+              </>
+            )}
+          </div>
+          {!hud.gateBypassLocked && hud.gateBypassPct > 0 && (
+            <div className="h-1 w-32 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
+              <div
+                className="h-full rounded-full bg-violet-400 transition-[width] duration-75"
+                style={{ width: `${hud.gateBypassPct * 100}%` }}
               />
             </div>
           )}
