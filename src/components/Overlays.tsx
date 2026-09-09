@@ -14,6 +14,7 @@ const RARITY_STYLE: Record<Rarity, { border: string; glow: string; tag: string; 
   common: { border: "border-zinc-500/40", glow: "hover:shadow-[0_0_40px_rgba(161,161,170,0.15)]", tag: "bg-zinc-500/15 text-zinc-300", label: "COMMON" },
   rare: { border: "border-cyan-400/50", glow: "hover:shadow-[0_0_40px_rgba(34,211,238,0.2)]", tag: "bg-cyan-400/15 text-cyan-300", label: "RARE" },
   epic: { border: "border-fuchsia-400/50", glow: "hover:shadow-[0_0_40px_rgba(232,121,249,0.25)]", tag: "bg-fuchsia-400/15 text-fuchsia-300", label: "EPIC" },
+  weapon: { border: "border-amber-400/70", glow: "hover:shadow-[0_0_50px_rgba(245,158,11,0.35)]", tag: "bg-amber-400/20 text-amber-300", label: "NEW WEAPON" },
 };
 
 /* ------------------------------------------------------------------ */
@@ -69,6 +70,8 @@ export function Menu({ onStart, high, muted, onMute }: { onStart: () => void; hi
         <span className="flex items-center gap-1.5"><span className="kbd">A</span><span className="kbd">D</span> MOVE</span>
         <span className="flex items-center gap-1.5"><span className="kbd">W</span> DOUBLE JUMP</span>
         <span className="flex items-center gap-1.5"><span className="kbd">SHIFT</span> DASH</span>
+        <span className="flex items-center gap-1.5"><span className="kbd">1</span>-<span className="kbd">4</span> WEAPON CLASS</span>
+        <span className="flex items-center gap-1.5"><span className="kbd">R</span> RELOAD</span>
         <span className="flex items-center gap-1.5"><span className="kbd">MOUSE</span> AIM · HOLD TO FIRE</span>
         <span className="flex items-center gap-1.5"><span className="kbd">ESC</span> PAUSE</span>
       </div>
@@ -177,6 +180,60 @@ function MenuButton({ primary, onClick, icon, label }: { primary?: boolean; onCl
 
 /* ------------------------------------------------------------------ */
 
+export function StageClear({
+  stage, next, onContinue,
+}: { stage: number; next: number; onContinue: () => void }) {
+  return (
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-gradient-to-b from-emerald-950/30 via-black/80 to-black/90 backdrop-blur-[5px]">
+      <div className="anim-pop flex w-full max-w-lg flex-col items-center px-8 text-center">
+        <div className="anim-rise mb-3 flex items-center gap-3 text-[11px] font-bold tracking-[0.45em] text-emerald-300/80">
+          <span className="h-px w-8 bg-emerald-400/40" />
+          10 / 10 WAVES SURVIVED
+          <span className="h-px w-8 bg-emerald-400/40" />
+        </div>
+        <h2
+          className="anim-rise font-display text-6xl tracking-[0.1em] text-emerald-300 drop-shadow-[0_0_34px_rgba(52,211,153,0.45)]"
+          style={{ animationDelay: "60ms" }}
+        >
+          STAGE {stage} CLEAR
+        </h2>
+        <p className="anim-rise mt-3 max-w-sm text-sm leading-relaxed text-zinc-400" style={{ animationDelay: "120ms" }}>
+          You held the line. Wounds patched, ammo scavenged — but the horde grows
+          hungrier the deeper you go.
+        </p>
+
+        <div className="anim-rise mt-6 flex items-center gap-6" style={{ animationDelay: "170ms" }}>
+          <div className="flex flex-col items-center">
+            <div className="font-display text-3xl text-zinc-100">{stage}</div>
+            <div className="text-[9px] font-bold tracking-[0.25em] text-zinc-500">CLEARED</div>
+          </div>
+          <ChevronsRight className="h-6 w-6 text-amber-400" />
+          <div className="flex flex-col items-center">
+            <div className="font-display text-3xl text-amber-300">{next}</div>
+            <div className="text-[9px] font-bold tracking-[0.25em] text-amber-500/70">NEXT UP</div>
+          </div>
+        </div>
+
+        <div className="anim-rise mt-5 flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-4 py-1.5 text-[11px] font-bold tracking-[0.2em] text-emerald-300" style={{ animationDelay: "200ms" }}>
+          <HeartPulse className="h-3.5 w-3.5" />
+          FULL HEAL + STAGE BONUS
+        </div>
+
+        <button
+          onClick={onContinue}
+          className="anim-rise mt-8 flex items-center gap-3 rounded-xl bg-gradient-to-b from-amber-400 to-amber-600 px-11 py-4 text-base font-bold tracking-[0.22em] text-amber-950 shadow-[0_0_45px_rgba(245,158,11,0.35)] transition-all hover:scale-[1.04] active:scale-[0.98]"
+          style={{ animationDelay: "250ms" }}
+        >
+          <Play className="h-5 w-5" fill="currentColor" />
+          ENTER STAGE {next}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
 export function GameOver({ stats, onRestart, onQuit }: { stats: GameStats; onRestart: () => void; onQuit: () => void }) {
   const mins = Math.floor(stats.time / 60);
   const secs = Math.floor(stats.time % 60);
@@ -201,7 +258,7 @@ export function GameOver({ stats, onRestart, onQuit }: { stats: GameStats; onRes
         )}
 
         <div className="anim-rise mt-7 grid w-full grid-cols-3 gap-3" style={{ animationDelay: "180ms" }}>
-          <StatBox icon={<TrendingUp className="h-4 w-4" />} label="WAVE" value={String(stats.wave)} />
+          <StatBox icon={<TrendingUp className="h-4 w-4" />} label="STAGE" value={`${stats.stage}-${stats.wave}`} />
           <StatBox icon={<Skull className="h-4 w-4" />} label="KILLS" value={stats.kills.toLocaleString()} />
           <StatBox icon={<Timer className="h-4 w-4" />} label="TIME" value={`${mins}:${String(secs).padStart(2, "0")}`} />
           <StatBox icon={<Trophy className="h-4 w-4" />} label="SCORE" value={stats.score.toLocaleString()} accent />

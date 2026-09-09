@@ -117,6 +117,23 @@ export class Sfx {
     if (this.throttle("dash", 120)) return;
     this.noise(0.15, { g: 0.08, f: 1800, q: 0.8 });
   }
+  /** magazine out / click */
+  reloadStart() {
+    this.noise(0.06, { g: 0.12, f: 2200, q: 2, delay: 0 });
+    this.tone(320, { d: 0.06, type: "square", g: 0.05, slide: 180, delay: 0.02 });
+  }
+  /** magazine seated + slide rack */
+  reloadEnd() {
+    this.noise(0.07, { g: 0.14, f: 1500, q: 1.6 });
+    this.tone(180, { d: 0.07, type: "square", g: 0.07, slide: 320, delay: 0.05 });
+    this.noise(0.05, { g: 0.1, f: 2600, q: 2.2, delay: 0.09 });
+  }
+  /** dry fire on empty mag */
+  dryFire() {
+    if (this.throttle("dry", 260)) return;
+    this.noise(0.04, { g: 0.09, f: 2800, q: 3 });
+    this.tone(140, { d: 0.04, type: "square", g: 0.035 });
+  }
   jump() {
     if (this.throttle("jump", 90)) return;
     this.tone(290, { d: 0.08, type: "sine", g: 0.045, slide: 470 });

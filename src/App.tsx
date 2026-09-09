@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Engine } from "./game/engine";
 import type { EngineEvent, GameStats, HudState, UpgradeChoice } from "./game/types";
 import Hud from "./components/Hud";
-import { Menu, LevelUpModal, PauseMenu, GameOver } from "./components/Overlays";
+import { Menu, LevelUpModal, PauseMenu, GameOver, StageClear } from "./components/Overlays";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -13,6 +13,7 @@ export default function App() {
   const [choices, setChoices] = useState<UpgradeChoice[] | null>(null);
   const [over, setOver] = useState<GameStats | null>(null);
   const [paused, setPaused] = useState(false);
+  const [stageClear, setStageClear] = useState<{ stage: number; next: number } | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -28,7 +29,11 @@ export default function App() {
         case "gameover":
           setOver(e.stats);
           setChoices(null);
+          setStageClear(null);
           setPaused(false);
+          break;
+        case "stageclear":
+          setStageClear({ stage: e.stage, next: e.next });
           break;
         case "pause":
           setPaused(e.value);
@@ -55,6 +60,7 @@ export default function App() {
     setScreen("game");
     setOver(null);
     setChoices(null);
+    setStageClear(null);
     setPaused(false);
   }, []);
 
@@ -63,9 +69,19 @@ export default function App() {
     setScreen("menu");
     setOver(null);
     setChoices(null);
+    setStageClear(null);
     setPaused(false);
   }, []);
 
+  const nextStage = useCallback(() => {
+    engineRef.current?.advanceStage();
+    setStageClear(null);
+  }, []);
+
+  const switchWeapon = useCallback(
+    (cls: string) => engineRef.current?.selectClass(cls as never),
+    []
+  );
   const choose = useCallback((id: string) => engineRef.current?.applyUpgrade(id), []);
   const resume = useCallback(() => engineRef.current?.setPaused(false), []);
   const togglePause = useCallback(() => engineRef.current?.togglePause(), []);
@@ -92,13 +108,19 @@ export default function App() {
         <div className="grain pointer-events-none absolute inset-0 z-10" />
         <div className="scanlines pointer-events-none absolute inset-0 z-10 opacity-60" />
 
-        {screen === "game" && hud && <Hud hud={hud} onMute={toggleMute} onPause={togglePause} />}
+        {screen === "game" && hud && (
+          <Hud hud={hud} onMute={toggleMute} onPause={togglePause} onSwitch={switchWeapon} />
+        )}
 
         {screen === "menu" && (
           <Menu onStart={start} high={hud?.high ?? 0} muted={hud?.muted ?? false} onMute={toggleMute} />
         )}
 
         {choices && <LevelUpModal choices={choices} level={hud?.level ?? 1} onPick={choose} />}
+
+        {stageClear && !choices && !over && (
+          <StageClear stage={stageClear.stage} next={stageClear.next} onContinue={nextStage} />
+        )}
 
         {paused && screen === "game" && !over && !choices && (
           <PauseMenu

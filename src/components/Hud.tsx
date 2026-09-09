@@ -1,13 +1,14 @@
 import type { HudState } from "../game/types";
-import { Heart, Skull, Pause, Volume2, VolumeX, Crosshair, Zap, Trophy } from "lucide-react";
+import { Heart, Skull, Pause, Volume2, VolumeX, Crosshair, Zap, Trophy, Lock } from "lucide-react";
 
 interface Props {
   hud: HudState;
   onMute: () => void;
   onPause: () => void;
+  onSwitch: (id: string) => void;
 }
 
-export default function Hud({ hud, onMute, onPause }: Props) {
+export default function Hud({ hud, onMute, onPause, onSwitch }: Props) {
   const hpPct = Math.max(0, Math.min(1, hud.hp / hud.maxHp));
   const xpPct = Math.max(0, Math.min(1, hud.xp / hud.xpNext));
   const dashPct = hud.dashMax > 0 ? 1 - Math.max(0, hud.dashT) / hud.dashMax : 1;
@@ -57,23 +58,47 @@ export default function Hud({ hud, onMute, onPause }: Props) {
         </div>
       </div>
 
-      {/* top-center: wave */}
-      <div className="absolute left-1/2 top-5 -translate-x-1/2 text-center">
-        <div className="font-display text-2xl tracking-[0.18em] text-amber-300 drop-shadow-[0_0_14px_rgba(245,158,11,0.45)]">
-          WAVE {String(Math.max(1, hud.wave)).padStart(2, "0")}
+      {/* top-center: stage + wave */}
+      <div className="absolute left-1/2 top-4 -translate-x-1/2 text-center">
+        <div className="text-[10px] font-bold tracking-[0.42em] text-white/45">
+          STAGE {hud.stage}
+        </div>
+        <div
+          className={`font-display text-2xl tracking-[0.18em] ${
+            hud.isBossWave
+              ? "text-red-400 drop-shadow-[0_0_16px_rgba(239,68,68,0.6)]"
+              : "text-amber-300 drop-shadow-[0_0_14px_rgba(245,158,11,0.45)]"
+          }`}
+        >
+          {hud.isBossWave ? "BOSS WAVE" : `WAVE ${Math.max(1, hud.waveInStage)}`}
+        </div>
+        {/* 10-wave stage pips */}
+        <div className="mt-1.5 flex items-center justify-center gap-1">
+          {Array.from({ length: hud.wavesPerStage }).map((_, i) => {
+            const n = i + 1;
+            const done = n < hud.waveInStage;
+            const cur = n === hud.waveInStage;
+            const boss = n === 5 || n === hud.wavesPerStage;
+            return (
+              <span
+                key={i}
+                className={`h-1.5 rounded-full transition-all ${boss ? "w-3.5" : "w-2.5"} ${
+                  cur
+                    ? boss
+                      ? "bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.9)]"
+                      : "bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.9)]"
+                    : done
+                      ? boss ? "bg-red-500/60" : "bg-amber-500/50"
+                      : boss ? "bg-red-500/25" : "bg-white/15"
+                }`}
+              />
+            );
+          })}
         </div>
         <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[11px] font-semibold tracking-widest text-white/55">
           <Skull className="h-3.5 w-3.5" />
-          {hud.wave > 0 ? `${hud.remaining} REMAIN` : "GET READY"}
+          {hud.waveInStage > 0 ? `${hud.remaining} REMAIN` : "GET READY"}
         </div>
-        {hud.waveTotal > 0 && (
-          <div className="mx-auto mt-1.5 h-1 w-40 overflow-hidden rounded-full bg-white/10">
-            <div
-              className="h-full bg-amber-400/80 transition-[width] duration-300"
-              style={{ width: `${(1 - hud.remaining / Math.max(1, hud.waveTotal)) * 100}%` }}
-            />
-          </div>
-        )}
       </div>
 
       {/* top-right: score + controls */}
@@ -109,21 +134,105 @@ export default function Hud({ hud, onMute, onPause }: Props) {
         </div>
       </div>
 
-      {/* bottom-left: weapon */}
+      {/* bottom-left: weapon inventory + ammo */}
       <div className="absolute bottom-6 left-6">
-        <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/50 px-4 py-2.5 backdrop-blur-sm">
-          <Crosshair className="h-5 w-5 text-amber-300" />
+        <div className="mb-2 flex items-end gap-3">
           <div>
-            <div className="text-sm font-bold tracking-wide text-zinc-100">{hud.weapon}</div>
-            <div className="mt-1 flex gap-1">
-              {Array.from({ length: hud.tierMax }).map((_, i) => (
-                <span
-                  key={i}
-                  className={`h-1.5 w-4 rounded-full ${i < hud.tier ? "bg-amber-400 shadow-[0_0_8px_rgba(245,158,11,0.7)]" : "bg-white/15"}`}
+            <div className="flex items-center gap-2 text-[11px] font-bold tracking-[0.2em] text-amber-300">
+              <Crosshair className="h-4 w-4" />
+              {hud.weapon.toUpperCase()}
+              <span className="rounded bg-white/10 px-1.5 py-0.5 text-[8px] tracking-[0.15em] text-white/55">
+                {hud.weaponRole}
+              </span>
+            </div>
+            {/* big ammo readout */}
+            <div className="mt-1 flex items-baseline gap-1.5 font-display tabular-nums leading-none">
+              <span
+                className={`text-4xl tracking-wider transition-colors ${
+                  hud.reloading
+                    ? "text-amber-400"
+                    : hud.ammo === 0
+                      ? "text-red-500 animate-pulse"
+                      : hud.ammo / hud.mag <= 0.25
+                        ? "text-amber-400"
+                        : "text-zinc-100"
+                }`}
+              >
+                {String(hud.ammo).padStart(2, "0")}
+              </span>
+              <span className="text-lg text-white/35">/ {hud.mag}</span>
+              <span className="ml-1 text-xs text-white/30">∞</span>
+            </div>
+            {/* reload progress / ammo bar */}
+            <div className="mt-1.5 h-1.5 w-40 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
+              {hud.reloading ? (
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-amber-500 to-yellow-300 transition-[width] duration-75"
+                  style={{ width: `${hud.reloadPct * 100}%` }}
                 />
-              ))}
+              ) : (
+                <div
+                  className={`h-full rounded-full transition-[width] duration-150 ${
+                    hud.ammo / hud.mag <= 0.25 ? "bg-red-500" : "bg-zinc-300"
+                  }`}
+                  style={{ width: `${(hud.ammo / hud.mag) * 100}%` }}
+                />
+              )}
+            </div>
+            <div className="mt-1 h-3 text-[9px] font-bold tracking-[0.25em] text-amber-400/80">
+              {hud.reloading ? "RELOADING…" : hud.ammo === 0 ? "PRESS R" : ""}
             </div>
           </div>
+        </div>
+        <div className="pointer-events-auto flex gap-2">
+          {hud.weapons.map((w) => (
+            <button
+              key={w.cls}
+              onClick={() => w.owned && onSwitch(w.cls)}
+              disabled={!w.owned}
+              className={`relative flex h-16 w-[4.2rem] flex-col items-center justify-center rounded-lg border transition-all duration-150 ${
+                w.active
+                  ? "border-amber-400/70 bg-amber-400/15 shadow-[0_0_20px_rgba(245,158,11,0.3)]"
+                  : w.owned
+                    ? "border-white/12 bg-black/50 hover:border-white/30 hover:bg-white/5"
+                    : "border-white/5 bg-black/40 opacity-35"
+              }`}
+            >
+              <span className={`absolute left-1 top-0.5 text-[9px] font-bold ${w.active ? "text-amber-300" : "text-white/35"}`}>
+                {w.key}
+              </span>
+              {w.owned ? (
+                <>
+                  <span className="text-[7px] font-bold tracking-[0.15em] text-white/35">
+                    {w.label}
+                  </span>
+                  <span className={`text-[9px] font-bold tracking-wide ${w.active ? "text-amber-200" : "text-zinc-300"}`}>
+                    {w.short}
+                  </span>
+                  <span
+                    className={`text-[9px] font-semibold tabular-nums ${
+                      w.ammo === 0 ? "text-red-400" : w.active ? "text-amber-300/80" : "text-white/40"
+                    }`}
+                  >
+                    {w.ammo}/{w.mag}
+                  </span>
+                  {w.variants > 1 && (
+                    <span className="absolute right-1 top-0.5 text-[8px] font-bold text-cyan-300/70">
+                      ×{w.variants}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <Lock className="h-3.5 w-3.5 text-white/30" />
+                  <span className="mt-0.5 text-[7px] font-bold tracking-[0.15em] text-white/25">
+                    {w.label}
+                  </span>
+                </>
+              )}
+              {w.active && <span className="mt-0.5 h-0.5 w-8 rounded-full bg-amber-400" />}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -150,12 +259,14 @@ export default function Hud({ hud, onMute, onPause }: Props) {
       </div>
 
       {/* bottom-center: controls hint */}
-      {hud.wave <= 1 && (
+      {hud.stage === 1 && hud.waveInStage <= 1 && (
         <div className="absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-4 text-[10px] font-semibold tracking-wider text-white/35">
           <span><span className="kbd">A</span> <span className="kbd">D</span> MOVE</span>
           <span><span className="kbd">W</span> JUMP ×2</span>
           <span><span className="kbd">SHIFT</span> DASH</span>
-          <span><span className="kbd">MOUSE</span> AIM + FIRE</span>
+          <span><span className="kbd">1</span>-<span className="kbd">4</span> CLASS (TAP AGAIN = SWAP)</span>
+          <span><span className="kbd">R</span> RELOAD</span>
+          <span><span className="kbd">MOUSE</span> HOLD TO FIRE</span>
         </div>
       )}
     </div>

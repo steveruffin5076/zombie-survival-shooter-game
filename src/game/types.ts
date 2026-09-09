@@ -1,26 +1,49 @@
+export interface WeaponSlot {
+  /** weapon class this slot represents */
+  cls: string;
+  label: string;
+  /** short name of the equipped variant in this class */
+  short: string;
+  owned: boolean;
+  active: boolean;
+  key: string;
+  ammo: number;
+  mag: number;
+  /** how many variants of this class the player owns */
+  variants: number;
+}
+
 export interface HudState {
   hp: number;
   maxHp: number;
   xp: number;
   xpNext: number;
   level: number;
-  wave: number;
-  waveTotal: number;
+  stage: number;
+  waveInStage: number;
+  wavesPerStage: number;
+  isBossWave: boolean;
   remaining: number;
+  waveTotal: number;
   score: number;
   kills: number;
   high: number;
   dashT: number;
   dashMax: number;
   weapon: string;
-  tier: number;
-  tierMax: number;
+  weaponRole: string;
+  weapons: WeaponSlot[];
+  ammo: number;
+  mag: number;
+  reloading: boolean;
+  /** 0..1 reload progress */
+  reloadPct: number;
   paused: boolean;
   muted: boolean;
   playing: boolean;
 }
 
-export type Rarity = "common" | "rare" | "epic";
+export type Rarity = "common" | "rare" | "epic" | "weapon";
 
 export interface UpgradeChoice {
   id: string;
@@ -33,6 +56,7 @@ export interface UpgradeChoice {
 }
 
 export interface GameStats {
+  stage: number;
   wave: number;
   kills: number;
   level: number;
@@ -46,4 +70,5 @@ export type EngineEvent =
   | { type: "levelup"; choices: UpgradeChoice[] }
   | { type: "resume" }
   | { type: "gameover"; stats: GameStats }
+  | { type: "stageclear"; stage: number; next: number }
   | { type: "pause"; value: boolean };
