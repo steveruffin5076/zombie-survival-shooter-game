@@ -254,9 +254,10 @@ export default function App() {
           />
         )}
 
-        {stageClear && safeHouse && !choices && !over && inv && (
+        {stageClear && safeHouse && !choices && !over && inv && hud && (
           <SafeHouseOverlay
             next={stageClear.next}
+            actId={hud.actId}
             inv={inv}
             onMove={moveBackpackItem}
             onDepositAll={depositAll}

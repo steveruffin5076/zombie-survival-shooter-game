@@ -1,17 +1,23 @@
+import { useState } from "react";
 import type { InventorySnapshot } from "../game/types";
-import { Play, PackageCheck, ShieldCheck, Gem } from "lucide-react";
+import { Play, PackageCheck, ShieldCheck, Gem, FileQuestion } from "lucide-react";
 import GridPanel from "./GridPanel";
+import IntelDocOverlay from "./IntelDocOverlay";
+import { docsForAct, type DocDef } from "../game/intel";
 
 interface Props {
   next: number;
+  actId: number;
   inv: InventorySnapshot;
   onMove: (id: string, x: number, y: number) => boolean;
   onDepositAll: () => void;
   onContinue: () => void;
 }
 
-/** Shown after StageClear, before advanceStage() — resupply + backpack logistics. */
-export default function SafeHouseOverlay({ next, inv, onMove, onDepositAll, onContinue }: Props) {
+/** Shown after StageClear, before advanceStage() — resupply + backpack logistics + the Hideout board. */
+export default function SafeHouseOverlay({ next, actId, inv, onMove, onDepositAll, onContinue }: Props) {
+  const [openDoc, setOpenDoc] = useState<DocDef | null>(null);
+  const docs = docsForAct(actId);
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-gradient-to-b from-cyan-950/20 via-black/85 to-black/95 backdrop-blur-[5px]">
       <div className="anim-pop flex w-full max-w-2xl flex-col items-center px-8 text-center">
@@ -56,6 +62,32 @@ export default function SafeHouseOverlay({ next, inv, onMove, onDepositAll, onCo
           </div>
         </div>
 
+        {docs.length > 0 && (
+          <div className="anim-rise mt-6 flex flex-col items-center gap-2.5" style={{ animationDelay: "180ms" }}>
+            <div className="text-[10px] font-bold tracking-[0.25em] text-zinc-400">HIDEOUT BOARD</div>
+            <div className="flex items-center gap-3">
+              {docs.map((doc) => {
+                const found = inv.docs.includes(doc.id);
+                return (
+                  <button
+                    key={doc.id}
+                    onClick={() => found && setOpenDoc(doc)}
+                    disabled={!found}
+                    title={found ? doc.masthead : "not yet found"}
+                    className={`flex h-14 w-14 items-center justify-center rounded-lg border transition-all ${
+                      found
+                        ? "border-violet-400/40 bg-violet-400/10 text-violet-300 hover:scale-105 hover:border-violet-400/70"
+                        : "cursor-not-allowed border-white/10 bg-white/[0.02] text-zinc-700"
+                    }`}
+                  >
+                    <FileQuestion className="h-6 w-6" />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <button
           onClick={onContinue}
           className="anim-rise mt-8 flex items-center gap-3 rounded-xl bg-gradient-to-b from-amber-400 to-amber-600 px-11 py-4 text-base font-bold tracking-[0.22em] text-amber-950 shadow-[0_0_45px_rgba(245,158,11,0.35)] transition-all hover:scale-[1.04] active:scale-[0.98]"
@@ -65,6 +97,7 @@ export default function SafeHouseOverlay({ next, inv, onMove, onDepositAll, onCo
           ENTER STAGE {next}
         </button>
       </div>
+      {openDoc && <IntelDocOverlay doc={openDoc} onClose={() => setOpenDoc(null)} />}
     </div>
   );
 }

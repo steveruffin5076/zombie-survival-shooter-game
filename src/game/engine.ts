@@ -6,6 +6,7 @@ import {
 import { Sfx } from "./audio";
 import { stageDefFor, cumulativeWaveIndex, difficultyFor, STAGES, type StageDef, type RunMode } from "./stages";
 import { enemyPoolFor, rollEnemy } from "./acts";
+import { docIdFor } from "./intel";
 import { THEMES, type ThemeDef } from "./themes";
 import { BACKPACK_SIZE, moveItem, placeItem, removeItem, type PlacedItem } from "./grid";
 import { ITEMS, shapeOfItem, itemForHotkey, type ConsumableKey } from "./items";
@@ -133,7 +134,11 @@ interface Building { x: number; w: number; h: number; win: number }
 interface Decor { x: number; kind: number; s: number; ph: number }
 interface Star { x: number; y: number; r: number; ph: number; tw: number }
 interface Gate { x: number; opened: boolean }
-interface Crate { x: number; y: number; tier: CrateTier; opened: boolean }
+interface Crate {
+  x: number; y: number; tier: CrateTier; opened: boolean;
+  /** set only for a guaranteed intel-document crate — openCrate() special-cases it */
+  docId?: string;
+}
 interface GrenadeProj { x: number; y: number; vx: number; vy: number; fuse: number }
 type HazardKind = "alarm" | "glass" | "flare";
 interface Hazard { x: number; y: number; kind: HazardKind; triggered: boolean }
@@ -254,6 +259,8 @@ export class Engine {
   private backpack: PlacedItem[] = [];
   private deposit: string[] = [];
   private intel = 0;
+  /** ids of intel documents found so far — persists like `deposit`, survives death */
+  private docsFound: string[] = [];
   /** bumped on every backpack/deposit mutation — the UI polls this, not HudState */
   private invVer = 0;
   private nextItemSeq = 1;
@@ -446,6 +453,7 @@ export class Engine {
     this.backpack = [];
     this.deposit = [];
     this.intel = 0;
+    this.docsFound = [];
     this.invVer++;
     this.crates = [];
     this.crateOpenT = 0;
@@ -1658,6 +1666,7 @@ export class Engine {
     this.stacks = { ...checkpoint.stacks };
     this.deposit = checkpoint.deposit;
     this.intel = checkpoint.intel;
+    this.docsFound = checkpoint.hideout?.docs ?? [];
     // backpack is deliberately dropped — that's the whole point of the penalty
     this.backpack = [];
     this.invVer++;
@@ -1676,7 +1685,7 @@ export class Engine {
       score: this.score, kills: this.kills, playTime: this.playTime,
       owned: [...this.owned], equipped: { ...this.equipped }, kind: this.kind,
       stacks: { ...this.stacks }, deposit: this.deposit, backpack: this.backpack,
-      intel: this.intel, hideout: null,
+      intel: this.intel, hideout: { docs: this.docsFound },
     };
     saveRun(data);
   }
@@ -1852,7 +1861,10 @@ export class Engine {
       if (cr.opened) continue;
       if (Math.abs(cr.x - p.x) < 40) { near = cr; break; }
     }
-    if (near && this.keys.has("KeyE") && this.phase !== "travel") {
+    // ordinary crates only ever spawn during active combat, never travel — but
+    // a guaranteed intel-document crate lives in the travel corridor, so it
+    // needs its own exception to the phase guard
+    if (near && this.keys.has("KeyE") && (this.phase !== "travel" || near.docId)) {
       if ((near.tier === 2 || near.tier === 3) && this.threat > 0.5) {
         this.crateOpenT = 0;
         if (this.crateWarnT <= 0) {
@@ -1876,6 +1888,24 @@ export class Engine {
 
   private openCrate(cr: Crate) {
     cr.opened = true;
+    if (cr.docId) {
+      // intel documents auto-bank on pickup, no grid cost — skip the loot
+      // roll and backpack entirely, unlike every other crate
+      if (!this.docsFound.includes(cr.docId)) {
+        this.docsFound = [...this.docsFound, cr.docId];
+        this.intel++;
+      }
+      this.invVer++;
+      this.sfx.levelup();
+      this.shake(2);
+      this.announce("DOCUMENT RECOVERED", "added to the Hideout board", 2.2);
+      for (let i = 0; i < 14; i++)
+        this.particles.push({
+          x: cr.x, y: GROUND - 10, vx: R(-90, 90), vy: R(-220, -60),
+          life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#a78bfa", grav: 700, add: true,
+        });
+      return;
+    }
     const drops = rollLoot(cr.tier);
     let gained = 0, lost = 0;
     for (const d of drops) {
@@ -2016,6 +2046,7 @@ export class Engine {
       backpack: this.backpack.map((it) => ({ id: it.id, itemId: it.itemId, x: it.x, y: it.y })),
       deposit: this.deposit,
       intel: this.intel,
+      docs: this.docsFound,
       backpackSize: BACKPACK_SIZE,
     };
   }
@@ -2240,6 +2271,15 @@ export class Engine {
     while (hx < this.safeHouseX - 150) {
       this.hazards.push({ x: hx, y: GROUND, kind: kinds[RI(0, kinds.length - 1)], triggered: false });
       hx += R(400, 650);
+    }
+    // one guaranteed intel document per exploration stage — never RNG-gated,
+    // per enhancement-1.md's "found in Stages 1-3" (never the Terminal Defense)
+    if (!this.stageDef.fixedCamera) {
+      const docId = docIdFor(this.stageDef.actId, this.stageDef.indexInAct as 0 | 1 | 2);
+      if (docId && !this.docsFound.includes(docId)) {
+        const dx = clamp(this.pl.x + R(400, this.safeHouseX - this.pl.x - 200), this.pl.x + 60, this.safeHouseX - 60);
+        this.crates.push({ x: dx, y: GROUND, tier: 1, opened: false, docId });
+      }
     }
     this.announce("SECTOR CLEAR", "move out — reach the safe house", 2.6);
     this.sfx.wave();
@@ -2466,6 +2506,7 @@ export class Engine {
       level: p.level,
       stage: this.stage,
       stageName: this.stageDef.name,
+      actId: this.stageDef.actId,
       waveInStage: this.waveInStage,
       wavesPerStage: this.stageDef.wavesPerStage,
       bossWaves: this.stageDef.bossWaves,
@@ -3311,7 +3352,7 @@ export class Engine {
 
   private drawCrate(cr: Crate, t: number) {
     const c = this.ctx;
-    const tierColor = cr.tier === 3 ? "#fbbf24" : cr.tier === 2 ? "#a78bfa" : "#94a3b8";
+    const tierColor = cr.docId ? "#c4b5fd" : cr.tier === 3 ? "#fbbf24" : cr.tier === 2 ? "#a78bfa" : "#94a3b8";
     const bob = Math.sin(t * 2 + cr.x) * 1.5;
     c.save();
     c.translate(cr.x, cr.y - 12 + bob);
@@ -3335,12 +3376,22 @@ export class Engine {
     c.moveTo(-15, 0); c.lineTo(15, 0);
     c.moveTo(0, -14); c.lineTo(0, 14);
     c.stroke();
-    // tier pips
-    for (let i = 0; i < cr.tier; i++) {
+    if (cr.docId) {
+      // a small folded-page glyph, not tier pips — this crate never has a tier that matters
       c.fillStyle = tierColor;
-      c.beginPath();
-      c.arc(-6 + i * 6, -20, 2, 0, TAU);
+      this.rr(-5, -24, 10, 12, 1);
       c.fill();
+      c.strokeStyle = "rgba(0,0,0,0.4)";
+      c.lineWidth = 1;
+      c.beginPath(); c.moveTo(-3, -21); c.lineTo(3, -21); c.moveTo(-3, -18); c.lineTo(3, -18); c.stroke();
+    } else {
+      // tier pips
+      for (let i = 0; i < cr.tier; i++) {
+        c.fillStyle = tierColor;
+        c.beginPath();
+        c.arc(-6 + i * 6, -20, 2, 0, TAU);
+        c.fill();
+      }
     }
     // glow
     c.globalCompositeOperation = "lighter";

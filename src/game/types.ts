@@ -24,6 +24,8 @@ export interface HudState {
   level: number;
   stage: number;
   stageName: string;
+  /** which act this stage belongs to — used to pick the Hideout board's document set */
+  actId: number;
   waveInStage: number;
   wavesPerStage: number;
   /** in-stage wave numbers (1-based) that spawn a boss */
@@ -155,6 +157,8 @@ export interface InventorySnapshot {
   backpack: InventoryItem[];
   deposit: string[];
   intel: number;
+  /** ids of intel documents found so far — the Hideout board looks these up in INTEL_DOCS */
+  docs: string[];
   backpackSize: { w: number; h: number };
 }
 
