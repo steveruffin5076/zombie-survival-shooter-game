@@ -2,21 +2,34 @@
 
 **Source of truth for "what's next".** Update this before ending a session.
 
-- **Full plan:** `~/.claude/plans/can-you-check-my-noble-catmull.md`
+- **Current plan (Phases 8–12):** `~/.claude/plans/logical-moseying-reddy.md` — the Act I vertical slice of `enhancement-1.md`
+- **Completed plan (Phases 0–7):** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
-- **Last updated:** 2026-09-09 (Phase 7 done — all 7 phases of the plan complete)
+- **Design doc driving Phases 8+:** `enhancement-1.md` (repo root, on `main`)
+- **Last updated:** 2026-09-09 (Phases 0–7 done; Phases 8–12 planned, not started)
 
 ---
 
 ## Current status
 
-Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–7 are all complete.** The full plan is built: finite 4-stage mission with a real ending, grid inventory/loot/save, stealth-vs-assault, the Stage 4 arena climax with its boss fight, and a touch control scheme that matches the lane-auto-aim combat model instead of the obsolete drag-to-aim one.
+Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–7 are all complete.** That plan is built: finite 4-stage mission with a real ending, grid inventory/loot/save, stealth-vs-assault, the Stage 4 arena climax with its boss fight, and a touch control scheme that matches the lane-auto-aim combat model instead of the obsolete drag-to-aim one.
 
-**Immediate next action:** none from this plan — everything in `docs/progress.md` is DONE. The one open item is the Android debug APK, blocked on this sandbox's outbound network policy denying `dl.google.com` (Android's Maven repo returns 403 through the proxy); building it needs either a network-policy change for this environment or a machine with unrestricted egress. Otherwise: playtesting, balance tuning, and whatever comes after the plan is genuinely up next.
+**Phases 8–12 are a new plan**, driven by `enhancement-1.md`: a narrative/campaign overhaul that replaces the 4-stage mission with **6 Acts × (3 exploration stages + 1 Terminal Defense stage)** under the Aetheris Dynamics / "Redshift" fiction. Scope decision: build the **Act I vertical slice** — the act framework sized to hold all six acts, with Act I fully authored and Acts II–VI present as thin data rows.
+
+**Immediate next action:** Phase 8. It is the gating phase — see the `power` scaling problem below, which makes every act past Act I unplayable until fixed.
 
 ### Branch state
 
-`android-touch-and-packaging` is merged into `main` (commit `17fb2ee`). `main` now has touch controls, Capacitor 6, the Vitest test runner (16 tests passing), the combat rework (lane-lock aim, fire mode, noise/suppressor economy), and Phase 0's fixes. The `android-touch-and-packaging` branch/worktree itself is left as-is (already merged forward, not deleted).
+`android-touch-and-packaging` is merged into `main` (commit `17fb2ee`).
+
+**Phases 6 and 7 are NOT on `main`.** PR #1 merged `claude/progress-md-review-oyfo72` when it was still at Phase 5 (`2d2fba8`), so `main` (`2e38e72`) has everything through Phase 5 plus `enhancement-1.md` (added by a separate upload commit `7e145eb`). The branch carries two unmerged commits: `287e9b7` (Phase 6 Juggernaut) and `654e016` (Phase 7 touch).
+
+Phase 8 therefore starts with a rebase, keeping both commits and picking up `enhancement-1.md`:
+
+```
+git fetch origin main
+git rebase origin/main
+```
 
 ---
 
@@ -32,6 +45,17 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 | Death penalty | **Restart at last safe house**, keep level/XP/upgrades/weapons, lose carried backpack |
 | Intel items | **Auto-bank on pickup**, no grid cost (grid cost returns with a lore screen) |
 | Default pistol | **SIG Sauer P365** — semi-auto, 330 rpm, 16 dmg, 12-round mag, unlimited reserve |
+
+### Locked for Phases 8–12 (`enhancement-1.md`)
+
+| Question | Decision |
+|---|---|
+| Build order | **Act I vertical slice first** — framework for 6 acts, Act I authored, Acts II–VI as data rows |
+| Old 4-stage mission | **Replaced.** The 6-act campaign becomes THE mission; endless still cycles the stage table |
+| Terminal Defense stage | **Reuse the Phase 5 arena** (fixed camera, prep, deployables, scrap) as every act's 4th stage |
+| Screamer trigger | **Windup timer, not a headshot hitbox** — no headshot mechanic exists; see Phase 10 |
+| Boss art | **One parameterized silhouette** (tint + accessory flag), not six bespoke sprites |
+| Acts III/VI doc features | **Unbudgeted** — per-limb damage and dynamic lanes need systems that don't exist |
 
 ---
 
@@ -125,10 +149,65 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 
 ---
 
+## Phases 8–12 — the `enhancement-1.md` campaign (PLANNED, not started)
+
+`enhancement-1.md` rewrites the fiction (Aetheris Dynamics' wireless-power grid shifts into visible crimson light — "The Redshift" — and the infected are **Phantoms** whose tracking the player's red laser sight hijacks, which is an in-fiction justification for the auto-aim that already exists) and restructures the campaign into 6 Acts. These five phases deliver the **Act I vertical slice**.
+
+### ⚠ The gating problem: `power` is `cumulativeWaveIndex`
+
+`engine.ts:2116` sets `this.power = this.waveIndex`. Mission mode peaks at 36 today. **A 24-stage campaign takes it to 216**, and 28 sites read it:
+
+| Formula | file:line | At power 216 |
+|---|---|---|
+| zombie hp `1 + (power-1)*0.22` | `engine.ts:2354` | **48×** |
+| boss hp `150 * hpMul * 4.4 * 1.3` | `engine.ts:2139-2140` | **~41,400 HP** vs the ~88 DPS pistol |
+| zombie dmg `1 + (power-1)*0.07` | `engine.ts:2356` | **16×** — player one-shot |
+
+Wave size (`:1975`) and the spawn cap (`:843`) saturate at their own `Math.min` ceilings, so nothing looks wrong there — the failure surfaces only as "Act II is unwinnable," which reads as a balance problem rather than a data-model bug. **Fix this in Phase 8, before any act row past Act I exists.**
+
+### Phase 8 — Act data model + difficulty decoupling + `fixedCamera` flag
+- [ ] New `src/game/acts.ts` owns `ACTS`; `stages.ts` derives the 24-entry `STAGES` via `ACTS.flatMap(...)`. `ActDef { id, numeral, name, sub, themeId, arenaThemeId, bossId, explorationWaves, defenseWaves, worldW, enemyPool? }`; `StageDef` gains `actId`, `indexInAct: 0|1|2|3`, `bossId?`, `fixedCamera: boolean`. An unfinished act is then **one data row**, not four copy-pasted ones
+- [ ] `stageDefFor`/`cumulativeWaveIndex` (`stages.ts:34-48`) need **no signature change** — mission already clamps at `STAGES.length`, endless already modulo-cycles, both table-length agnostic. `TOTAL_MISSION_WAVES` is exported but unused (only `STAGES.length` is consumed, at `engine.ts:2273`/`:2980`) — redefine freely
+- [ ] Add pure `difficultyFor(stageNum, inStage, mode)` to `stages.ts`; `engine.ts:2116` uses it. `waveIndex` stays `cumulativeWaveIndex` for **display only**. Target: ~40 by Act VI instead of 216, endless keeps its unbounded ramp
+- [ ] Replace the `themeId === "arena"` behavioral gate with `StageDef.fixedCamera` — it is used at **11 sites** (`engine.ts:856, 884, 1127, 1528, 1611, 2015, 2076, 2286, 2327, 2468, 2695`). Per-act arena themes are impossible until this is a flag, and renaming the theme without it silently disables the arena. Must land here, not deferred
+- **Verify:** Vitest — `difficultyFor` monotonicity, `difficultyFor(24, 9, "mission") < 50`, endless climbs past the mission cap, `STAGES.length === 24`, every act yields 3 exploration + 1 `fixedCamera` stage. In-browser — play Act I's four stages; teleport to stage 24 and confirm `missionwin` fires; confirm endless stage 25 wraps to Act I; confirm the arena still behaves as an arena after the flag swap
+
+### Phase 9 — Data-driven bosses + The Neighborhood Watch
+- [ ] Extend `boss.ts` from one hardcoded attack set to `BOSS_DEFS: Record<string, BossDef>` — `BossDef { id, name, tellName, deathBanner, attacks, windup, hpMul, scale, r, tint, cooldownBase, cooldownStep, shield? }`; `BossAttack` grows `"shieldcharge"` (the union grows, never shrinks)
+- [ ] **Keep `boss.test.ts` passing unmodified:** leave `BOSS_WINDUP`, `SLAM_WINDUP_FLOOR`, `slamWindup`, `phaseFor` as-is and give `windupFor`/`cooldownFor`/`pickAttack` an **optional def parameter defaulting to the Juggernaut's def**. Juggernaut Alpha keeps its tuned behavior exactly and moves to Act IV
+- [ ] The whole `updateBoss` FSM (`:1225-1267`) stays generic — it only calls `phaseFor`/`pickAttack`/`windupFor`/`cooldownFor`. `Boss` gains `defId`; `spawnBoss()` (`:2138-2152`) reads the def instead of the hardcoded `150*hpMul*4.4*1.3` / `scale: 2.1`; the banners at `:2128` and `:1339` read `def.tellName`/`def.deathBanner`; `executeBossAttack` (`:1269-1313`) gains one `else if` for the Watch's riot-shield charge that **reuses the slam's AOE + knockback path** with a different radius — no new physics
+- [ ] `startWave:2125` changes from `if (bossWave && !finalWave)` to gate on `stageDef.bossId != null && stageDef.bossWaves.includes(inStage)`, so a Terminal Defense stage can put its boss on the final wave and exploration stages get `bossWaves: []`
+- [ ] `drawBoss` (`:3516`) is ~90 lines of hand-drawn Juggernaut anatomy — **parameterize, don't duplicate**: feed `def.tint` into the existing `"#3a2c1e"`/`"#2c2118"` fills, add a `def.shield` flag that draws a riot shield over the forward arm
+- **Verify:** in-browser, force-spawn both; log `maxHp` and `windupFor` per phase to confirm the Juggernaut is **identical to today**; then the Watch's distinct pool and banners
+
+### Phase 10 — The Screamer
+- [ ] **There is no headshot mechanic.** `updateBullets` (`:1382-1401`) does one circle test against `z.y - 36*z.scale`, and `crit` is pre-rolled at fire time (`:1100`) — so "was this a headshot" cannot even be derived at impact. The doc's stated trigger ("without a clean rapid headshot") must be delivered another way
+- [ ] Add `"screamer"` to `ZType` (`:39`) and `ZCONF` (`:46-51`) — low hp (~18), slow, high xp/score. Add `alertT` to `Zombie` (`:66-78`). In `updateZombies`, when `threat` rises or the player closes within ~260px, set `alertT = 1.4` with a rising tell; if she's still alive at 0, call `triggerAmbush(3)` and set `threat = 1`. Killing her first cancels it silently; `killZombie` clears it for free
+- [ ] That delivers every beat the doc asks for — fragile, top-priority target, punishes sloppy shooting, spikes the meter to Loud, ambush from behind — in **~40 engine lines**, reusing `triggerAmbush()` (`:953-971`) exactly as the boss's Screaming Call already does (`:1311`). *Cost of the rejected alternative:* a second per-zombie hitbox test in the hottest loop in the game, a semantic change to `Bullet.crit`, per-type head offsets authored against `drawZombie`'s hand-tuned proportions (`:3329-3334`), and a re-tune of every weapon since headshots would become the dominant damage source
+- [ ] Gate her into `buildWave` (`:1970-2006`) via `ActDef.enemyPool` so Acts II–VI never spawn her
+- **Verify:** Vitest on a `rollEnemy(pool, rng)` extracted into `acts.ts` (injected-rng pattern, same as `loot.ts:59`). In-browser — shooting near her without killing fires the ambush; a fast kill cancels it; two Screamers can't stack ambushes (`ambushT` guard)
+
+### Phase 11 — Intel documents + Hideout board
+- [ ] `intel` is currently a **dead counter** — initialized (`:241`), zeroed (`:433`), restored (`:1605`), saved (`:1624`), snapshotted (`:1963`), and never incremented anywhere. The plumbing exists; this phase supplies the source
+- [ ] New pure `src/game/intel.ts` — `DocDef { id, actId, slot: 0|1|2, kind, masthead, headline, dateline, body: string[] }` + `INTEL_DOCS`. Test `docsForAct(actId)` returns 3 with unique ids
+- [ ] Engine owns `private docsFound: string[]`; `save.ts` fills its already-stubbed `hideout` slot as `{ docs: string[] } | null`. Bump `SAVE_VERSION` to 2 — `migrate()` (`save.ts:37-65`) handles it in one step, exactly as the comment at `save.ts:26-31` anticipated. No format break
+- [ ] Award via the existing crate pipeline: add `intel_doc` to `ITEMS` (`items.ts:25`) with a tier-2/3 weight in `POOLS` (`loot.ts:25-45`); `openCrate` (`:1822`) special-cases it to push onto `docsFound` + `intel++` and **skip the grid** — the "auto-bank on pickup, no grid cost" decision already in the table above. Seed one document deterministically per exploration stage in `startTravel` (`:2155`) so a bad roll can't gate the story
+- [ ] Overlay data path honors the no-bulk-data-in-`HudState` rule (`types.ts:146-150`): add `docs: string[]` (**ids only**) to `InventorySnapshot` (`:151-157`), already gated on `invVer` in `App.tsx:85-86`. React imports `INTEL_DOCS` directly for prose — the engine never carries copy
+- [ ] Opens as a "HIDEOUT BOARD" tab inside the existing `SafeHouseOverlay.tsx`, which already sits between stages and already receives `inv`. Found docs lit, missing ones silhouetted; click opens a new `IntelDocOverlay.tsx`. No new key, no new App state branch. Trade-off: between-stages only for the first cut
+
+### Phase 12 — Lore reskin + Act I polish + act select
+- [ ] **Already done, no work needed:** the SIG P365 reskin — `weapons.ts:69-78` defines `p365`, `STARTER = "p365"` (`:188`), `save.ts:58` defaults to it
+- [ ] Display strings safe to change: `index.html:10`; `Overlays.tsx:22, 35-37, 173, 283`; `engine.ts` banner copy at `:330, 968, 984, 1339, 1614, 1690, 2127-2132, 2186, 2334, 2370` and `WAVE_SUBS` (`:53-60`); `stages.ts` `name`/`sub`; `weapons.ts` descriptions — note `:163` claims a "head hitbox" that does not exist and should be reworded
+- [ ] **Must NOT rename (internal identifiers):** `ZType` values (`:39`, keys into `ZCONF`, branched on in `drawZombie` — *add* `"screamer"`, don't rename); `themeId` strings (they key `THEMES`; `"arena"`'s behavioral role is neutralized in Phase 8); `WEAPONS` keys and `STARTER` (persisted by `save.ts` as `kind`/`owned`/`equipped`); `localStorage` keys `graveyard-shift-save-${mode}` (`save.ts:34`) and `graveyard-shift-best-time` (`:2307`); `BossAttack` literals (asserted in `boss.test.ts:15-16, 40`)
+- [ ] Themes: `ThemeDef`'s 7 fixed `decorWeights` (`themes.ts:13-14`) suffice for Act I — it needs only a foliage bump to `suburbs` (`:28`) plus an arena-palette entry. They genuinely break at Act III (conveyors, containers) and Act V (neon signage); widening to `Partial<Record<DecorKind, number>>` is a clean isolated `genDecor` change — **defer it**
+- [ ] Replace the `?mode=mission` dev hook (`App.tsx:98-102`) with a real Menu selector plus an act-select grid — the natural home for "Acts II–VI coming soon"
+
+---
+
 ## Standing rules
 
 - `npm test` + `npx tsc --noEmit` + `npm run build` every phase. Pure modules get Vitest; engine/UI is verified by playing it in the browser.
-- Keep new subsystem logic as **pure data + pure functions in their own modules**; `engine.ts` holds only arrays and `update*`/`draw*`. It's **3,203 lines now** — Phase 3 kept its data/rules in `grid.ts`/`items.ts`/`loot.ts`/`save.ts` as intended, but the crate/consumable/grenade *engine* glue (spawning, hold-to-open, `useConsumable()`, blast physics) — and now Phase 4's sleeper/hazard/gate-bypass logic too — still landed in `engine.ts` alongside the rest of combat, matching how `hitZombie()`/`killZombie()` etc. already live there rather than in a separate module. Phase 5/6 explicitly add `boss.ts` — worth actually using it as a real extraction rather than another `engine.ts` graft, or this file genuinely won't stop growing.
+- Keep new subsystem logic as **pure data + pure functions in their own modules**; `engine.ts` holds only arrays and `update*`/`draw*`. It's **3,831 lines now** (was 3,203 at the Phase 4 writeup) — Phase 3 kept its data/rules in `grid.ts`/`items.ts`/`loot.ts`/`save.ts` as intended, but the crate/consumable/grenade *engine* glue (spawning, hold-to-open, `useConsumable()`, blast physics) — and now Phase 4's sleeper/hazard/gate-bypass logic too — still landed in `engine.ts` alongside the rest of combat, matching how `hitZombie()`/`killZombie()` etc. already live there rather than in a separate module. Phase 5/6 explicitly add `boss.ts` — worth actually using it as a real extraction rather than another `engine.ts` graft, or this file genuinely won't stop growing. Phases 8–12 follow the same split: `acts.ts` and `intel.ts` are pure, and `drawBoss` gets parameterized rather than duplicated per act.
 - Mission-only systems gate on `runMode === "mission"` at exactly **one** place each.
 - Reuse, don't rebuild: `EngineEvent` union + single `switch` in `App.tsx`, the `getHud()` 66ms poll, callback props (children never get the engine), `announce()`/`drawBanner()`, the `Gem` pickup pipeline, `phase`/`breakT`, `triggerAmbush()`, the `ICONS` map.
 
@@ -137,3 +216,12 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 - **P365 is ~27% lower DPS than the Glock 18 it replaces** (88 vs 120) because it is semi-auto, not full-auto. If early waves feel sluggish, raise per-shot damage (16 → 18), **not** the fire rate.
 - Boss HP must be sized against **pistol** DPS, not carbine (88 vs 255), or the starving supply curve becomes a loss screen.
 - `.claude/launch.json` is local dev-server tooling — deliberately untracked, do not commit.
+
+### Risks carried into Phases 8–12
+
+- **Difficulty scaling (highest).** `difficultyFor` in Phase 8 is load-bearing. Ship the 24-stage table without it and Act II onward is unwinnable, presenting as a balance problem rather than a data-model bug. See the table in the Phase 8 section.
+- **Per-act boss art.** Six bespoke sprites would add 500+ lines to an already-3,831-line `engine.ts`. Parameterize one silhouette; if bespoke art becomes non-negotiable, extract a `bossArt.ts` of pure `(ctx, boss) => void` functions **before** the second boss lands.
+- **Six hours is a 6× content multiplier on a ~15-minute game.** 24 stages of the same procedural corridor (`startTravel:2155-2188`) will feel identical by Act III. Act I will not expose this; Act II will.
+- **Three features in `enhancement-1.md` assume mechanics that don't exist.** Act III's "Blind Smasher — immune to body damage, target the legs" and Act VI's "lasers alter lane positioning" both need systems strictly larger than the headshot change rejected in Phase 10. Act II's Vaulter is tractable — `acquireTarget`'s lane check is a single line (`engine.ts:914`). All three are **unbudgeted**; settle scope before committing to Acts III/VI.
+- **`private boss` is a singleton** (`engine.ts:208`). Fine for one boss per act; any future two-boss encounter is an array refactor touching `updateBullets:1403`, `acquireTarget`, `getHud`, and `drawBoss`.
+- **`enhancement-1.md` is itself incomplete** — it cuts off mid-sentence inside the intel-panel mockup (the `THE METRO CHRONICLE` example), so all document copy in Phase 11 is ours to write.
