@@ -4,13 +4,13 @@
 
 - **Full plan:** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
-- **Last updated:** 2026-09-09 (Phase 1 complete)
+- **Last updated:** 2026-09-09 (Phase 2 in progress)
 
 ---
 
 ## Current status
 
-Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–1 are complete.** Sections 3–5 of the spec (inventory, mission structure, defend-the-base climax) still have no code — that's Phases 2–7 below.
+Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–1 are complete.** Phase 2 (mission flow) is in progress. Sections 3–5 of the spec (inventory, defend-the-base climax) still have no code — that's Phases 3–7 below.
 
 **Immediate next action:** Phase 2 — mission flow: travel gates, safe house, `missionComplete()` + win screen, per-stage themes in `render()`.
 
@@ -57,7 +57,7 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 - [x] `?debug=1` renders a bottom-left readout (`mode/stage/wave/power/idx`); `?mode=mission` is a temporary dev hook in `App.tsx` to reach mission mode before Phase 2 builds a real menu selector — **no Mission/Endless UI exists yet**, `startGame()` still defaults to endless so today's play is unchanged
 - **Verified:** `npx tsc --noEmit` clean · `npm test` 8/8 passing · `npm run build` succeeds · played both modes in-browser (screenshots) — stage 1 identical in both, boss-wave pips correctly light at 5 & 9, debug overlay showed `power`/`idx` climbing monotonically during live combat · `stageDefFor`/`cumulativeWaveIndex` checked directly via `tsx`: mission stage 5+ clamps to stage 4 ("GROUND ZERO", never wraps back to "THE CEMETERY"), endless stage 5 correctly wraps to a fresh "THE CEMETERY" instance, `cumulativeWaveIndex(4, 9, "mission")` === 36
 
-### Phase 2 — Mission flow: travel, safe house, win (~3 days) — NOT STARTED
+### Phase 2 — Mission flow: travel, safe house, win (~3 days) — IN PROGRESS (2026-09-09)
 - [ ] Travel gates (right-edge clamp only; cancel `dashT` on contact, gates ≥500px apart)
 - [ ] `phase` gains `"travel"`; safe house as a physical door at `safeHouseX`
 - [ ] Anti-camping: `threat += 0.055*dt` after 40s without rightward progress
