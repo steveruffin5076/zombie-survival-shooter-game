@@ -4,13 +4,13 @@
 
 - **Full plan:** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
-- **Last updated:** 2026-09-09 (Phase 2 complete)
+- **Last updated:** 2026-09-09 (Phase 3 in progress)
 
 ---
 
 ## Current status
 
-Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–2 are complete.** Sections 4–5 of the spec (grid inventory, defend-the-base climax) still have no code — that's Phases 3–7 below.
+Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–2 are complete.** Phase 3 (grid inventory, loot, save) is in progress — the largest single system in the plan. Sections 4–5 of the spec (defend-the-base climax) still have no code — that's Phases 4–7 below.
 
 **Immediate next action:** Phase 3 — grid inventory, loot, save system (`grid.ts`, `items.ts`, `loot.ts`, `save.ts`, `GridPanel.tsx`/`InventoryOverlay.tsx`/`SafeHouseOverlay.tsx`).
 
