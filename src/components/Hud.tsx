@@ -1,8 +1,15 @@
 import type { HudState } from "../game/types";
+import { DEPLOYABLE_DEFS, type DeployableKind } from "../game/arena";
 import {
   Heart, Skull, Pause, Volume2, VolumeX, Crosshair, Zap, Trophy, Lock,
-  Ear, Bot, Hand, DoorOpen,
+  Ear, Bot, Hand, DoorOpen, Gem,
 } from "lucide-react";
+
+const TOOL_KEYS: { kind: DeployableKind; key: string }[] = [
+  { kind: "barricade", key: "1" },
+  { kind: "wire", key: "2" },
+  { kind: "claymore", key: "3" },
+];
 
 interface Props {
   hud: HudState;
@@ -10,10 +17,11 @@ interface Props {
   onPause: () => void;
   onSwitch: (id: string) => void;
   onFireMode: () => void;
+  onSelectTool: (kind: DeployableKind) => void;
   touch?: boolean;
 }
 
-export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch = false }: Props) {
+export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSelectTool, touch = false }: Props) {
   const hpPct = Math.max(0, Math.min(1, hud.hp / hud.maxHp));
   const xpPct = Math.max(0, Math.min(1, hud.xp / hud.xpNext));
   const dashPct = hud.dashMax > 0 ? 1 - Math.max(0, hud.dashT) / hud.dashMax : 1;
@@ -72,7 +80,45 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch 
         <div className="text-[10px] font-bold tracking-[0.42em] text-white/45">
           STAGE {hud.stage}
         </div>
-        {hud.phase === "travel" ? (
+        {hud.phase === "prep" ? (
+          <>
+            <div className="font-display text-2xl tracking-[0.18em] text-emerald-300 drop-shadow-[0_0_14px_rgba(52,211,153,0.45)]">
+              PREP — WAVE {Math.max(1, hud.waveInStage + 1)}
+            </div>
+            <div className="mx-auto mt-1.5 h-1.5 w-56 overflow-hidden rounded-full border border-white/10 bg-black/60">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-emerald-600 to-emerald-300 transition-[width] duration-100"
+                style={{ width: `${(hud.prepT / hud.prepMax) * 100}%` }}
+              />
+            </div>
+            <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[11px] font-semibold tracking-widest text-white/55">
+              {Math.ceil(hud.prepT)}s · <span className="kbd">ENTER</span> READY
+            </div>
+            <div className="pointer-events-auto mt-2 flex items-center justify-center gap-2">
+              <div className="flex items-center gap-1.5 rounded-full border border-slate-400/30 bg-black/60 px-3 py-1.5 text-[11px] font-bold tracking-widest text-slate-200 backdrop-blur-sm">
+                <Gem className="h-3.5 w-3.5 text-slate-400" /> {hud.scrap}
+              </div>
+              {TOOL_KEYS.map(({ kind, key }) => {
+                const def = DEPLOYABLE_DEFS[kind];
+                const active = hud.placingKind === kind;
+                return (
+                  <button
+                    key={kind}
+                    onClick={() => onSelectTool(kind)}
+                    title={def.desc}
+                    className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[10px] font-bold tracking-wide backdrop-blur-sm transition ${
+                      active
+                        ? "border-emerald-400/70 bg-emerald-400/15 text-emerald-200 shadow-[0_0_14px_rgba(52,211,153,0.35)]"
+                        : "border-white/12 bg-black/50 text-white/60 hover:border-white/30"
+                    }`}
+                  >
+                    <span className="kbd">{key}</span> {def.short}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        ) : hud.phase === "travel" ? (
           <>
             <div className="font-display text-2xl tracking-[0.18em] text-cyan-300 drop-shadow-[0_0_14px_rgba(103,232,249,0.45)]">
               MOVE OUT
@@ -143,6 +189,11 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch 
             <span className="flex items-center gap-1">
               <Trophy className="h-3.5 w-3.5 text-amber-400/80" /> {hud.high.toLocaleString()}
             </span>
+            {hud.arena && (
+              <span className="flex items-center gap-1 text-slate-300">
+                <Gem className="h-3.5 w-3.5 text-slate-400" /> {hud.scrap}
+              </span>
+            )}
           </div>
         </div>
         <div className="pointer-events-auto flex flex-col gap-2">

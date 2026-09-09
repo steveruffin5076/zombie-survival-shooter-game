@@ -3,10 +3,12 @@ import { Engine } from "./game/engine";
 import type {
   EngineEvent, GameStats, HudState, InventorySnapshot, MissionStats, UpgradeChoice,
 } from "./game/types";
+import type { Deployable, DeployableKind } from "./game/arena";
 import Hud from "./components/Hud";
 import { Menu, LevelUpModal, PauseMenu, GameOver, StageClear, MissionWin } from "./components/Overlays";
 import InventoryOverlay from "./components/InventoryOverlay";
 import SafeHouseOverlay from "./components/SafeHouseOverlay";
+import RepairPanel from "./components/RepairPanel";
 import TouchControls from "./components/TouchControls";
 import { isTouchCapable } from "./game/input";
 
@@ -27,6 +29,7 @@ export default function App() {
   const [missionWin, setMissionWin] = useState<MissionStats | null>(null);
   const [inv, setInv] = useState<InventorySnapshot | null>(null);
   const [showInventory, setShowInventory] = useState(false);
+  const [deployables, setDeployables] = useState<Deployable[]>([]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -75,11 +78,14 @@ export default function App() {
     const iv = window.setInterval(() => {
       const eng = engineRef.current;
       if (!eng) return;
-      setHud(eng.getHud());
+      const h = eng.getHud();
+      setHud(h);
       // bulk backpack/deposit state is polled on the same tick but gated on
       // invVer so it doesn't force a re-render of grid UI every 66ms for no reason
       const snap = eng.getInventory();
       setInv((prev) => (prev && prev.invVer === snap.invVer ? prev : snap));
+      // the arena's deployable list is small (<=12) — cheap to just re-poll while it's relevant
+      if (h.arena) setDeployables(eng.getDeployables());
     }, 66);
 
     return () => {
@@ -133,6 +139,14 @@ export default function App() {
 
   const switchWeapon = useCallback(
     (cls: string) => engineRef.current?.selectClass(cls as never),
+    []
+  );
+  const selectTool = useCallback(
+    (kind: DeployableKind) => engineRef.current?.selectDeployable(kind),
+    []
+  );
+  const repairDeployable = useCallback(
+    (id: string) => engineRef.current?.repairDeployable(id),
     []
   );
   const toggleFireMode = useCallback(() => engineRef.current?.toggleFireMode(), []);
@@ -195,7 +209,17 @@ export default function App() {
             onPause={togglePause}
             onSwitch={switchWeapon}
             onFireMode={toggleFireMode}
+            onSelectTool={selectTool}
             touch={touch}
+          />
+        )}
+        {screen === "game" && hud && hud.repairWindowT > 0 && (
+          <RepairPanel
+            deployables={deployables}
+            scrap={hud.scrap}
+            windowT={hud.repairWindowT}
+            windowMax={hud.repairWindowMax}
+            onRepair={repairDeployable}
           />
         )}
         {screen === "game" && touch && !paused && !choices && !over && !missionWin && !stageClear && !showInventory && (

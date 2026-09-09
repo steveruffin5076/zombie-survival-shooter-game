@@ -16,7 +16,8 @@ const BASE_STAGES: Omit<StageDef, "id">[] = [
   { name: "THE CEMETERY", sub: "where it all began", wavesPerStage: 9, bossWaves: [5, 9], worldW: 2880, themeId: "cemetery" },
   { name: "RUINED SUBURBS", sub: "nothing left to save", wavesPerStage: 9, bossWaves: [5, 9], worldW: 2880, themeId: "suburbs" },
   { name: "THE HIGHWAY", sub: "keep moving forward", wavesPerStage: 9, bossWaves: [5, 9], worldW: 2880, themeId: "highway" },
-  { name: "GROUND ZERO", sub: "the end of the night", wavesPerStage: 9, bossWaves: [5, 9], worldW: 2880, themeId: "arena" },
+  // fixed-camera arena — narrower than the free-roam stages on purpose
+  { name: "GROUND ZERO", sub: "the end of the night", wavesPerStage: 9, bossWaves: [5, 9], worldW: 1600, themeId: "arena" },
 ];
 
 /** The finite mission: 4 hand-authored stages, 36 waves total. */

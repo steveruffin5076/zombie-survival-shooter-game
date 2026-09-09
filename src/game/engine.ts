@@ -11,6 +11,10 @@ import { BACKPACK_SIZE, moveItem, placeItem, removeItem, type PlacedItem } from 
 import { ITEMS, shapeOfItem, itemForHotkey, type ConsumableKey } from "./items";
 import { rollLoot, type CrateTier } from "./loot";
 import { saveRun, loadRun, clearRun, SAVE_VERSION, type SaveData } from "./save";
+import {
+  DEPLOYABLE_DEFS, canPlaceAt, slotToWorldX, worldXToSlot,
+  type Deployable, type DeployableKind,
+} from "./arena";
 import type { EngineEvent, GameStats, HudState, InventorySnapshot, UpgradeChoice } from "./types";
 
 /* ------------------------------------------------------------------ */
@@ -64,6 +68,10 @@ interface Zombie {
   tint: number; boss: boolean; wob: number;
   /** sleeper: inert until woken by threat, damage, or a fast player passing close */
   dormant: boolean;
+  /** arena only — id of the barricade currently blocking this zombie's advance */
+  blockedBy: string | null;
+  /** arena only — razor wire slow remaining, seconds */
+  slowT: number;
 }
 
 interface Bullet {
@@ -79,7 +87,7 @@ interface Particle {
   life: number; max: number; size: number; color: string; grav: number; add: boolean;
 }
 
-interface Gem { x: number; y: number; vx: number; vy: number; val: number; t: number; rest: boolean }
+interface Gem { x: number; y: number; vx: number; vy: number; val: number; t: number; rest: boolean; kind: "xp" | "scrap" }
 interface FloatText { x: number; y: number; vy: number; life: number; max: number; text: string; color: string; size: number }
 interface Decal { x: number; s: number; a: number }
 interface SpawnItem { type: ZType; boss?: boolean }
@@ -180,7 +188,7 @@ export class Engine {
   private stage = 1;
   private waveInStage = 0;       // 1..stageDef.wavesPerStage
   private stageIntermission = false;
-  private phase: "break" | "active" | "travel" = "break";
+  private phase: "break" | "active" | "travel" | "prep" = "break";
   private breakT = 0;
   private spawnT = 0;
   private queue: SpawnItem[] = [];
@@ -212,6 +220,15 @@ export class Engine {
   private grenades: GrenadeProj[] = [];
   /** active Tactical Stim buff remaining, seconds */
   private stimT = 0;
+
+  /* --- arena (stage 4): prep phase, deployables, scrap --- */
+  private deployables: Deployable[] = [];
+  private nextDeployableSeq = 1;
+  private placingKind: DeployableKind | null = null;
+  private prepT = 0;
+  /** RepairPanel is shown while this is > 0, ticking down from 12s each prep phase */
+  private repairWindowT = 0;
+  private scrap = 0;
 
   private score = 0;
   private kills = 0;
@@ -388,6 +405,11 @@ export class Engine {
     this.crateWarnT = 0;
     this.grenades = [];
     this.stimT = 0;
+    this.deployables = [];
+    this.placingKind = null;
+    this.prepT = 0;
+    this.repairWindowT = 0;
+    this.scrap = 0;
     this.score = 0;
     this.kills = 0;
     this.playTime = 0;
@@ -477,10 +499,16 @@ export class Engine {
     if (this.paused || this.modalOpen) return;
     if (c === "Space" || c === "KeyW" || c === "ArrowUp") this.jump();
     if (c === "ShiftLeft" || c === "ShiftRight") this.dash();
-    // weapon switching (only when the upgrade modal is closed)
+    // during arena prep, 1/2/3 pick a deployable tool instead of a weapon class
+    if (c === "Enter" && this.phase === "prep") this.prepT = 0; // READY — skip the rest of prep
     if (c.startsWith("Digit")) {
       const i = Number(c.slice(5)) - 1;
-      if (i >= 0 && i < CLASS_ORDER.length) this.selectClass(CLASS_ORDER[i]);
+      if (this.phase === "prep") {
+        const kinds: DeployableKind[] = ["barricade", "wire", "claymore"];
+        if (i >= 0 && i < kinds.length) this.selectDeployable(kinds[i]);
+      } else if (i >= 0 && i < CLASS_ORDER.length) {
+        this.selectClass(CLASS_ORDER[i]);
+      }
     }
     if (c === "KeyQ") this.cycleWeapon(1);
     if (c === "KeyR") this.startReload(true);
@@ -510,6 +538,10 @@ export class Engine {
   private onMouseDown = (e: MouseEvent) => {
     if (e.button !== 0) return;
     this.sfx.ensure();
+    if (this.mode === "play" && !this.over && !this.paused && !this.modalOpen && this.phase === "prep" && this.placingKind) {
+      this.tryPlaceDeployable();
+      return;
+    }
     this.mouse.down = true;
     // right/left half of the screen pivots the lane (mobile-style tap to turn)
     if (this.mode === "play" && !this.over && !this.paused && !this.modalOpen) {
@@ -734,6 +766,12 @@ export class Engine {
         this.breakT -= dt;
         if (this.breakT <= 0) this.startWave(this.waveInStage + 1);
       }
+    } else if (this.phase === "prep") {
+      if (!this.stageIntermission) {
+        this.prepT -= dt;
+        if (this.repairWindowT > 0) this.repairWindowT = Math.max(0, this.repairWindowT - dt);
+        if (this.prepT <= 0) this.startWave(this.waveInStage + 1);
+      }
     } else if (this.phase === "active") {
       this.spawnT -= dt;
       const cap = Math.min(26, 8 + this.power);
@@ -747,10 +785,10 @@ export class Engine {
         if (this.waveInStage >= this.stageDef.wavesPerStage) {
           this.startTravel();
         } else {
-          this.phase = "break";
-          this.breakT = 3.4;
-          p.hp = Math.min(this.st.maxHp, p.hp + 12);
           const boss = this.stageDef.bossWaves.includes(this.waveInStage);
+          this.beginRest(3.4);
+          if (this.stageDef.themeId === "arena") this.awardSupply(0.18, 0.6);
+          else p.hp = Math.min(this.st.maxHp, p.hp + 12);
           this.spawnCrate(boss ? (chance(0.5) ? 3 : 2) : 1);
           this.announce(
             `WAVE ${this.waveInStage} CLEARED`,
@@ -761,6 +799,7 @@ export class Engine {
     } else {
       this.updateTravel(dt);
     }
+    this.updateDeployables();
 
     this.updateZombies(dt);
     this.updateBullets(dt);
@@ -773,9 +812,14 @@ export class Engine {
     for (const d of this.decals) d.a -= dt * 0.02;
     this.decals = this.decals.filter((d) => d.a > 0.05);
 
-    // camera
-    const target = clamp(p.x - W / 2 + Math.cos(p.aim) * 60, 0, this.worldW - W);
-    this.cam = lerp(this.cam, target, Math.min(1, 5 * dt));
+    // camera — the arena's prep/active phases hold a fixed frame; travel
+    // afterward still follows the player like every other stage
+    if (this.stageDef.themeId === "arena" && this.phase !== "travel") {
+      this.cam = this.camOrigin();
+    } else {
+      const target = clamp(p.x - W / 2 + Math.cos(p.aim) * 60, 0, this.worldW - W);
+      this.cam = lerp(this.cam, target, Math.min(1, 5 * dt));
+    }
     this.shakeMag = Math.max(0, this.shakeMag - dt * 26);
     this.shakeX = R(-this.shakeMag, this.shakeMag);
     this.shakeY = R(-this.shakeMag, this.shakeMag) * 0.7;
@@ -1000,6 +1044,8 @@ export class Engine {
   private updateZombies(dt: number) {
     const p = this.pl;
     const movingFast = Math.abs(p.vx) > 220;
+    const arena = this.stageDef.themeId === "arena";
+    const centerX = this.worldW / 2;
     for (const z of this.zombies) {
       z.t += dt;
       z.flash -= dt;
@@ -1010,9 +1056,29 @@ export class Engine {
         else continue; // still asleep — no movement, no attack timer, no contact damage
       }
       z.atk -= dt;
+      if (z.slowT > 0) z.slowT -= dt;
       const dx = p.x - z.x;
       const dir = dx > 0 ? 1 : -1;
       z.face = dir;
+
+      // arena barricades: melee zombies stop at the nearest one still ahead of
+      // them and tear it down instead of reaching the player; spitters ignore
+      // it entirely — their lobbed attack arcs over the wall
+      let wall: Deployable | null = null;
+      if (arena && z.type !== "spitter") {
+        const side: 1 | -1 = z.x > centerX ? 1 : -1;
+        let bestDist = Infinity;
+        for (const d of this.deployables) {
+          if (d.kind !== "barricade" || d.hp <= 0 || d.lane !== side) continue;
+          const wx = slotToWorldX(d.lane, d.slot, centerX);
+          const ahead = side === 1 ? wx < z.x : wx > z.x;
+          if (!ahead) continue;
+          const wd = Math.abs(wx - z.x);
+          if (wd < bestDist) { bestDist = wd; wall = d; }
+        }
+      }
+      z.blockedBy = wall ? wall.id : null;
+
       if (z.type === "spitter") {
         const ad = Math.abs(dx);
         if (ad > 400) z.vx = dir * z.speed;
@@ -1023,12 +1089,36 @@ export class Engine {
           z.spit = R(2.1, 3.1);
           this.spitAt(z);
         }
+      } else if (wall) {
+        const wx = slotToWorldX(wall.lane, wall.slot, centerX);
+        z.vx = lerp(z.vx, (wall.lane === 1 ? -1 : 1) * z.speed * 0.4, Math.min(1, 6 * dt));
+        z.x = clamp(z.x + z.vx * dt, wall.lane === 1 ? wx : 10, wall.lane === 1 ? this.worldW - 10 : wx);
+        if (z.atk <= 0) {
+          z.atk = 0.6;
+          wall.hp = Math.max(0, wall.hp - z.dmg * 1.4);
+          this.texts.push({ x: wx, y: GROUND - 60, vy: -40, life: 0.4, max: 0.4, text: "-" + Math.round(z.dmg * 1.4), color: "#f87171", size: 11 });
+          if (wall.hp <= 0) {
+            this.deployables = this.deployables.filter((d) => d.id !== wall!.id);
+            this.shake(3);
+          }
+        }
       } else {
-        z.vx = lerp(z.vx, dir * z.speed, Math.min(1, 6 * dt));
+        const speedMul = z.slowT > 0 ? 0.4 : 1;
+        z.vx = lerp(z.vx, dir * z.speed * speedMul, Math.min(1, 6 * dt));
       }
-      z.x = clamp(z.x + z.vx * dt, 10, this.worldW - 10);
-      // contact damage
-      if (Math.abs(dx) < z.r + 15 && Math.abs(p.y - z.y) < 56 && z.atk <= 0) {
+      if (!wall) z.x = clamp(z.x + z.vx * dt, 10, this.worldW - 10);
+
+      // razor wire — no collision, just slows anything that crosses it
+      if (arena) {
+        for (const d of this.deployables) {
+          if (d.kind !== "wire" || d.hp <= 0) continue;
+          const wx = slotToWorldX(d.lane, d.slot, centerX);
+          if (Math.abs(wx - z.x) < 22) z.slowT = 0.4;
+        }
+      }
+
+      // contact damage (blocked zombies are busy with the wall, not the player)
+      if (!wall && Math.abs(dx) < z.r + 15 && Math.abs(p.y - z.y) < 56 && z.atk <= 0) {
         z.atk = z.type === "brute" ? 1.15 : 0.8;
         this.hurtPlayer(z.dmg * R(0.9, 1.1), dir * (z.type === "brute" ? 300 : 150));
       }
@@ -1155,8 +1245,13 @@ export class Engine {
       g.y += g.vy * dt;
       if (d < 24) {
         g.val = -g.val; // mark collected
-        this.gainXp(Math.abs(g.val));
-        this.particles.push({ x: p.x, y: p.y - 34, vx: R(-30, 30), vy: R(-60, -10), life: 0.3, max: 0.3, size: 3, color: "#a78bfa", grav: 0, add: true });
+        if (g.kind === "scrap") {
+          this.scrap += Math.abs(g.val);
+          this.particles.push({ x: p.x, y: p.y - 34, vx: R(-30, 30), vy: R(-60, -10), life: 0.3, max: 0.3, size: 3, color: "#94a3b8", grav: 0, add: true });
+        } else {
+          this.gainXp(Math.abs(g.val));
+          this.particles.push({ x: p.x, y: p.y - 34, vx: R(-30, 30), vy: R(-60, -10), life: 0.3, max: 0.3, size: 3, color: "#a78bfa", grav: 0, add: true });
+        }
         this.sfx.gem();
       }
     }
@@ -1217,7 +1312,11 @@ export class Engine {
     const total = z.xp;
     const n = Math.min(8, Math.max(1, Math.round(total)));
     for (let i = 0; i < n; i++)
-      this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: total / n, t: R(0, 9), rest: false });
+      this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: total / n, t: R(0, 9), rest: false, kind: "xp" });
+    // scrap — arena only, feeds RepairPanel
+    if (this.stageDef.themeId === "arena" && chance(0.22)) {
+      this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: 1, t: R(0, 9), rest: false, kind: "scrap" });
+    }
   }
 
   /** A suppressed hit on a still-dormant sleeper — instant takedown, nearby sleepers stay asleep. */
@@ -1298,10 +1397,9 @@ export class Engine {
     this.invVer++;
     this.recompute();
     this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
-    this.cam = clamp(this.pl.x - W / 2, 0, this.worldW - W);
+    this.cam = this.stageDef.themeId === "arena" ? this.camOrigin() : clamp(this.pl.x - W / 2, 0, this.worldW - W);
     this.mode = "play";
-    this.phase = "break";
-    this.breakT = 2.4;
+    this.beginRest(2.4);
     this.announce("YOU DIED", `back at the safe house — ${this.stageDef.name}`, 2.8);
   }
 
@@ -1692,6 +1790,111 @@ export class Engine {
     return items;
   }
 
+  /** The arena's fixed camera frame — a constant origin, not a mode flag. */
+  private camOrigin() {
+    return (this.worldW - W) / 2;
+  }
+
+  /** Starts the rest between waves — a plain break, or the arena's timed prep phase. */
+  private beginRest(breakDur: number) {
+    if (this.stageDef.themeId === "arena") {
+      this.phase = "prep";
+      this.prepT = 45;
+      this.repairWindowT = 12;
+    } else {
+      this.phase = "break";
+      this.breakT = breakDur;
+    }
+  }
+
+  /** Arena resupply: tops reserve up by a fraction of each weapon's capacity, capped at `cap` of it. */
+  private awardSupply(amount: number, cap: number) {
+    for (const id of WEAPON_IDS) {
+      const maxReserve = WDEF[id].reserve;
+      if (maxReserve <= 0) continue; // unlimited/no reserve — nothing to top up
+      this.reserve[id] = Math.max(this.reserve[id], Math.min(maxReserve * cap, this.reserve[id] + maxReserve * amount));
+    }
+  }
+
+  /** Selects (or, passed the current selection, deselects) a deployable tool during prep. */
+  selectDeployable(kind: DeployableKind | null) {
+    if (this.phase !== "prep") return;
+    this.placingKind = this.placingKind === kind ? null : kind;
+  }
+
+  /** World-x under the cursor -> the deployable slot it lands in. */
+  private ghostSlot() {
+    const centerX = this.worldW / 2;
+    return worldXToSlot(this.cam + this.mouse.x, centerX);
+  }
+
+  /** Places the currently-selected tool at the cursor's slot, if it's free. */
+  private tryPlaceDeployable() {
+    if (!this.placingKind) return;
+    const { lane, slot } = this.ghostSlot();
+    if (!canPlaceAt(this.deployables, lane, slot)) return;
+    const def = DEPLOYABLE_DEFS[this.placingKind];
+    this.deployables.push({
+      id: `dep-${this.nextDeployableSeq++}`,
+      kind: this.placingKind, lane, slot, hp: def.hp, maxHp: def.hp, armed: true,
+    });
+    this.sfx.click();
+  }
+
+  /** Spends scrap to fully restore a damaged deployable. */
+  repairDeployable(id: string) {
+    const d = this.deployables.find((x) => x.id === id);
+    if (!d || d.hp >= d.maxHp) return;
+    const cost = DEPLOYABLE_DEFS[d.kind].repairCost;
+    if (this.scrap < cost) return;
+    this.scrap -= cost;
+    d.hp = d.maxHp;
+    this.sfx.click();
+  }
+
+  getDeployables(): Deployable[] {
+    return this.deployables.map((d) => ({ ...d }));
+  }
+
+  /** Claymore proximity trigger — holds through an active ambush instead of firing on the first zombie. */
+  private updateDeployables() {
+    if (this.stageDef.themeId !== "arena" || this.ambushT > 0) return;
+    const centerX = this.worldW / 2;
+    for (const d of this.deployables) {
+      if (d.kind !== "claymore" || !d.armed) continue;
+      const x = slotToWorldX(d.lane, d.slot, centerX);
+      const hit = this.zombies.find((z) => !z.dead && Math.abs(z.x - x) < 26);
+      if (hit) this.explodeClaymore(d, x);
+    }
+  }
+
+  private explodeClaymore(d: Deployable, x: number) {
+    d.armed = false;
+    const blast = 90;
+    const y = GROUND - 20;
+    for (const z of this.zombies) {
+      if (z.dead) continue;
+      if (z.dormant && Math.hypot(z.x - x, z.y - y) < blast * 2.5) this.wakeZombie(z, true);
+      const dist = Math.hypot(z.x - x, z.y - 34 * z.scale - y);
+      if (dist < blast) {
+        const dmg = 180 * (1 - dist / blast);
+        z.hp -= dmg;
+        z.flash = 0.09;
+        const dir = Math.sign(z.x - x) || 1;
+        z.vx += dir * 280;
+        this.texts.push({ x: z.x, y: z.y - 74 * z.scale, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(dmg)), color: "#fbbf24", size: 14 });
+        if (z.hp <= 0) this.killZombie(z, dir);
+      }
+    }
+    this.shake(9);
+    this.sfx.hurt();
+    for (let i = 0; i < 20; i++)
+      this.particles.push({
+        x, y, vx: R(-240, 240), vy: R(-240, 10), life: R(0.3, 0.6), max: 0.6,
+        size: R(2, 5), color: chance(0.5) ? "#f97316" : "#fde68a", grav: 900, add: true,
+      });
+  }
+
   private startWave(inStage: number) {
     this.waveInStage = inStage;
     this.waveIndex = cumulativeWaveIndex(this.stage, inStage, this.runMode);
@@ -1843,7 +2046,8 @@ export class Engine {
     this.phase = "break";
     const bonus = 500 * cleared;
     this.score += bonus;
-    this.pl.hp = this.st.maxHp; // full heal between stages
+    // full heal between stages — except leaving the arena, which stays scrap-and-supply-only
+    if (this.stageDef.themeId !== "arena") this.pl.hp = this.st.maxHp;
     // safe house resupply: reserve tops up to 50% (not full), suppressors renewed
     for (const id of WEAPON_IDS) {
       if (this.reserve[id] >= 0) this.reserve[id] = Math.max(this.reserve[id], Math.round(WDEF[id].reserve * 0.5));
@@ -1884,14 +2088,13 @@ export class Engine {
     // also what keeps startTravel()'s safeHouseX comfortably in-bounds
     this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
     this.pl.vx = 0;
-    this.cam = clamp(this.pl.x - W / 2, 0, this.worldW - W);
+    this.cam = this.stageDef.themeId === "arena" ? this.camOrigin() : clamp(this.pl.x - W / 2, 0, this.worldW - W);
     this.waveInStage = 0;
     this.stageIntermission = false;
     this.modals.delete("stageclear");
     this.bullets = [];
     this.eshots = [];
-    this.phase = "break";
-    this.breakT = 2.6;
+    this.beginRest(2.6);
     this.announce(`STAGE ${this.stage} — ${this.stageDef.name}`, this.stageDef.sub, 2.8);
   }
 
@@ -1906,7 +2109,7 @@ export class Engine {
       dmg: c.dmg, r: c.r * scale, scale,
       type, xp: c.xp, score: c.score,
       t: R(0, 10), atk: R(0, 0.4), flash: 0, face: 1, dead: false, spit: R(1, 2.4),
-      tint: Math.random(), boss: false, wob: R(0, TAU), dormant: false,
+      tint: Math.random(), boss: false, wob: R(0, TAU), dormant: false, blockedBy: null, slowT: 0,
     };
   }
 
@@ -2026,6 +2229,13 @@ export class Engine {
       gateBypassNear: nearGate !== null,
       gateBypassPct: clamp(this.gateBypassT / 0.9, 0, 1),
       gateBypassLocked: nearGate !== null && this.threat >= 0.35,
+      arena: this.stageDef.themeId === "arena",
+      prepT: Math.max(0, this.prepT),
+      prepMax: 45,
+      placingKind: this.placingKind,
+      scrap: this.scrap,
+      repairWindowT: Math.max(0, this.repairWindowT),
+      repairWindowMax: 12,
     };
   }
 
@@ -2233,6 +2443,15 @@ export class Engine {
       c.font = '700 10px "Space Grotesk", sans-serif';
       c.fillStyle = "rgba(74,222,128,0.85)";
       c.fillText("SAFE HOUSE", dx, GROUND - 118);
+      c.restore();
+    }
+
+    /* --- arena: deployables + placement ghost --- */
+    if (this.stageDef.themeId === "arena") {
+      c.save();
+      c.translate(-cam, camY);
+      for (const d of this.deployables) this.drawDeployable(d, t);
+      if (this.phase === "prep" && this.placingKind) this.drawPlacementGhost();
       c.restore();
     }
 
@@ -2702,6 +2921,56 @@ export class Engine {
       c.stroke();
     }
     c.restore();
+  }
+
+  private drawDeployable(d: Deployable, t: number) {
+    const c = this.ctx;
+    const x = slotToWorldX(d.lane, d.slot, this.worldW / 2);
+    const pct = clamp(d.hp / d.maxHp, 0, 1);
+    if (d.kind === "barricade") {
+      c.fillStyle = pct > 0.5 ? "#78716c" : pct > 0.2 ? "#92400e" : "#7f1d1d";
+      c.fillRect(x - 16, GROUND - 62, 32, 62);
+      c.strokeStyle = "rgba(0,0,0,0.4)";
+      c.lineWidth = 2;
+      c.strokeRect(x - 16, GROUND - 62, 32, 62);
+      c.fillStyle = "rgba(0,0,0,0.5)";
+      c.fillRect(x - 18, GROUND - 74, 36, 5);
+      c.fillStyle = pct > 0.5 ? "#4ade80" : pct > 0.2 ? "#fbbf24" : "#f87171";
+      c.fillRect(x - 18, GROUND - 74, 36 * pct, 5);
+    } else if (d.kind === "wire") {
+      c.strokeStyle = pct > 0.3 ? "#94a3b8" : "#7f1d1d";
+      c.lineWidth = 2;
+      for (let i = -1; i <= 1; i++) {
+        c.beginPath();
+        c.moveTo(x + i * 8, GROUND - 2);
+        c.lineTo(x + i * 8 + 6, GROUND - 14);
+        c.lineTo(x + i * 8 - 4, GROUND - 22);
+        c.stroke();
+      }
+    } else {
+      c.fillStyle = d.armed ? "#4b5563" : "#1f2937";
+      c.beginPath();
+      c.ellipse(x, GROUND - 4, 10, 4, 0, 0, TAU);
+      c.fill();
+      if (d.armed) {
+        c.fillStyle = `rgba(248,113,113,${0.5 + 0.4 * Math.sin(t * 6)})`;
+        c.beginPath();
+        c.arc(x, GROUND - 6, 2, 0, TAU);
+        c.fill();
+      }
+    }
+  }
+
+  private drawPlacementGhost() {
+    if (!this.placingKind) return;
+    const { lane, slot } = this.ghostSlot();
+    const valid = canPlaceAt(this.deployables, lane, slot);
+    const x = slotToWorldX(lane, slot, this.worldW / 2);
+    const c = this.ctx;
+    c.globalAlpha = 0.4;
+    c.fillStyle = valid ? "#4ade80" : "#f87171";
+    c.fillRect(x - 16, GROUND - 62, 32, 62);
+    c.globalAlpha = 1;
   }
 
   private drawGem(g: Gem, t: number) {

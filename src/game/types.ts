@@ -1,3 +1,5 @@
+import type { DeployableKind } from "./arena";
+
 export interface WeaponSlot {
   /** weapon class this slot represents */
   cls: string;
@@ -28,7 +30,7 @@ export interface HudState {
   isBossWave: boolean;
   remaining: number;
   waveTotal: number;
-  phase: "break" | "active" | "travel";
+  phase: "break" | "active" | "travel" | "prep";
   /** 0..1 progress from where travel started to the safe house door */
   travelDistance: number;
   travelGatesTotal: number;
@@ -77,6 +79,17 @@ export interface HudState {
   gateBypassPct: number;
   /** a bypassable gate is in range but threat is too high to use it */
   gateBypassLocked: boolean;
+  /** stage 4 only — gates the prep/deployables/scrap UI */
+  arena: boolean;
+  /** seconds left in the arena's prep phase */
+  prepT: number;
+  prepMax: number;
+  /** deployable tool currently selected for placement, if any */
+  placingKind: DeployableKind | null;
+  scrap: number;
+  /** seconds left in the per-prep repair window — RepairPanel shows while > 0 */
+  repairWindowT: number;
+  repairWindowMax: number;
 }
 
 export type Rarity = "common" | "rare" | "epic" | "weapon";
