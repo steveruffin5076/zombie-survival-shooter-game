@@ -4,15 +4,15 @@
 
 - **Full plan:** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
-- **Last updated:** 2026-09-09 (Phase 2 in progress)
+- **Last updated:** 2026-09-09 (Phase 2 complete)
 
 ---
 
 ## Current status
 
-Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–1 are complete.** Phase 2 (mission flow) is in progress. Sections 3–5 of the spec (inventory, defend-the-base climax) still have no code — that's Phases 3–7 below.
+Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–2 are complete.** Sections 4–5 of the spec (grid inventory, defend-the-base climax) still have no code — that's Phases 3–7 below.
 
-**Immediate next action:** Phase 2 — mission flow: travel gates, safe house, `missionComplete()` + win screen, per-stage themes in `render()`.
+**Immediate next action:** Phase 3 — grid inventory, loot, save system (`grid.ts`, `items.ts`, `loot.ts`, `save.ts`, `GridPanel.tsx`/`InventoryOverlay.tsx`/`SafeHouseOverlay.tsx`).
 
 ### Branch state
 
@@ -57,13 +57,15 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 - [x] `?debug=1` renders a bottom-left readout (`mode/stage/wave/power/idx`); `?mode=mission` is a temporary dev hook in `App.tsx` to reach mission mode before Phase 2 builds a real menu selector — **no Mission/Endless UI exists yet**, `startGame()` still defaults to endless so today's play is unchanged
 - **Verified:** `npx tsc --noEmit` clean · `npm test` 8/8 passing · `npm run build` succeeds · played both modes in-browser (screenshots) — stage 1 identical in both, boss-wave pips correctly light at 5 & 9, debug overlay showed `power`/`idx` climbing monotonically during live combat · `stageDefFor`/`cumulativeWaveIndex` checked directly via `tsx`: mission stage 5+ clamps to stage 4 ("GROUND ZERO", never wraps back to "THE CEMETERY"), endless stage 5 correctly wraps to a fresh "THE CEMETERY" instance, `cumulativeWaveIndex(4, 9, "mission")` === 36
 
-### Phase 2 — Mission flow: travel, safe house, win (~3 days) — IN PROGRESS (2026-09-09)
-- [ ] Travel gates (right-edge clamp only; cancel `dashT` on contact, gates ≥500px apart)
-- [ ] `phase` gains `"travel"`; safe house as a physical door at `safeHouseX`
-- [ ] Anti-camping: `threat += 0.055*dt` after 40s without rightward progress
-- [ ] `missionComplete()` + `MissionWin` overlay + best-mission-time persistence
-- [ ] Per-stage themes in `render()` + 3 new decor primitives (~450 lines of canvas)
-- **Verify:** walk stage 1 end to end through every gate into the safe house · reach the win screen
+### Phase 2 — Mission flow: travel, safe house, win (~3 days) — DONE (2026-09-09)
+- [x] Travel gates: `startTravel()` seeds 0–3 `Gate`s ≥500px apart between wherever the last wave ended and `safeHouseX`; contact opens a gate, ratchets `travelMinX` forward (the "right-edge clamp only" — during travel only the world's right edge is a hard clamp, the left bound is the last opened gate, so backtracking past a cleared checkpoint is out), and cancels an in-progress `dashT`
+- [x] `phase` gains `"travel"` (the old break/active if-else is now a 3-way branch); safe house is a physical glowing door at `safeHouseX`, drawn + reached via simple x-threshold contact — no interact key yet, that arrives with Phase 4's `[E] BYPASS`
+- [x] Anti-camping: `updateTravel()` tracks `travelProgressX`/`travelIdleT`; past 40s without rightward progress, `threat += 0.055*dt` (reuses the existing threat bar/`triggerAmbush()` — no new punishment system)
+- [x] `missionComplete()` (reuses `this.over`, the existing death-freezes-the-sim flag) + `MissionWin` overlay (`Overlays.tsx`) + best-mission-time in `localStorage` (`graveyard-shift-best-time`); fires only when `runMode === "mission"` and the safe house is reached on the final `STAGES` entry — endless just keeps calling `completeStage()`/`advanceStage()` forever
+- [x] Per-stage themes: `ThemeDef` grew sky/ground gradient stops + `decorWeights`; `render()`'s sky/ground gradients and `genDecor()`'s decor-kind roll both read `this.theme` now. 3 new decor primitives — wrecked car, concrete road barrier, rubble pile with rebar — weighted per stage (cemetery stays tombstones/trees, suburbs mixes in cars+rubble, highway leans barriers+cars, arena is mostly rubble)
+- [x] Found and fixed a real bug during verification: `advanceStage()` never repositioned the player, so a stage started wherever the *previous* stage's travel ended (near that stage's right edge) — stage 2+'s `safeHouseX` computation could land past the world's hard clamp, an unreachable door that hung travel forever. Fixed by having `advanceStage()` walk the player back to the new stage's left side, plus a defensive `Math.min(worldW - 60, ...)` in `startTravel()` so `safeHouseX` can never exceed what's physically reachable regardless of where combat left the player
+- **Verified:** `npx tsc --noEmit` clean · `npm test` 8/8 passing · `npm run build` succeeds · a `?debug=1` build exposes `window.__engine`, used to fast-forward (insta-clear each wave's queue/zombies, zero `breakT`) through **all 4 mission stages end-to-end in-browser**: stage names/themes changed correctly, gates opened on contact, every safe house was reachable, `MissionWin` fired exactly at stage 4's door with a monotonic `power` of `1 → 36` and `NEW BEST TIME` set · separately confirmed **endless mode cycles past stage 4 into a fresh "THE CEMETERY" (stage 5) without ever calling `missionComplete()`** · a normal, non-cheated few seconds of play (no `?debug`) looked identical to Phase 1 — combat, HUD, movement all unaffected
+- **Note:** no Mission/Endless menu selector exists yet (still the Phase 1 `?mode=mission` dev hook) — that's real Phase 2 scope the checklist didn't call out explicitly; worth doing before Phase 3 if a human is going to playtest this, otherwise mission mode is only reachable via URL param
 
 ### Phase 3 — Grid inventory, loot, save (~5 days, largest system) — NOT STARTED
 - [ ] `src/game/grid.ts` (pure) + tests · `items.ts` · `loot.ts` (injected rng) · `save.ts` (versioned + migrate)
@@ -118,7 +120,7 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 ## Standing rules
 
 - `npm test` + `npx tsc --noEmit` + `npm run build` every phase. Pure modules get Vitest; engine/UI is verified by playing it in the browser.
-- Keep new subsystem logic as **pure data + pure functions in their own modules**; `engine.ts` holds only arrays and `update*`/`draw*`. It is already ~2,400 lines and heading past 3,500.
+- Keep new subsystem logic as **pure data + pure functions in their own modules**; `engine.ts` holds only arrays and `update*`/`draw*`. It's ~2,680 lines now and heading past 3,500 — Phase 3's grid/loot/save work goes in their own modules, not here.
 - Mission-only systems gate on `runMode === "mission"` at exactly **one** place each.
 - Reuse, don't rebuild: `EngineEvent` union + single `switch` in `App.tsx`, the `getHud()` 66ms poll, callback props (children never get the engine), `announce()`/`drawBanner()`, the `Gem` pickup pipeline, `phase`/`breakT`, `triggerAmbush()`, the `ICONS` map.
 

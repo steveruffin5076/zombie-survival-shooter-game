@@ -28,6 +28,11 @@ export interface HudState {
   isBossWave: boolean;
   remaining: number;
   waveTotal: number;
+  phase: "break" | "active" | "travel";
+  /** 0..1 progress from where travel started to the safe house door */
+  travelDistance: number;
+  travelGatesTotal: number;
+  travelGatesOpened: number;
   score: number;
   kills: number;
   high: number;
@@ -84,9 +89,19 @@ export interface GameStats {
   isBest: boolean;
 }
 
+export interface MissionStats {
+  score: number;
+  kills: number;
+  level: number;
+  time: number;
+  bestTime: number;
+  isBestTime: boolean;
+}
+
 export type EngineEvent =
   | { type: "levelup"; choices: UpgradeChoice[] }
   | { type: "resume" }
   | { type: "gameover"; stats: GameStats }
   | { type: "stageclear"; stage: number; next: number; wavesPerStage: number }
+  | { type: "missionwin"; stats: MissionStats }
   | { type: "pause"; value: boolean };

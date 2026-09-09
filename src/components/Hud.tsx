@@ -1,7 +1,7 @@
 import type { HudState } from "../game/types";
 import {
   Heart, Skull, Pause, Volume2, VolumeX, Crosshair, Zap, Trophy, Lock,
-  Ear, Bot, Hand,
+  Ear, Bot, Hand, DoorOpen,
 } from "lucide-react";
 
 interface Props {
@@ -67,47 +67,67 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch 
         </div>
       </div>
 
-      {/* top-center: stage + wave */}
+      {/* top-center: stage + wave, or travel progress */}
       <div className="absolute left-1/2 top-4 -translate-x-1/2 text-center">
         <div className="text-[10px] font-bold tracking-[0.42em] text-white/45">
           STAGE {hud.stage}
         </div>
-        <div
-          className={`font-display text-2xl tracking-[0.18em] ${
-            hud.isBossWave
-              ? "text-red-400 drop-shadow-[0_0_16px_rgba(239,68,68,0.6)]"
-              : "text-amber-300 drop-shadow-[0_0_14px_rgba(245,158,11,0.45)]"
-          }`}
-        >
-          {hud.isBossWave ? "BOSS WAVE" : `WAVE ${Math.max(1, hud.waveInStage)}`}
-        </div>
-        {/* 10-wave stage pips */}
-        <div className="mt-1.5 flex items-center justify-center gap-1">
-          {Array.from({ length: hud.wavesPerStage }).map((_, i) => {
-            const n = i + 1;
-            const done = n < hud.waveInStage;
-            const cur = n === hud.waveInStage;
-            const boss = hud.bossWaves.includes(n);
-            return (
-              <span
-                key={i}
-                className={`h-1.5 rounded-full transition-all ${boss ? "w-3.5" : "w-2.5"} ${
-                  cur
-                    ? boss
-                      ? "bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.9)]"
-                      : "bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.9)]"
-                    : done
-                      ? boss ? "bg-red-500/60" : "bg-amber-500/50"
-                      : boss ? "bg-red-500/25" : "bg-white/15"
-                }`}
+        {hud.phase === "travel" ? (
+          <>
+            <div className="font-display text-2xl tracking-[0.18em] text-cyan-300 drop-shadow-[0_0_14px_rgba(103,232,249,0.45)]">
+              MOVE OUT
+            </div>
+            <div className="mx-auto mt-1.5 h-1.5 w-56 overflow-hidden rounded-full border border-white/10 bg-black/60">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-cyan-600 to-cyan-300 transition-[width] duration-200"
+                style={{ width: `${hud.travelDistance * 100}%` }}
               />
-            );
-          })}
-        </div>
-        <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[11px] font-semibold tracking-widest text-white/55">
-          <Skull className="h-3.5 w-3.5" />
-          {hud.waveInStage > 0 ? `${hud.remaining} REMAIN` : "GET READY"}
-        </div>
+            </div>
+            <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[11px] font-semibold tracking-widest text-white/55">
+              <DoorOpen className="h-3.5 w-3.5" />
+              {hud.travelGatesOpened}/{hud.travelGatesTotal} GATES · SAFE HOUSE AHEAD
+            </div>
+          </>
+        ) : (
+          <>
+            <div
+              className={`font-display text-2xl tracking-[0.18em] ${
+                hud.isBossWave
+                  ? "text-red-400 drop-shadow-[0_0_16px_rgba(239,68,68,0.6)]"
+                  : "text-amber-300 drop-shadow-[0_0_14px_rgba(245,158,11,0.45)]"
+              }`}
+            >
+              {hud.isBossWave ? "BOSS WAVE" : `WAVE ${Math.max(1, hud.waveInStage)}`}
+            </div>
+            {/* per-stage wave pips */}
+            <div className="mt-1.5 flex items-center justify-center gap-1">
+              {Array.from({ length: hud.wavesPerStage }).map((_, i) => {
+                const n = i + 1;
+                const done = n < hud.waveInStage;
+                const cur = n === hud.waveInStage;
+                const boss = hud.bossWaves.includes(n);
+                return (
+                  <span
+                    key={i}
+                    className={`h-1.5 rounded-full transition-all ${boss ? "w-3.5" : "w-2.5"} ${
+                      cur
+                        ? boss
+                          ? "bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.9)]"
+                          : "bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.9)]"
+                        : done
+                          ? boss ? "bg-red-500/60" : "bg-amber-500/50"
+                          : boss ? "bg-red-500/25" : "bg-white/15"
+                    }`}
+                  />
+                );
+              })}
+            </div>
+            <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[11px] font-semibold tracking-widest text-white/55">
+              <Skull className="h-3.5 w-3.5" />
+              {hud.waveInStage > 0 ? `${hud.remaining} REMAIN` : "GET READY"}
+            </div>
+          </>
+        )}
       </div>
 
       {/* top-right: score + controls */}

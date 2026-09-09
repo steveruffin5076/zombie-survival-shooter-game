@@ -1,4 +1,4 @@
-import type { GameStats, Rarity, UpgradeChoice } from "../game/types";
+import type { GameStats, MissionStats, Rarity, UpgradeChoice } from "../game/types";
 import {
   Play, RotateCcw, Home, Trophy, Timer, Skull, TrendingUp, Volume2, VolumeX,
   Crosshair, Gauge, Layers, ChevronsRight, Target, Wind, HeartPulse, Footprints,
@@ -227,6 +227,67 @@ export function StageClear({
           <Play className="h-5 w-5" fill="currentColor" />
           ENTER STAGE {next}
         </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+export function MissionWin({ stats, onRestart, onQuit }: { stats: MissionStats; onRestart: () => void; onQuit: () => void }) {
+  const mins = Math.floor(stats.time / 60);
+  const secs = Math.floor(stats.time % 60);
+  const bMins = Math.floor(stats.bestTime / 60);
+  const bSecs = Math.floor(stats.bestTime % 60);
+  return (
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-gradient-to-b from-amber-950/30 via-black/80 to-black/92 backdrop-blur-[5px]">
+      <div className="anim-pop flex w-full max-w-lg flex-col items-center px-8 text-center">
+        <div className="anim-rise mb-3 flex items-center gap-3 text-[11px] font-bold tracking-[0.45em] text-amber-300/80">
+          <span className="h-px w-8 bg-amber-400/40" />
+          THE SUN COMES UP
+          <span className="h-px w-8 bg-amber-400/40" />
+        </div>
+        <h2
+          className="anim-rise font-display text-6xl tracking-[0.1em] text-amber-300 drop-shadow-[0_0_34px_rgba(245,158,11,0.45)]"
+          style={{ animationDelay: "60ms" }}
+        >
+          MISSION COMPLETE
+        </h2>
+        <p className="anim-rise mt-3 max-w-sm text-sm leading-relaxed text-zinc-400" style={{ animationDelay: "120ms" }}>
+          Four stages, one long night. You made it out — this time.
+        </p>
+
+        {stats.isBestTime && (
+          <div className="anim-pop mt-4 flex items-center gap-2 rounded-full border border-amber-400/40 bg-amber-400/10 px-4 py-1.5 text-[11px] font-bold tracking-[0.25em] text-amber-300" style={{ animationDelay: "150ms" }}>
+            <Trophy className="h-3.5 w-3.5" />
+            NEW BEST TIME
+          </div>
+        )}
+
+        <div className="anim-rise mt-7 grid w-full grid-cols-3 gap-3" style={{ animationDelay: "180ms" }}>
+          <StatBox icon={<Timer className="h-4 w-4" />} label="TIME" value={`${mins}:${String(secs).padStart(2, "0")}`} />
+          <StatBox icon={<Skull className="h-4 w-4" />} label="KILLS" value={stats.kills.toLocaleString()} />
+          <StatBox icon={<Gauge className="h-4 w-4" />} label="LEVEL" value={String(stats.level)} />
+          <StatBox icon={<Trophy className="h-4 w-4" />} label="SCORE" value={stats.score.toLocaleString()} accent />
+          <StatBox icon={<Timer className="h-4 w-4" />} label="BEST TIME" value={`${bMins}:${String(bSecs).padStart(2, "0")}`} />
+        </div>
+
+        <div className="anim-rise mt-8 flex w-full gap-3" style={{ animationDelay: "240ms" }}>
+          <button
+            onClick={onRestart}
+            className="flex flex-1 items-center justify-center gap-2.5 rounded-xl bg-gradient-to-b from-amber-400 to-amber-600 px-6 py-3.5 text-sm font-bold tracking-[0.2em] text-amber-950 shadow-[0_0_40px_rgba(245,158,11,0.35)] transition-all hover:scale-[1.03] active:scale-[0.98]"
+          >
+            <RotateCcw className="h-4 w-4" />
+            PLAY AGAIN
+          </button>
+          <button
+            onClick={onQuit}
+            className="flex flex-1 items-center justify-center gap-2.5 rounded-xl border border-white/10 bg-white/5 px-6 py-3.5 text-sm font-bold tracking-[0.2em] text-zinc-200 transition-all hover:border-white/25 hover:bg-white/10 active:scale-[0.98]"
+          >
+            <Home className="h-4 w-4" />
+            MENU
+          </button>
+        </div>
       </div>
     </div>
   );

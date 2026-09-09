@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Engine } from "./game/engine";
-import type { EngineEvent, GameStats, HudState, UpgradeChoice } from "./game/types";
+import type { EngineEvent, GameStats, HudState, MissionStats, UpgradeChoice } from "./game/types";
 import Hud from "./components/Hud";
-import { Menu, LevelUpModal, PauseMenu, GameOver, StageClear } from "./components/Overlays";
+import { Menu, LevelUpModal, PauseMenu, GameOver, StageClear, MissionWin } from "./components/Overlays";
 import TouchControls from "./components/TouchControls";
 import { isTouchCapable } from "./game/input";
 
@@ -19,6 +19,7 @@ export default function App() {
     isTouchCapable(navigator.maxTouchPoints, window.matchMedia("(pointer: coarse)").matches)
   );
   const [stageClear, setStageClear] = useState<{ stage: number; next: number; wavesPerStage: number } | null>(null);
+  const [missionWin, setMissionWin] = useState<MissionStats | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -35,10 +36,17 @@ export default function App() {
           setOver(e.stats);
           setChoices(null);
           setStageClear(null);
+          setMissionWin(null);
           setPaused(false);
           break;
         case "stageclear":
           setStageClear({ stage: e.stage, next: e.next, wavesPerStage: e.wavesPerStage });
+          break;
+        case "missionwin":
+          setMissionWin(e.stats);
+          setChoices(null);
+          setStageClear(null);
+          setPaused(false);
           break;
         case "pause":
           setPaused(e.value);
@@ -47,6 +55,12 @@ export default function App() {
     });
     engineRef.current = engine;
     engine.begin();
+    // ?debug=1 exposes the engine on window for the same debug tooling that
+    // draws the ?debug=1 HUD overlay (see engine.ts render()) — lets manual
+    // QA fast-forward wave/stage state instead of grinding real playtime.
+    if (new URLSearchParams(window.location.search).get("debug") === "1") {
+      (window as unknown as { __engine?: Engine }).__engine = engine;
+    }
 
     const iv = window.setInterval(() => {
       const eng = engineRef.current;
@@ -69,6 +83,7 @@ export default function App() {
     setOver(null);
     setChoices(null);
     setStageClear(null);
+    setMissionWin(null);
     setPaused(false);
   }, []);
 
@@ -78,6 +93,7 @@ export default function App() {
     setOver(null);
     setChoices(null);
     setStageClear(null);
+    setMissionWin(null);
     setPaused(false);
   }, []);
 
@@ -143,7 +159,7 @@ export default function App() {
             touch={touch}
           />
         )}
-        {screen === "game" && touch && !paused && !choices && !over && (
+        {screen === "game" && touch && !paused && !choices && !over && !missionWin && (
           <TouchControls
             onMoveStart={moveStart}
             onMoveEnd={moveEnd}
@@ -170,7 +186,7 @@ export default function App() {
           />
         )}
 
-        {paused && screen === "game" && !over && !choices && (
+        {paused && screen === "game" && !over && !choices && !missionWin && (
           <PauseMenu
             onResume={resume}
             onRestart={start}
@@ -181,6 +197,8 @@ export default function App() {
         )}
 
         {over && <GameOver stats={over} onRestart={start} onQuit={quit} />}
+
+        {missionWin && <MissionWin stats={missionWin} onRestart={start} onQuit={quit} />}
       </div>
     </div>
   );

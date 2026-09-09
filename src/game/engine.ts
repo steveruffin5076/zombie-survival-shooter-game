@@ -79,8 +79,10 @@ interface Decal { x: number; s: number; a: number }
 interface SpawnItem { type: ZType; boss?: boolean }
 interface Banner { text: string; sub: string; t: number; dur: number }
 interface Building { x: number; w: number; h: number; win: number }
-interface Decor { x: number; kind: number; s: number; ph: number } // kind 0 stone-a 1 stone-b 2 tree 3 lamp
+// kind 0 stone-a 1 stone-b 2 tree 3 lamp 4 wrecked car 5 barrier 6 rubble pile
+interface Decor { x: number; kind: number; s: number; ph: number }
 interface Star { x: number; y: number; r: number; ph: number; tw: number }
+interface Gate { x: number; opened: boolean }
 
 /* ------------------------------------------------------------------ */
 /* engine                                                              */
@@ -168,11 +170,20 @@ export class Engine {
   private stage = 1;
   private waveInStage = 0;       // 1..stageDef.wavesPerStage
   private stageIntermission = false;
-  private phase: "break" | "active" = "break";
+  private phase: "break" | "active" | "travel" = "break";
   private breakT = 0;
   private spawnT = 0;
   private queue: SpawnItem[] = [];
   private waveTotal = 0;
+
+  /* --- travel: the walk from "waves cleared" to the safe house door --- */
+  private gates: Gate[] = [];
+  private safeHouseX = 0;
+  private travelStartX = 0;
+  /** left clamp during travel; ratchets right as gates open, never loosens */
+  private travelMinX = 26;
+  private travelProgressX = 0;
+  private travelIdleT = 0;
 
   private score = 0;
   private kills = 0;
@@ -330,6 +341,12 @@ export class Engine {
     this.stageIntermission = false;
     this.waveTotal = 0;
     this.queue = [];
+    this.gates = [];
+    this.safeHouseX = 0;
+    this.travelStartX = 0;
+    this.travelMinX = 26;
+    this.travelProgressX = 0;
+    this.travelIdleT = 0;
     this.score = 0;
     this.kills = 0;
     this.playTime = 0;
@@ -381,12 +398,17 @@ export class Engine {
     };
     this.skyFar = gen(0.18, 60, 200, 46, 110);
     this.skyNear = gen(0.38, 40, 150, 30, 80);
-    // graveyard decor at parallax .68
+    // roadside/graveyard decor at parallax .68 — kind weights vary per theme
+    const weights = theme.decorWeights;
+    const wTotal = weights.reduce((a, b) => a + b, 0) || 1;
     const span = W + (worldW - W) * 0.68 + 500;
     let dx = -160;
     while (dx < span) {
-      const roll = Math.random();
-      const kind = roll < 0.42 ? RI(0, 1) : roll < 0.78 ? 2 : 3;
+      let roll = Math.random() * wTotal;
+      let kind = 0;
+      for (let i = 0; i < weights.length; i++) {
+        if ((roll -= weights[i]) < 0) { kind = i; break; }
+      }
       this.decor.push({ x: dx, kind, s: R(0.7, 1.25), ph: R(0, TAU) });
       dx += R(120, 300);
     }
@@ -621,7 +643,10 @@ export class Engine {
       }
       p.y = GROUND; p.vy = 0; p.grounded = true; p.jumps = 0;
     }
-    p.x = clamp(p.x + p.vx * dt, 26, this.worldW - 26);
+    // travel only clamps the right edge for real — the left bound is the
+    // last opened gate, so backtracking past a cleared checkpoint is out
+    const leftBound = this.phase === "travel" ? this.travelMinX : 26;
+    p.x = clamp(p.x + p.vx * dt, leftBound, this.worldW - 26);
 
     const run = Math.abs(p.vx) > 26 && p.grounded;
     p.walk += dt * (run ? 10 + Math.abs(p.vx) * 0.014 : 3);
@@ -652,13 +677,13 @@ export class Engine {
     // regen
     if (this.st.regen > 0) p.hp = Math.min(this.st.maxHp, p.hp + this.st.regen * dt);
 
-    // waves
+    // waves / travel
     if (this.phase === "break") {
       if (!this.stageIntermission) {
         this.breakT -= dt;
         if (this.breakT <= 0) this.startWave(this.waveInStage + 1);
       }
-    } else {
+    } else if (this.phase === "active") {
       this.spawnT -= dt;
       const cap = Math.min(26, 8 + this.power);
       if (this.spawnT <= 0 && this.queue.length > 0 && this.zombies.length < cap) {
@@ -669,7 +694,7 @@ export class Engine {
       if (this.queue.length === 0 && this.zombies.length === 0) {
         this.score += 50 * this.power;
         if (this.waveInStage >= this.stageDef.wavesPerStage) {
-          this.completeStage();
+          this.startTravel();
         } else {
           this.phase = "break";
           this.breakT = 3.4;
@@ -680,6 +705,8 @@ export class Engine {
           );
         }
       }
+    } else {
+      this.updateTravel(dt);
     }
 
     this.updateZombies(dt);
@@ -1344,7 +1371,68 @@ export class Engine {
     this.sfx.wave();
   }
 
-  /** Called after the final wave of a stage is cleared. */
+  /** Called once the stage's last wave is cleared — walk to the safe house. */
+  private startTravel() {
+    this.phase = "travel";
+    this.travelStartX = this.pl.x;
+    this.travelProgressX = this.pl.x;
+    this.travelIdleT = 0;
+    this.travelMinX = 26;
+    // always reachable: never past the world's hard right clamp, even if
+    // combat left the player already near the edge (degrades to ~0 gates)
+    this.safeHouseX = Math.min(this.worldW - 60, this.pl.x + R(1500, 1950));
+    this.gates = [];
+    let gx = this.pl.x + R(520, 660);
+    while (gx < this.safeHouseX - 280) {
+      this.gates.push({ x: gx, opened: false });
+      gx += R(520, 720); // gates ≥500px apart
+    }
+    this.announce("SECTOR CLEAR", "move out — reach the safe house", 2.6);
+    this.sfx.wave();
+  }
+
+  private updateTravel(dt: number) {
+    const p = this.pl;
+    // gates: ratchet the retreat clamp forward on contact, cancel a mid-dash
+    for (const g of this.gates) {
+      if (g.opened || p.x < g.x - 30) continue;
+      g.opened = true;
+      this.travelMinX = Math.max(this.travelMinX, g.x - 34);
+      if (p.dashT > 0) { p.dashT = 0; p.vx *= 0.25; }
+      this.shake(3);
+      this.sfx.click();
+      this.texts.push({
+        x: p.x, y: p.y - 92, vy: -46, life: 0.7, max: 0.7,
+        text: "GATE CLEARED", color: "#67e8f9", size: 12,
+      });
+      for (let i = 0; i < 10; i++)
+        this.particles.push({
+          x: g.x, y: GROUND - R(10, 60), vx: R(-60, 60), vy: R(-90, 10),
+          life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#94a3b8", grav: 500, add: false,
+        });
+    }
+    // anti-camping: no rightward progress for 40s starts building threat
+    if (p.x > this.travelProgressX + 3) {
+      this.travelProgressX = p.x;
+      this.travelIdleT = 0;
+    } else {
+      this.travelIdleT += dt;
+      if (this.travelIdleT > 40) {
+        this.threat = clamp(this.threat + 0.055 * dt, 0, 1);
+        if (this.threat >= 1 && this.ambushT <= 0) this.triggerAmbush(3);
+      }
+    }
+    if (p.x >= this.safeHouseX - 26) this.reachSafeHouse();
+  }
+
+  /** Player reached the safe house door at the end of travel. */
+  private reachSafeHouse() {
+    if (this.phase !== "travel") return;
+    if (this.runMode === "mission" && this.stage >= STAGES.length) this.missionComplete();
+    else this.completeStage();
+  }
+
+  /** Called after the safe house door is reached — freezes the sim for the stage-clear screen. */
   private completeStage() {
     const cleared = this.stage;
     this.stageIntermission = true;
@@ -1360,10 +1448,33 @@ export class Engine {
     });
   }
 
+  /** Called after the safe house door is reached on the mission's final stage. */
+  private missionComplete() {
+    this.over = true;
+    this.phase = "break";
+    this.shake(6);
+    this.sfx.levelup();
+    const bestTime = Number(localStorage.getItem("graveyard-shift-best-time") || 0);
+    const isBestTime = bestTime === 0 || this.playTime < bestTime;
+    if (isBestTime) localStorage.setItem("graveyard-shift-best-time", String(this.playTime));
+    this.onEvent({
+      type: "missionwin",
+      stats: {
+        score: this.score, kills: this.kills, level: this.pl.level, time: this.playTime,
+        bestTime: isBestTime ? this.playTime : bestTime, isBestTime,
+      },
+    });
+  }
+
   /** Player confirmed the stage-clear screen. */
   advanceStage() {
     if (!this.stageIntermission) return;
     this.setStage(this.stage + 1);
+    // walk out of the safe house back onto the left side of the new stage —
+    // also what keeps startTravel()'s safeHouseX comfortably in-bounds
+    this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
+    this.pl.vx = 0;
+    this.cam = clamp(this.pl.x - W / 2, 0, this.worldW - W);
     this.waveInStage = 0;
     this.stageIntermission = false;
     this.modals.delete("stageclear");
@@ -1451,6 +1562,12 @@ export class Engine {
       isBossWave: this.stageDef.bossWaves.includes(this.waveInStage),
       waveTotal: this.waveTotal,
       remaining: this.queue.length + this.zombies.length,
+      phase: this.phase,
+      travelDistance: this.phase === "travel"
+        ? clamp((this.pl.x - this.travelStartX) / Math.max(1, this.safeHouseX - this.travelStartX), 0, 1)
+        : 0,
+      travelGatesTotal: this.gates.length,
+      travelGatesOpened: this.gates.filter((g) => g.opened).length,
       score: this.score,
       kills: this.kills,
       high: this.high,
@@ -1516,12 +1633,13 @@ export class Engine {
 
     c.clearRect(0, 0, W, H);
 
-    /* --- sky --- */
+    /* --- sky (per-stage theme) --- */
+    const theme = this.theme;
     const sky = c.createLinearGradient(0, 0, 0, H);
-    sky.addColorStop(0, "#03050c");
-    sky.addColorStop(0.5, "#0a1122");
-    sky.addColorStop(0.78, "#231a33");
-    sky.addColorStop(1, "#0a0d16");
+    sky.addColorStop(0, theme.skyTop);
+    sky.addColorStop(0.5, theme.skyMid);
+    sky.addColorStop(0.78, theme.skyHorizon);
+    sky.addColorStop(1, theme.skyBottom);
     c.fillStyle = sky;
     c.fillRect(0, 0, W, H);
 
@@ -1577,9 +1695,9 @@ export class Engine {
     c.save();
     c.translate(-cam, camY);
     const gg = c.createLinearGradient(0, GROUND, 0, H);
-    gg.addColorStop(0, "#131a14");
-    gg.addColorStop(0.12, "#0d120e");
-    gg.addColorStop(1, "#04060a");
+    gg.addColorStop(0, theme.groundTop);
+    gg.addColorStop(0.12, theme.groundMid);
+    gg.addColorStop(1, theme.groundDeep);
     c.fillStyle = gg;
     c.fillRect(cam - 60, GROUND, W + 120, H - GROUND);
     c.strokeStyle = "rgba(74,124,82,0.5)";
@@ -1613,6 +1731,58 @@ export class Engine {
       c.fill();
     }
     c.restore();
+
+    /* --- travel: gates + safe house door --- */
+    if (this.phase === "travel") {
+      c.save();
+      c.translate(-cam, camY);
+      for (const g of this.gates) {
+        if (g.x < cam - 80 || g.x > cam + W + 80) continue;
+        const pulse = g.opened ? 0.12 : 0.55 + 0.25 * Math.sin(t * 3);
+        c.strokeStyle = g.opened ? "rgba(103,232,249,0.25)" : `rgba(248,113,113,${pulse})`;
+        c.lineWidth = 4;
+        c.beginPath();
+        c.moveTo(g.x, GROUND + 2);
+        c.lineTo(g.x, GROUND - 118);
+        c.stroke();
+        c.fillStyle = g.opened ? "rgba(103,232,249,0.5)" : `rgba(248,113,113,${0.6 + 0.3 * Math.sin(t * 5)})`;
+        c.beginPath();
+        c.arc(g.x, GROUND - 118, 5, 0, TAU);
+        c.fill();
+        c.strokeStyle = "rgba(148,163,184,0.35)";
+        c.lineWidth = 1.6;
+        for (let i = 1; i <= 4; i++) {
+          c.beginPath();
+          c.moveTo(g.x - 3, GROUND - i * 24);
+          c.lineTo(g.x + 3, GROUND - i * 24 - 10);
+          c.stroke();
+        }
+      }
+      // safe house door
+      const dx = this.safeHouseX;
+      const bob = Math.sin(t * 2.4) * 3;
+      const doorGlow = c.createRadialGradient(dx, GROUND - 60, 4, dx, GROUND - 60, 130);
+      doorGlow.addColorStop(0, "rgba(74,222,128,0.28)");
+      doorGlow.addColorStop(1, "rgba(74,222,128,0)");
+      c.fillStyle = doorGlow;
+      c.fillRect(dx - 130, GROUND - 190, 260, 260);
+      c.fillStyle = "#0c2418";
+      this.rr(dx - 22, GROUND - 108, 44, 108, 4);
+      c.fill();
+      c.strokeStyle = "#4ade80";
+      c.lineWidth = 2;
+      this.rr(dx - 22, GROUND - 108, 44, 108, 4);
+      c.stroke();
+      c.fillStyle = `rgba(74,222,128,${0.7 + 0.3 * Math.sin(t * 4)})`;
+      c.beginPath();
+      c.arc(dx, GROUND - 54 + bob, 3, 0, TAU);
+      c.fill();
+      c.textAlign = "center";
+      c.font = '700 10px "Space Grotesk", sans-serif';
+      c.fillStyle = "rgba(74,222,128,0.85)";
+      c.fillText("SAFE HOUSE", dx, GROUND - 118);
+      c.restore();
+    }
 
     /* --- gems / zombies / player / projectiles --- */
     c.save();
@@ -1882,8 +2052,9 @@ export class Engine {
       c.textAlign = "left";
       c.font = '600 11px monospace';
       c.fillStyle = "#4ade80";
+      const travel = this.phase === "travel" ? ` gates:${this.gates.filter((g) => g.opened).length}/${this.gates.length}` : "";
       c.fillText(
-        `mode:${this.runMode} stage:${this.stage}/${cap} wave:${this.waveInStage}/${this.stageDef.wavesPerStage} power:${this.power.toFixed(1)} idx:${this.waveIndex}`,
+        `mode:${this.runMode} stage:${this.stage}/${cap} phase:${this.phase} wave:${this.waveInStage}/${this.stageDef.wavesPerStage} power:${this.power.toFixed(1)} idx:${this.waveIndex}${travel}`,
         8, H - 8
       );
       c.restore();
@@ -1985,7 +2156,7 @@ export class Engine {
       c.moveTo(sway, -84);
       c.quadraticCurveTo(-8 + sway, -98, -12, -116);
       c.stroke();
-    } else {
+    } else if (d.kind === 3) {
       // crooked lamp post
       c.strokeStyle = "#0b0f18";
       c.lineWidth = 4;
@@ -2004,6 +2175,66 @@ export class Engine {
       lg.addColorStop(1, "rgba(251,146,60,0)");
       c.fillStyle = lg;
       c.fillRect(-44, -156, 116, 116);
+    } else if (d.kind === 4) {
+      // burnt-out wrecked car
+      c.fillStyle = "#12161c";
+      this.rr(-32, -22, 64, 22, 5);
+      c.fill();
+      c.fillStyle = "#1c222b";
+      this.rr(-20, -34, 34, 14, 4);
+      c.fill();
+      c.fillStyle = "rgba(0,0,0,0.6)";
+      c.fillRect(-16, -32, 12, 10);
+      c.fillRect(0, -32, 10, 10);
+      c.fillStyle = "#05070a";
+      c.beginPath(); c.arc(-20, 0, 7, 0, TAU); c.fill();
+      c.beginPath(); c.arc(18, 0, 7, 0, TAU); c.fill();
+      c.fillStyle = "rgba(0,0,0,0.35)";
+      c.beginPath(); c.ellipse(-4, -14, 18, 10, 0.1, 0, TAU); c.fill();
+      // rising smoke wisp
+      const wob = Math.sin(t * 0.8 + d.ph) * 3;
+      c.strokeStyle = "rgba(148,163,184,0.15)";
+      c.lineWidth = 3;
+      c.lineCap = "round";
+      c.beginPath();
+      c.moveTo(-6, -34);
+      c.quadraticCurveTo(-6 + wob, -60, -2, -84);
+      c.stroke();
+    } else if (d.kind === 5) {
+      // concrete road barrier
+      c.fillStyle = "#1a1d22";
+      c.beginPath();
+      c.moveTo(-20, 0); c.lineTo(-14, -28); c.lineTo(14, -28); c.lineTo(20, 0);
+      c.closePath();
+      c.fill();
+      c.strokeStyle = "rgba(148,163,184,0.15)";
+      c.lineWidth = 1;
+      c.stroke();
+      // reflective hazard stripes
+      c.fillStyle = `rgba(251,191,36,${0.35 + 0.15 * Math.sin(t * 2 + d.ph)})`;
+      c.fillRect(-10, -20, 20, 3);
+      c.fillRect(-8, -10, 16, 3);
+    } else {
+      // collapsed rubble pile with exposed rebar
+      c.fillStyle = "#15181c";
+      c.beginPath();
+      c.moveTo(-24, 0);
+      c.lineTo(-14, -20);
+      c.lineTo(0, -12);
+      c.lineTo(12, -24);
+      c.lineTo(24, 0);
+      c.closePath();
+      c.fill();
+      c.strokeStyle = "rgba(148,163,184,0.1)";
+      c.lineWidth = 1;
+      c.stroke();
+      c.strokeStyle = "#3f2a18";
+      c.lineWidth = 2;
+      c.lineCap = "round";
+      c.beginPath();
+      c.moveTo(6, -20); c.lineTo(2, -44);
+      c.moveTo(-10, -16); c.lineTo(-16, -38);
+      c.stroke();
     }
     c.restore();
   }
