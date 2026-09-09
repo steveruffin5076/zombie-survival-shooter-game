@@ -4,24 +4,19 @@
 
 - **Full plan:** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
-- **Last updated:** 2026-09-09
+- **Last updated:** 2026-09-09 (Phase 0 complete)
 
 ---
 
 ## Current status
 
-Converting an endless wave shooter into a finite, mission-based tactical survivor. Spec sections 1–2 (targeting/fire-mode/laser + noise/suppressor economy) are **already implemented** but sit **uncommitted** in the working tree on `main` (~482 lines across `engine.ts`, `types.ts`, `weapons.ts`, `Hud.tsx`, `App.tsx`, `Overlays.tsx`). Sections 3–5 (inventory, mission structure, defend-the-base climax) have no code yet.
+Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phase 0 is complete.** Sections 3–5 of the spec (inventory, mission structure, defend-the-base climax) still have no code — that's Phases 1–7 below.
 
-**Immediate next action:** Phase 0, step 1 — commit the uncommitted combat rework before anything else touches those files.
+**Immediate next action:** Phase 1 — stage & difficulty architecture (`stages.ts`, `this.wave` → `this.power` rename, `WORLD_W` → `this.worldW`).
 
 ### Branch state
 
-| Branch | Contains |
-|---|---|
-| `main` | Weapon/stage system + the uncommitted combat rework. No touch controls, **no test runner**. |
-| `android-touch-and-packaging` | Touch controls, Capacitor 6, Vitest + 8 tests, `src/game/input.ts`, mobile viewport CSS, `Hud` z-40 fix. `main` already merged in (commit `24c65c5`). |
-
-Phase 0 merges that branch into `main` — without it there is no test runner at all.
+`android-touch-and-packaging` is merged into `main` (commit `17fb2ee`). `main` now has touch controls, Capacitor 6, the Vitest test runner (16 tests passing), the combat rework (lane-lock aim, fire mode, noise/suppressor economy), and Phase 0's fixes. The `android-touch-and-packaging` branch/worktree itself is left as-is (already merged forward, not deleted).
 
 ---
 
@@ -42,13 +37,14 @@ Phase 0 merges that branch into `main` — without it there is no test runner at
 
 ## Phases
 
-### Phase 0 — Foundation (~0.5 day) — NOT STARTED
-- [ ] Commit the uncommitted combat rework (482 lines, currently at risk)
-- [ ] Merge `android-touch-and-packaging` into `main` (expect conflicts in `App.tsx` / `Hud.tsx`)
-- [ ] Fix Scatter Kit bug — `recompute()` compares `this.kind === "shotgun"`, but `kind` holds a weapon **id**, so it is always false and shotguns get +1 pellet instead of +2. Change to `w.cls === "shotgun"`
-- [ ] Add `p365` to `weapons.ts`, point `STARTER` (weapons.ts:172) at it, add `semiAuto?` + `pivotMul?` to `WeaponDef`
-- [ ] Add a `pivotT` turn delay (~0.12s, `fire()` blocked) so the P365's +10% pivot passive has something to modify — pivoting is instant today
-- **Verify:** mouse/keyboard play identical to before · P365 is the starting weapon · Scatter Kit adds +2 pellets to shotguns
+### Phase 0 — Foundation (~0.5 day) — DONE (2026-09-09)
+- [x] Commit the uncommitted combat rework (482 lines) — `6d485bf`
+- [x] Merge `android-touch-and-packaging` into `main` — `17fb2ee`, conflicts resolved in `App.tsx`/`Hud.tsx` by combining the fire-mode toggle with the touch prop + `TouchControls` block
+- [x] Fix Scatter Kit bug — `recompute()` now compares `w.cls === "shotgun"` instead of the always-false `this.kind === "shotgun"` — `755790e`
+- [x] Add `p365` to `weapons.ts`, point `STARTER` at it, add `semiAuto?`/`pivotMul?`/`magUpgrades?` to `WeaponDef` — `755790e`
+- [x] Add a `pivotT` turn delay (~0.12s × `pivotMul`, blocks `fire()`) on lane flip — `755790e`
+- **Verified:** `npx tsc --noEmit` clean · `npm test` 16/16 passing · `npm run build` succeeds · played in-browser — P365 is the starting weapon (12/12 ammo, ∞ reserve), movement/pivot/laser-flip confirmed working
+- **Note:** Scatter Kit's +2 pellets was verified by code inspection (the predicate fix is unambiguous), not by playing to the upgrade — reaching Scatter Kit requires a level-up mid-run
 
 ### Phase 1 — Stage & difficulty architecture (~1.5 days) — NOT STARTED
 - [ ] New `src/game/stages.ts` (`STAGES` table) and `src/game/themes.ts`
