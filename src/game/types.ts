@@ -20,8 +20,11 @@ export interface HudState {
   xpNext: number;
   level: number;
   stage: number;
+  stageName: string;
   waveInStage: number;
   wavesPerStage: number;
+  /** in-stage wave numbers (1-based) that spawn a boss */
+  bossWaves: number[];
   isBossWave: boolean;
   remaining: number;
   waveTotal: number;
@@ -85,5 +88,5 @@ export type EngineEvent =
   | { type: "levelup"; choices: UpgradeChoice[] }
   | { type: "resume" }
   | { type: "gameover"; stats: GameStats }
-  | { type: "stageclear"; stage: number; next: number }
+  | { type: "stageclear"; stage: number; next: number; wavesPerStage: number }
   | { type: "pause"; value: boolean };

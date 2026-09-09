@@ -87,7 +87,7 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch 
             const n = i + 1;
             const done = n < hud.waveInStage;
             const cur = n === hud.waveInStage;
-            const boss = n === 5 || n === hud.wavesPerStage;
+            const boss = hud.bossWaves.includes(n);
             return (
               <span
                 key={i}

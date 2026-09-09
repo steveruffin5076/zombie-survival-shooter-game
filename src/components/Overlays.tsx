@@ -181,14 +181,14 @@ function MenuButton({ primary, onClick, icon, label }: { primary?: boolean; onCl
 /* ------------------------------------------------------------------ */
 
 export function StageClear({
-  stage, next, onContinue,
-}: { stage: number; next: number; onContinue: () => void }) {
+  stage, next, wavesPerStage, onContinue,
+}: { stage: number; next: number; wavesPerStage: number; onContinue: () => void }) {
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-gradient-to-b from-emerald-950/30 via-black/80 to-black/90 backdrop-blur-[5px]">
       <div className="anim-pop flex w-full max-w-lg flex-col items-center px-8 text-center">
         <div className="anim-rise mb-3 flex items-center gap-3 text-[11px] font-bold tracking-[0.45em] text-emerald-300/80">
           <span className="h-px w-8 bg-emerald-400/40" />
-          10 / 10 WAVES SURVIVED
+          {wavesPerStage} / {wavesPerStage} WAVES SURVIVED
           <span className="h-px w-8 bg-emerald-400/40" />
         </div>
         <h2

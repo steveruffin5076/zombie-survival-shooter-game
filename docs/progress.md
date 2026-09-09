@@ -4,15 +4,15 @@
 
 - **Full plan:** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
-- **Last updated:** 2026-09-09 (Phase 0 complete)
+- **Last updated:** 2026-09-09 (Phase 1 complete)
 
 ---
 
 ## Current status
 
-Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phase 0 is complete.** Sections 3–5 of the spec (inventory, mission structure, defend-the-base climax) still have no code — that's Phases 1–7 below.
+Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–1 are complete.** Sections 3–5 of the spec (inventory, mission structure, defend-the-base climax) still have no code — that's Phases 2–7 below.
 
-**Immediate next action:** Phase 1 — stage & difficulty architecture (`stages.ts`, `this.wave` → `this.power` rename, `WORLD_W` → `this.worldW`).
+**Immediate next action:** Phase 2 — mission flow: travel gates, safe house, `missionComplete()` + win screen, per-stage themes in `render()`.
 
 ### Branch state
 
@@ -46,15 +46,16 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 - **Verified:** `npx tsc --noEmit` clean · `npm test` 16/16 passing · `npm run build` succeeds · played in-browser — P365 is the starting weapon (12/12 ammo, ∞ reserve), movement/pivot/laser-flip confirmed working
 - **Note:** Scatter Kit's +2 pellets was verified by code inspection (the predicate fix is unambiguous), not by playing to the upgrade — reaching Scatter Kit requires a level-up mid-run
 
-### Phase 1 — Stage & difficulty architecture (~1.5 days) — NOT STARTED
-- [ ] New `src/game/stages.ts` (`STAGES` table) and `src/game/themes.ts`
-- [ ] Rename `this.wave` → `this.power` (float) so the compiler surfaces all **six** balance sites; add `waveIndex` for display
-- [ ] `WORLD_W` → `this.worldW` (12 sites); `genDecor(theme, worldW)` must **clear** its 5 arrays first
-- [ ] Delete `WAVES_PER_STAGE`, `STAGE_NAMES`/`STAGE_SUBS`, `isBossWave()`, hardcoded wave weights, the `% STAGE_NAMES.length` loop
-- [ ] Add `stageName` + `bossWaves` to `HudState`; fix duplicated logic at `Hud.tsx:85` and hardcoded `"10 / 10 WAVES SURVIVED"` at `Overlays.tsx:191`
-- [ ] `Engine.runMode` mode split — Endless as a synthetic repeating `StageDef`
-- [ ] Replace `modalOpen` boolean with a `Set<ModalKind>` + private getter
-- **Verify:** stage 1 plays as today · debug overlay prints monotonic `power` 1→36 · no looping past stage 4
+### Phase 1 — Stage & difficulty architecture (~1.5 days) — DONE (2026-09-09)
+- [x] New `src/game/stages.ts` (`STAGES` table: 4 stages × 9 waves = 36-wave mission) and `src/game/themes.ts` (placeholder `ThemeDef`s, not yet consumed by `render()` — that's Phase 2)
+- [x] Renamed `this.wave` → `this.power` (difficulty scalar, used by every balance formula); added `this.waveIndex` (monotonic global wave count, display-only — wave-subtitle pick, "next wave" gate, debug overlay)
+- [x] `WORLD_W` → `this.worldW`, set per-stage via `setStage()`; `genDecor(theme, worldW)` now clears all 5 decor arrays before regenerating, so stage transitions (`advanceStage()`) can call it again safely
+- [x] Deleted `WAVES_PER_STAGE`, `STAGE_NAMES`/`STAGE_SUBS`, `isBossWave()`, the `% STAGE_NAMES.length` loop — replaced by `this.stageDef` (`wavesPerStage`, `bossWaves: number[]`, `name`, `sub`)
+- [x] Added `stageName` + `bossWaves` to `HudState`; fixed the duplicated `n === 5 || n === wavesPerStage` at `Hud.tsx:85` (now `hud.bossWaves.includes(n)`) and the hardcoded `"10 / 10 WAVES SURVIVED"` at `Overlays.tsx` (now `wavesPerStage` passed through the `stageclear` event)
+- [x] `Engine.runMode: "mission" | "endless"` — `startGame(mode)`; mission clamps at stage 4 via `stageDefFor()`, endless cycles the same 4-stage table forever as a synthetic repeating `StageDef`
+- [x] Replaced the `modalOpen` boolean with `private modals = new Set<ModalKind>()` + a `private get modalOpen()` getter (every read site unchanged; only the 5 write sites touch `this.modals` directly)
+- [x] `?debug=1` renders a bottom-left readout (`mode/stage/wave/power/idx`); `?mode=mission` is a temporary dev hook in `App.tsx` to reach mission mode before Phase 2 builds a real menu selector — **no Mission/Endless UI exists yet**, `startGame()` still defaults to endless so today's play is unchanged
+- **Verified:** `npx tsc --noEmit` clean · `npm test` 8/8 passing · `npm run build` succeeds · played both modes in-browser (screenshots) — stage 1 identical in both, boss-wave pips correctly light at 5 & 9, debug overlay showed `power`/`idx` climbing monotonically during live combat · `stageDefFor`/`cumulativeWaveIndex` checked directly via `tsx`: mission stage 5+ clamps to stage 4 ("GROUND ZERO", never wraps back to "THE CEMETERY"), endless stage 5 correctly wraps to a fresh "THE CEMETERY" instance, `cumulativeWaveIndex(4, 9, "mission")` === 36
 
 ### Phase 2 — Mission flow: travel, safe house, win (~3 days) — NOT STARTED
 - [ ] Travel gates (right-edge clamp only; cancel `dashT` on contact, gates ≥500px apart)

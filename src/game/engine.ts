@@ -5,6 +5,8 @@ import {
 } from "./weapons";
 import { Sfx } from "./audio";
 import { canvasPointFromClient } from "./input";
+import { stageDefFor, cumulativeWaveIndex, STAGES, type StageDef, type RunMode } from "./stages";
+import { THEMES, type ThemeDef } from "./themes";
 import type { EngineEvent, GameStats, HudState, UpgradeChoice } from "./types";
 
 /* ------------------------------------------------------------------ */
@@ -13,7 +15,6 @@ import type { EngineEvent, GameStats, HudState, UpgradeChoice } from "./types";
 
 const W = 1280;
 const H = 720;
-const WORLD_W = 2880;
 const GROUND = 584;
 const GRAV = 2400;
 const TAU = Math.PI * 2;
@@ -25,6 +26,7 @@ const chance = (p: number) => Math.random() < p;
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 type ZType = "walker" | "runner" | "brute" | "spitter";
+type ModalKind = "levelup" | "stageclear";
 
 interface ZConf {
   hp: number; speed: number; dmg: number; r: number; scale: number; xp: number; score: number;
@@ -36,26 +38,6 @@ const ZCONF: Record<ZType, ZConf> = {
   spitter: { hp: 30, speed: 46, dmg: 8, r: 16, scale: 0.95, xp: 2, score: 22 },
   brute: { hp: 150, speed: 36, dmg: 22, r: 30, scale: 1.5, xp: 6, score: 45 },
 };
-
-const WAVES_PER_STAGE = 10;
-
-const STAGE_NAMES = [
-  "THE CEMETERY",
-  "RUINED SUBURBS",
-  "THE HIGHWAY",
-  "DOWNTOWN RUINS",
-  "THE QUARANTINE ZONE",
-  "GROUND ZERO",
-];
-
-const STAGE_SUBS = [
-  "where it all began",
-  "nothing left to save",
-  "keep moving forward",
-  "the city has fallen",
-  "no way out but through",
-  "the end of the night",
-];
 
 const WAVE_SUBS = [
   "they smell your blood",
@@ -109,6 +91,13 @@ export class Engine {
   private ctx: CanvasRenderingContext2D;
   private onEvent: (e: EngineEvent) => void;
   readonly sfx = new Sfx();
+  private debug = new URLSearchParams(window.location.search).get("debug") === "1";
+
+  /** mission = finite 4-stage run; endless = the old infinite mode */
+  private runMode: RunMode = "endless";
+  private stageDef: StageDef = stageDefFor(1, this.runMode);
+  private worldW = this.stageDef.worldW;
+  private theme: ThemeDef = THEMES[this.stageDef.themeId];
 
   private raf = 0;
   private last = 0;
@@ -117,7 +106,10 @@ export class Engine {
   mode: "attract" | "play" = "attract";
   private over = false;
   private paused = false;
-  private modalOpen = false;
+  private modals = new Set<ModalKind>();
+  private get modalOpen() {
+    return this.modals.size > 0;
+  }
 
   private keys = new Set<string>();
   private mouse = { x: W / 2, y: 300, down: false };
@@ -171,9 +163,10 @@ export class Engine {
   private texts: FloatText[] = [];
   private decals: Decal[] = [];
 
-  private wave = 0;              // global wave counter (difficulty)
+  private power = 0;             // difficulty scalar, drives every balance formula
+  private waveIndex = 0;         // monotonic global wave number, for display only
   private stage = 1;
-  private waveInStage = 0;       // 1..WAVES_PER_STAGE
+  private waveInStage = 0;       // 1..stageDef.wavesPerStage
   private stageIntermission = false;
   private phase: "break" | "active" = "break";
   private breakT = 0;
@@ -206,7 +199,6 @@ export class Engine {
     canvas.height = H * dpr;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.high = Number(localStorage.getItem("graveyard-shift-high") || 0);
-    this.genDecor();
     this.reset();
     this.cam = 0; // attract mode frames the world edge as a backdrop
     this.bind();
@@ -242,14 +234,15 @@ export class Engine {
     this.canvas.removeEventListener("contextmenu", this.onCtx);
   }
 
-  startGame() {
+  startGame(mode: RunMode = "endless") {
+    this.runMode = mode;
     this.sfx.ensure();
     this.reset();
     this.recompute();
     this.mode = "play";
     this.phase = "break";
     this.breakT = 2.2;
-    this.announce(`STAGE 1 — ${STAGE_NAMES[0]}`, STAGE_SUBS[0], 2.6);
+    this.announce(`STAGE 1 — ${this.stageDef.name}`, this.stageDef.sub, 2.6);
   }
 
   toMenu() {
@@ -280,7 +273,7 @@ export class Engine {
 
   private freshPlayer() {
     return {
-      x: WORLD_W / 2, y: GROUND, vx: 0, vy: 0,
+      x: this.worldW / 2, y: GROUND, vx: 0, vy: 0,
       hp: 100, level: 1, xp: 0, xpNext: 12,
       face: 1, aim: 0, cd: 0, ifr: 0, flash: 0, hurtT: 0,
       dashT: 0, dashCd: 0, dashDir: 1,
@@ -298,6 +291,9 @@ export class Engine {
   }
 
   private reset() {
+    this.power = 0;
+    this.waveIndex = 0;
+    this.setStage(1);
     this.pl = this.freshPlayer();
     this.st = this.baseStats();
     this.stacks = {};
@@ -330,8 +326,6 @@ export class Engine {
     this.gems = [];
     this.texts = [];
     this.decals = [];
-    this.wave = 0;
-    this.stage = 1;
     this.waveInStage = 0;
     this.stageIntermission = false;
     this.waveTotal = 0;
@@ -343,8 +337,8 @@ export class Engine {
     this.banners = [];
     this.over = false;
     this.paused = false;
-    this.modalOpen = false;
-    this.cam = clamp(this.pl.x - W / 2, 0, WORLD_W - W);
+    this.modals.clear();
+    this.cam = clamp(this.pl.x - W / 2, 0, this.worldW - W);
     this.mouse.x = W / 2;
     this.mouse.y = 280;
     // Clear held input so a key/fire state stuck by a touch gesture that never
@@ -353,14 +347,30 @@ export class Engine {
     this.mouse.down = false;
   }
 
-  private genDecor() {
+  /** Switches to a stage's def/world width/theme and regenerates decor to fit. */
+  private setStage(stageNum: number) {
+    this.stage = stageNum;
+    this.stageDef = stageDefFor(stageNum, this.runMode);
+    this.worldW = this.stageDef.worldW;
+    this.theme = THEMES[this.stageDef.themeId];
+    this.genDecor(this.theme, this.worldW);
+  }
+
+  private genDecor(theme: ThemeDef, worldW: number) {
+    // stage transitions call this again — never accumulate across runs
+    this.stars = [];
+    this.skyFar = [];
+    this.skyNear = [];
+    this.decor = [];
+    this.tufts = [];
+    this.theme = theme;
     // stars
     for (let i = 0; i < 110; i++)
       this.stars.push({ x: R(-40, W + 120), y: R(0, 420), r: R(0.6, 1.8), ph: R(0, TAU), tw: R(0.5, 2.4) });
     // skylines
     const gen = (p: number, minH: number, maxH: number, minW: number, maxW: number) => {
       const arr: Building[] = [];
-      const span = W + (WORLD_W - W) * p + 400;
+      const span = W + (worldW - W) * p + 400;
       let x = -120;
       while (x < span) {
         const w = R(minW, maxW);
@@ -372,7 +382,7 @@ export class Engine {
     this.skyFar = gen(0.18, 60, 200, 46, 110);
     this.skyNear = gen(0.38, 40, 150, 30, 80);
     // graveyard decor at parallax .68
-    const span = W + (WORLD_W - W) * 0.68 + 500;
+    const span = W + (worldW - W) * 0.68 + 500;
     let dx = -160;
     while (dx < span) {
       const roll = Math.random();
@@ -382,7 +392,7 @@ export class Engine {
     }
     // ground tufts (world coords, parallax 1)
     let tx = -60;
-    while (tx < WORLD_W + 120) {
+    while (tx < worldW + 120) {
       this.tufts.push({ x: tx, h: R(5, 14), s: R(0.6, 1.3) });
       tx += R(40, 120);
     }
@@ -611,7 +621,7 @@ export class Engine {
       }
       p.y = GROUND; p.vy = 0; p.grounded = true; p.jumps = 0;
     }
-    p.x = clamp(p.x + p.vx * dt, 26, WORLD_W - 26);
+    p.x = clamp(p.x + p.vx * dt, 26, this.worldW - 26);
 
     const run = Math.abs(p.vx) > 26 && p.grounded;
     p.walk += dt * (run ? 10 + Math.abs(p.vx) * 0.014 : 3);
@@ -650,15 +660,15 @@ export class Engine {
       }
     } else {
       this.spawnT -= dt;
-      const cap = Math.min(26, 8 + this.wave);
+      const cap = Math.min(26, 8 + this.power);
       if (this.spawnT <= 0 && this.queue.length > 0 && this.zombies.length < cap) {
-        this.spawnT = Math.max(0.3, 1.5 - this.wave * 0.07);
-        const n = this.wave >= 6 && this.queue.length > 2 && chance(0.4) ? 2 : 1;
+        this.spawnT = Math.max(0.3, 1.5 - this.power * 0.07);
+        const n = this.power >= 6 && this.queue.length > 2 && chance(0.4) ? 2 : 1;
         for (let i = 0; i < n && this.queue.length > 0; i++) this.spawnZombie(this.queue.shift()!);
       }
       if (this.queue.length === 0 && this.zombies.length === 0) {
-        this.score += 50 * this.wave;
-        if (this.waveInStage >= WAVES_PER_STAGE) {
+        this.score += 50 * this.power;
+        if (this.waveInStage >= this.stageDef.wavesPerStage) {
           this.completeStage();
         } else {
           this.phase = "break";
@@ -666,7 +676,7 @@ export class Engine {
           p.hp = Math.min(this.st.maxHp, p.hp + 12);
           this.announce(
             `WAVE ${this.waveInStage} CLEARED`,
-            `${WAVES_PER_STAGE - this.waveInStage} to go — breathe while you can`
+            `${this.stageDef.wavesPerStage - this.waveInStage} to go — breathe while you can`
           );
         }
       }
@@ -684,7 +694,7 @@ export class Engine {
     this.decals = this.decals.filter((d) => d.a > 0.05);
 
     // camera
-    const target = clamp(p.x - W / 2 + Math.cos(p.aim) * 60, 0, WORLD_W - W);
+    const target = clamp(p.x - W / 2 + Math.cos(p.aim) * 60, 0, this.worldW - W);
     this.cam = lerp(this.cam, target, Math.min(1, 5 * dt));
     this.shakeMag = Math.max(0, this.shakeMag - dt * 26);
     this.shakeX = R(-this.shakeMag, this.shakeMag);
@@ -742,8 +752,8 @@ export class Engine {
     this.ambushT = 6;
     const behind = -this.facing as 1 | -1;
     for (let i = 0; i < count; i++) {
-      const x = clamp(this.pl.x + behind * (W * 0.55 + R(0, 260)), 22, WORLD_W - 22);
-      const z = this.mkZombie("runner", x, 1 + (this.wave - 1) * 0.2, 1.25);
+      const x = clamp(this.pl.x + behind * (W * 0.55 + R(0, 260)), 22, this.worldW - 22);
+      const z = this.mkZombie("runner", x, 1 + (this.power - 1) * 0.2, 1.25);
       z.face = x > this.pl.x ? -1 : 1;
       this.zombies.push(z);
       for (let k = 0; k < 8; k++)
@@ -915,7 +925,7 @@ export class Engine {
       } else {
         z.vx = lerp(z.vx, dir * z.speed, Math.min(1, 6 * dt));
       }
-      z.x = clamp(z.x + z.vx * dt, 10, WORLD_W - 10);
+      z.x = clamp(z.x + z.vx * dt, 10, this.worldW - 10);
       // contact damage
       if (Math.abs(dx) < z.r + 15 && Math.abs(p.y - z.y) < 56 && z.atk <= 0) {
         z.atk = z.type === "brute" ? 1.15 : 0.8;
@@ -975,7 +985,7 @@ export class Engine {
         }
       }
     }
-    this.bullets = this.bullets.filter((b) => b.life > 0 && b.x > -60 && b.x < WORLD_W + 60);
+    this.bullets = this.bullets.filter((b) => b.life > 0 && b.x > -60 && b.x < this.worldW + 60);
   }
 
   private updateEshots(dt: number) {
@@ -1068,7 +1078,7 @@ export class Engine {
   private killZombie(z: Zombie, dir: number) {
     z.dead = true;
     this.kills++;
-    this.score += Math.round(z.score * (1 + this.wave * 0.06));
+    this.score += Math.round(z.score * (1 + this.power * 0.06));
     this.shake(z.type === "brute" ? 5 : 1.6);
     this.sfx.zdie();
     const cx = z.x, cy = z.y - 34 * z.scale;
@@ -1140,7 +1150,7 @@ export class Engine {
   }
 
   private openLevelModal() {
-    this.modalOpen = true;
+    this.modals.add("levelup");
     this.sfx.levelup();
     this.onEvent({ type: "levelup", choices: this.rollChoices() });
   }
@@ -1195,7 +1205,9 @@ export class Engine {
       this.onEvent({ type: "levelup", choices: this.rollChoices() });
     } else {
       // stay frozen if the stage-clear screen is still up
-      this.modalOpen = this.stageIntermission;
+      this.modals.delete("levelup");
+      if (this.stageIntermission) this.modals.add("stageclear");
+      else this.modals.delete("stageclear");
       this.onEvent({ type: "resume" });
     }
   }
@@ -1278,21 +1290,16 @@ export class Engine {
 
   /* ---------------- waves ---------------- */
 
-  /** Is this in-stage wave number a boss wave? (5th and 10th) */
-  private isBossWave(w: number) {
-    return w === 5 || w === WAVES_PER_STAGE;
-  }
-
-  private buildWave(n: number, inStage: number): SpawnItem[] {
+  private buildWave(power: number, inStage: number): SpawnItem[] {
     const items: SpawnItem[] = [];
-    const boss = this.isBossWave(inStage);
+    const boss = this.stageDef.bossWaves.includes(inStage);
     const count = boss
-      ? Math.min(30, Math.round(6 + n * 1.3))
-      : Math.min(52, Math.round(5 + n * 2.6 + n * n * 0.1));
+      ? Math.min(30, Math.round(6 + power * 1.3))
+      : Math.min(52, Math.round(5 + power * 2.6 + power * power * 0.1));
     const wWalker = 1;
-    const wRunner = n >= 2 ? 0.42 + n * 0.02 : 0;
-    const wSpitter = n >= 4 ? 0.3 : 0;
-    const wBrute = n >= 3 ? 0.14 + n * 0.015 : 0;
+    const wRunner = power >= 2 ? 0.42 + power * 0.02 : 0;
+    const wSpitter = power >= 4 ? 0.3 : 0;
+    const wBrute = power >= 3 ? 0.14 + power * 0.015 : 0;
     const total = wWalker + wRunner + wSpitter + wBrute;
     for (let i = 0; i < count; i++) {
       let roll = Math.random() * total;
@@ -1309,8 +1316,9 @@ export class Engine {
       [items[i], items[j]] = [items[j], items[i]];
     }
     if (boss) {
-      // wave 10 = double boss (stage finale)
-      const bosses = inStage === WAVES_PER_STAGE ? 1 + Math.min(2, Math.floor(this.stage / 2)) : 1;
+      // final wave of the stage = double boss (stage finale)
+      const finalWave = inStage === this.stageDef.wavesPerStage;
+      const bosses = finalWave ? 1 + Math.min(2, Math.floor(this.stage / 2)) : 1;
       for (let i = 0; i < bosses; i++) items.unshift({ type: "brute", boss: true });
     }
     return items;
@@ -1318,48 +1326,52 @@ export class Engine {
 
   private startWave(inStage: number) {
     this.waveInStage = inStage;
-    this.wave = (this.stage - 1) * WAVES_PER_STAGE + inStage;
-    this.queue = this.buildWave(this.wave, inStage);
+    this.waveIndex = cumulativeWaveIndex(this.stage, inStage, this.runMode);
+    this.power = this.waveIndex;
+    this.queue = this.buildWave(this.power, inStage);
     this.waveTotal = this.queue.length;
     this.phase = "active";
     this.spawnT = 0.6;
-    if (this.isBossWave(inStage)) {
+    const finalWave = inStage === this.stageDef.wavesPerStage;
+    if (this.stageDef.bossWaves.includes(inStage)) {
       this.announce(
-        inStage === WAVES_PER_STAGE ? "FINAL WAVE" : "BOSS WAVE",
-        inStage === WAVES_PER_STAGE ? "clear it to escape this place" : "something enormous approaches"
+        finalWave ? "FINAL WAVE" : "BOSS WAVE",
+        finalWave ? "clear it to escape this place" : "something enormous approaches"
       );
     } else {
-      this.announce(`WAVE ${inStage} / ${WAVES_PER_STAGE}`, WAVE_SUBS[this.wave % WAVE_SUBS.length]);
+      this.announce(`WAVE ${inStage} / ${this.stageDef.wavesPerStage}`, WAVE_SUBS[this.waveIndex % WAVE_SUBS.length]);
     }
     this.sfx.wave();
   }
 
-  /** Called after the 10th wave of a stage is cleared. */
+  /** Called after the final wave of a stage is cleared. */
   private completeStage() {
     const cleared = this.stage;
     this.stageIntermission = true;
-    this.modalOpen = true; // freeze the sim behind the stage-clear screen
+    this.modals.add("stageclear"); // freeze the sim behind the stage-clear screen
     this.phase = "break";
     const bonus = 500 * cleared;
     this.score += bonus;
     this.pl.hp = this.st.maxHp; // full heal between stages
     this.sfx.levelup();
-    this.onEvent({ type: "stageclear", stage: cleared, next: cleared + 1 });
+    this.onEvent({
+      type: "stageclear", stage: cleared, next: cleared + 1,
+      wavesPerStage: this.stageDef.wavesPerStage,
+    });
   }
 
   /** Player confirmed the stage-clear screen. */
   advanceStage() {
     if (!this.stageIntermission) return;
-    this.stage++;
+    this.setStage(this.stage + 1);
     this.waveInStage = 0;
     this.stageIntermission = false;
-    this.modalOpen = false;
+    this.modals.delete("stageclear");
     this.bullets = [];
     this.eshots = [];
     this.phase = "break";
     this.breakT = 2.6;
-    const i = (this.stage - 1) % STAGE_NAMES.length;
-    this.announce(`STAGE ${this.stage} — ${STAGE_NAMES[i]}`, STAGE_SUBS[i], 2.8);
+    this.announce(`STAGE ${this.stage} — ${this.stageDef.name}`, this.stageDef.sub, 2.8);
   }
 
   private mkZombie(type: ZType, x: number, hpMul: number, speedMul: number): Zombie {
@@ -1378,15 +1390,15 @@ export class Engine {
   }
 
   private spawnZombie(it: SpawnItem) {
-    const n = this.wave;
-    const hpMul = (1 + (n - 1) * 0.22) * (it.boss ? 4.4 : 1);
-    const speedMul = 1 + Math.min(0.55, (n - 1) * 0.035);
-    const dmgMul = 1 + (n - 1) * 0.07;
+    const power = this.power;
+    const hpMul = (1 + (power - 1) * 0.22) * (it.boss ? 4.4 : 1);
+    const speedMul = 1 + Math.min(0.55, (power - 1) * 0.035);
+    const dmgMul = 1 + (power - 1) * 0.07;
     let x: number;
     const side = chance(0.5) ? -1 : 1;
     x = side < 0 ? this.cam - 90 - R(0, 320) : this.cam + W + 90 + R(0, 320);
-    x = clamp(x, 22, WORLD_W - 22);
-    if (Math.abs(x - this.pl.x) < 240) x = clamp(this.pl.x - side * 620, 22, WORLD_W - 22);
+    x = clamp(x, 22, this.worldW - 22);
+    if (Math.abs(x - this.pl.x) < 240) x = clamp(this.pl.x - side * 620, 22, this.worldW - 22);
     const z = this.mkZombie(it.type, x, hpMul, speedMul);
     z.dmg *= dmgMul;
     if (it.boss) {
@@ -1432,9 +1444,11 @@ export class Engine {
       xpNext: p.xpNext,
       level: p.level,
       stage: this.stage,
+      stageName: this.stageDef.name,
       waveInStage: this.waveInStage,
-      wavesPerStage: WAVES_PER_STAGE,
-      isBossWave: this.isBossWave(this.waveInStage),
+      wavesPerStage: this.stageDef.wavesPerStage,
+      bossWaves: this.stageDef.bossWaves,
+      isBossWave: this.stageDef.bossWaves.includes(this.waveInStage),
       waveTotal: this.waveTotal,
       remaining: this.queue.length + this.zombies.length,
       score: this.score,
@@ -1832,7 +1846,7 @@ export class Engine {
     if (this.banners.length > 0) this.drawBanner(this.banners[0]);
 
     /* --- next wave countdown --- */
-    if (this.mode === "play" && !this.over && this.phase === "break" && !this.stageIntermission && this.wave > 0) {
+    if (this.mode === "play" && !this.over && this.phase === "break" && !this.stageIntermission && this.waveIndex > 0) {
       c.textAlign = "center";
       c.font = '600 13px "Space Grotesk", sans-serif';
       c.fillStyle = "rgba(226,232,240,0.55)";
@@ -1859,6 +1873,20 @@ export class Engine {
       c.beginPath();
       c.arc(this.mouse.x, this.mouse.y, 1.6, 0, TAU);
       c.fill();
+    }
+
+    /* --- debug overlay (?debug=1) --- */
+    if (this.debug) {
+      const cap = this.runMode === "mission" ? String(STAGES.length) : "∞";
+      c.save();
+      c.textAlign = "left";
+      c.font = '600 11px monospace';
+      c.fillStyle = "#4ade80";
+      c.fillText(
+        `mode:${this.runMode} stage:${this.stage}/${cap} wave:${this.waveInStage}/${this.stageDef.wavesPerStage} power:${this.power.toFixed(1)} idx:${this.waveIndex}`,
+        8, H - 8
+      );
+      c.restore();
     }
   }
 

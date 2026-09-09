@@ -18,7 +18,7 @@ export default function App() {
   const [touch] = useState(() =>
     isTouchCapable(navigator.maxTouchPoints, window.matchMedia("(pointer: coarse)").matches)
   );
-  const [stageClear, setStageClear] = useState<{ stage: number; next: number } | null>(null);
+  const [stageClear, setStageClear] = useState<{ stage: number; next: number; wavesPerStage: number } | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -38,7 +38,7 @@ export default function App() {
           setPaused(false);
           break;
         case "stageclear":
-          setStageClear({ stage: e.stage, next: e.next });
+          setStageClear({ stage: e.stage, next: e.next, wavesPerStage: e.wavesPerStage });
           break;
         case "pause":
           setPaused(e.value);
@@ -61,7 +61,10 @@ export default function App() {
   }, []);
 
   const start = useCallback(() => {
-    engineRef.current?.startGame();
+    // TEMP dev hook until Phase 2 wires a real Mission/Endless menu selector:
+    // ?mode=mission plays the finite 4-stage build, everything else stays endless.
+    const mode = new URLSearchParams(window.location.search).get("mode") === "mission" ? "mission" : "endless";
+    engineRef.current?.startGame(mode);
     setScreen("game");
     setOver(null);
     setChoices(null);
@@ -159,7 +162,12 @@ export default function App() {
         {choices && <LevelUpModal choices={choices} level={hud?.level ?? 1} onPick={choose} />}
 
         {stageClear && !choices && !over && (
-          <StageClear stage={stageClear.stage} next={stageClear.next} onContinue={nextStage} />
+          <StageClear
+            stage={stageClear.stage}
+            next={stageClear.next}
+            wavesPerStage={stageClear.wavesPerStage}
+            onContinue={nextStage}
+          />
         )}
 
         {paused && screen === "game" && !over && !choices && (
