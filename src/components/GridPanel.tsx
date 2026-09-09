@@ -55,6 +55,7 @@ export default function GridPanel({ items, size, onMove, cell = 56 }: Props) {
   return (
     <div
       ref={gridRef}
+      data-testid="grid-panel"
       className="relative select-none"
       style={{ width: size.w * cell, height: size.h * cell }}
       onPointerMove={onPointerMove}

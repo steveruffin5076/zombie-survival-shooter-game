@@ -197,7 +197,7 @@ export function StageClear({
           style={{ animationDelay: "250ms" }}
         >
           <Play className="h-5 w-5" fill="currentColor" />
-          ENTER STAGE {next}
+          CONTINUE
         </button>
       </div>
     </div>

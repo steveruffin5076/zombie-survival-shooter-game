@@ -385,6 +385,36 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch 
         </div>
       </div>
 
+      {/* bottom-center: crate interact prompt */}
+      {hud.crateNear && (
+        <div className="absolute bottom-40 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
+          <div
+            className={`flex items-center gap-2 rounded-full border px-4 py-1.5 text-[11px] font-bold tracking-[0.15em] backdrop-blur-sm ${
+              hud.crateLocked
+                ? "border-red-400/40 bg-red-950/50 text-red-300"
+                : "border-white/15 bg-black/60 text-zinc-200"
+            }`}
+          >
+            {hud.crateLocked ? (
+              "TOO LOUD — WAIT FOR QUIET"
+            ) : (
+              <>
+                <span className="kbd">E</span> HOLD TO OPEN
+                <span className="text-white/40">· TIER {hud.crateTier}</span>
+              </>
+            )}
+          </div>
+          {!hud.crateLocked && hud.crateOpenPct > 0 && (
+            <div className="h-1 w-32 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
+              <div
+                className="h-full rounded-full bg-amber-400 transition-[width] duration-75"
+                style={{ width: `${hud.crateOpenPct * 100}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {/* bottom-center: controls hint */}
       {!touch && hud.stage === 1 && hud.waveInStage <= 1 && (
         <div className="absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-4 text-[10px] font-semibold tracking-wider text-white/35">
@@ -394,6 +424,9 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch 
           <span><span className="kbd">1</span>-<span className="kbd">4</span> CLASS</span>
           <span><span className="kbd">R</span> RELOAD</span>
           <span><span className="kbd">F</span> FIRE MODE</span>
+          <span><span className="kbd">E</span> OPEN CRATE</span>
+          <span><span className="kbd">I</span> BACKPACK</span>
+          <span><span className="kbd">G</span>/<span className="kbd">B</span>/<span className="kbd">N</span>/<span className="kbd">T</span> ITEMS</span>
         </div>
       )}
     </div>

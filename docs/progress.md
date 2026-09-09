@@ -4,15 +4,15 @@
 
 - **Full plan:** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
-- **Last updated:** 2026-09-09 (Phase 3 in progress)
+- **Last updated:** 2026-09-09 (Phase 3 complete)
 
 ---
 
 ## Current status
 
-Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–2 are complete.** Phase 3 (grid inventory, loot, save) is in progress — the largest single system in the plan. Sections 4–5 of the spec (defend-the-base climax) still have no code — that's Phases 4–7 below.
+Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–3 are complete.** Section 5 of the spec (defend-the-base climax) still has no code — that's Phases 4–7 below.
 
-**Immediate next action:** Phase 3 continued — build `SafeHouseOverlay.tsx`, wire `InventoryOverlay.tsx` + an inventory-toggle hotkey into `App.tsx`, add crate/consumable hints to `Hud.tsx`, then run the phase's in-browser verification pass (nothing in Phase 3 has touched a browser yet — see the checklist below for exactly what's done vs. not).
+**Immediate next action:** Phase 4 — stealth vs assault: `Zombie.dormant` sleepers, noise-trap `Hazard`s, `quietKill()`, gates gaining a `[E] BYPASS` verb below `threat < 0.35`, and a `LOOT LOCK` tick on the existing threat bar.
 
 ### Branch state
 
@@ -67,19 +67,18 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 - **Verified:** `npx tsc --noEmit` clean · `npm test` 8/8 passing · `npm run build` succeeds · a `?debug=1` build exposes `window.__engine`, used to fast-forward (insta-clear each wave's queue/zombies, zero `breakT`) through **all 4 mission stages end-to-end in-browser**: stage names/themes changed correctly, gates opened on contact, every safe house was reachable, `MissionWin` fired exactly at stage 4's door with a monotonic `power` of `1 → 36` and `NEW BEST TIME` set · separately confirmed **endless mode cycles past stage 4 into a fresh "THE CEMETERY" (stage 5) without ever calling `missionComplete()`** · a normal, non-cheated few seconds of play (no `?debug`) looked identical to Phase 1 — combat, HUD, movement all unaffected
 - **Note:** no Mission/Endless menu selector exists yet (still the Phase 1 `?mode=mission` dev hook) — that's real Phase 2 scope the checklist didn't call out explicitly; worth doing before Phase 3 if a human is going to playtest this, otherwise mission mode is only reachable via URL param
 
-### Phase 3 — Grid inventory, loot, save (~5 days, largest system) — IN PROGRESS (2026-09-09)
+### Phase 3 — Grid inventory, loot, save (~5 days, largest system) — DONE (2026-09-09)
 - [x] `src/game/grid.ts` (pure) + tests (16) · `items.ts` · `loot.ts` (injected rng, 4 tests) · `save.ts` (versioned + `migrate()`, 6 tests — `saveRun`/`loadRun` themselves untested under vitest since `localStorage` doesn't exist in its `node` environment; covered by in-browser verification instead)
 - [x] Extracted `ui.tsx` (`MenuButton`, `StatBox`, `RARITY_STYLE`, `ICONS`) from `Overlays.tsx`
-- [x] `GridPanel.tsx` (pointer events, not HTML5 DnD) · first pass at `InventoryOverlay.tsx` (non-blocking backpack viewer)
-- [x] Crates spawn on wave clear (tier scales with boss waves), hold-to-open **while combat runs** via `updateCrates()`; tier 2/3 refuse above `threat > 0.5` with a "TOO LOUD TO OPEN" warning
+- [x] `GridPanel.tsx` (pointer events, not HTML5 DnD) · `InventoryOverlay.tsx` (non-blocking backpack viewer, `I` to toggle) · `SafeHouseOverlay.tsx` (stage-clear → resupply/deposit → continue)
+- [x] Crates spawn on wave clear (tier scales with boss waves), hold-to-open **while combat runs** via `updateCrates()`; tier 2/3 refuse above `threat > 0.5` with a "TOO LOUD TO OPEN" warning; `Hud.tsx` shows a hold-progress prompt near the player
 - [x] Consumables on hotkeys `G`/`B`/`N`/`T` (grenade/bandage/decoy/stim) via `useConsumable()`; ammo boxes **class-typed**, auto-consumed from the backpack in `startReload()` when reserve hits 0; `pl.useT` blocks `fire()` during the use animation
-- [x] Safe house (`completeStage()`): reserve tops up to **50%** floor (not full), `supp` fully restored, `writeCheckpoint()` saves progression + deposit (not backpack)
+- [x] Safe house (`completeStage()`): reserve tops up to **50%** floor (not full, and skips unlimited-reserve pistols correctly), `supp` fully restored, `writeCheckpoint()` saves progression + deposit (not backpack). `StageClear`'s continue button now opens `SafeHouseOverlay` instead of advancing immediately; its own continue is what calls `advanceStage()`
 - [x] Death (`die()`): `loadRun(runMode)` — if a checkpoint exists, `retryStage()` (`reset()` then restores level/XP/score/kills/owned/equipped/stacks/deposit/intel from it, backpack explicitly dropped) instead of ending the run; `missionComplete()` calls `clearRun()` since a finished mission has nothing left to retry
-- [x] `getInventory()` + `invVer` added as the React data path for bulk backpack/deposit state — deliberately not folded into the 66ms `HudState` poll
-- [ ] `SafeHouseOverlay.tsx` (the stage-clear → resupply/deposit → continue screen) — not built yet
-- [ ] App.tsx doesn't toggle `InventoryOverlay` yet (no hotkey wired), and `Hud.tsx` has no crate-proximity/consumable-count hints
-- [ ] **Nothing in this phase has been exercised in-browser yet** — only `tsc`/`vitest`/`build` have run clean so far
-- **Verify (not yet done):** loot with a full grid · die and confirm deposit + progression survive, backpack doesn't · reload mid-run restores · open a tier-2/3 crate above and below threat 0.5 · drag an item in `GridPanel` onto an occupied cell and confirm it snaps back
+- [x] `getInventory()` + `invVer` added as the React data path for bulk backpack/deposit state, polled on the same 66ms tick as `HudState` but gated so a grid re-render only happens when `invVer` actually changes — deliberately not folded into `HudState` itself
+- [x] Bug found and fixed during verification: the grenade's original physics (420px/s throw, explode on a fixed 1.1s fuse regardless of where it was in the air) meant it detonated ~460px from the thrower — nearly 3.5x past its own 130px blast radius, so it could never hit anything thrown at a realistic target. Fixed by lobbing it slower (220px/s) and forcing detonation ~0.3s after it actually lands, so the explosion happens where the grenade physically is, not wherever the original flight timer happened to expire
+- **Verified end-to-end in-browser** via the `?debug=1` → `window.__engine` hook: crate spawns after a wave clear and hold-`E` opens it with loot landing in the backpack grid; **looting against a full 16-item grid** doesn't crash or overfill it (16 in, 16 out, crate still marks opened); bandage heals 40→80 HP; the fixed grenade now does real blast damage to a zombie 60px from the thrower (200→190.5 HP) once isolated from the player's own gunfire; noise decoy zeroes threat; stim sets a ~6s buff; a class-typed ammo box auto-fills a limited-reserve weapon's reserve on reload (0→60) and is consumed; the full `StageClear → SafeHouseOverlay → ENTER STAGE` flow works, `DEPOSIT ALL` is correctly disabled on an empty backpack, and resupply correctly leaves an unlimited-reserve pistol's reserve at `-1` rather than corrupting it; death **with** a checkpoint restarts at the checkpoint's stage with level/score preserved, backpack emptied, and the run still playing (`over: false`); death **without** one still shows the classic GameOver screen; `InventoryOverlay` opens/closes on `I`; `GridPanel` drag-and-drop moves an item to a free cell and correctly snaps back (no state change) when dropped on an occupied one
+- **Note:** touch affordances for crate-hold/inventory-drag are explicitly Phase 7's job ("Touch affordances for prep placement, inventory drag, interact/loot"), not built here — this phase's new interactions (`E`, `I`, `G`/`B`/`N`/`T`) are keyboard-only for now, consistent with Phase 1/2's `?mode=`/`?debug=` dev-hook pattern of shipping the system before its final input polish
 
 ### Phase 4 — Stealth vs Assault (~2.5 days) — NOT STARTED
 - [ ] `Zombie.dormant` sleepers (wake on threat/damage/proximity+speed)
@@ -123,7 +122,7 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 ## Standing rules
 
 - `npm test` + `npx tsc --noEmit` + `npm run build` every phase. Pure modules get Vitest; engine/UI is verified by playing it in the browser.
-- Keep new subsystem logic as **pure data + pure functions in their own modules**; `engine.ts` holds only arrays and `update*`/`draw*`. It's ~2,680 lines now and heading past 3,500 — Phase 3's grid/loot/save work goes in their own modules, not here.
+- Keep new subsystem logic as **pure data + pure functions in their own modules**; `engine.ts` holds only arrays and `update*`/`draw*`. It's **3,033 lines now** — Phase 3 kept its data/rules in `grid.ts`/`items.ts`/`loot.ts`/`save.ts` as intended, but the crate/consumable/grenade *engine* glue (spawning, hold-to-open, `useConsumable()`, blast physics) still landed in `engine.ts` alongside the rest of combat, matching how `hitZombie()`/`killZombie()` etc. already live there rather than in a separate module. Phase 5/6 explicitly add `boss.ts` — worth actually using it as a real extraction rather than another `engine.ts` graft, or this file won't stop growing.
 - Mission-only systems gate on `runMode === "mission"` at exactly **one** place each.
 - Reuse, don't rebuild: `EngineEvent` union + single `switch` in `App.tsx`, the `getHud()` 66ms poll, callback props (children never get the engine), `announce()`/`drawBanner()`, the `Gem` pickup pipeline, `phase`/`breakT`, `triggerAmbush()`, the `ICONS` map.
 

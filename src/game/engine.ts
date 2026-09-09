@@ -1522,7 +1522,9 @@ export class Engine {
 
   private throwGrenade() {
     const p = this.pl;
-    this.grenades.push({ x: p.x, y: p.y - 40, vx: this.facing * 420, vy: -260, fuse: 1.1 });
+    // a controlled lob into the faced lane, not a full-power throw — it needs
+    // to land near the engagement range a pistol/smg fights at, not sail past it
+    this.grenades.push({ x: p.x, y: p.y - 40, vx: this.facing * 220, vy: -280, fuse: 1.6 });
     this.sfx.shoot();
   }
 
@@ -1532,7 +1534,14 @@ export class Engine {
       g.vy += GRAV * 0.6 * dt;
       g.x += g.vx * dt;
       g.y += g.vy * dt;
-      if (g.y > GROUND) { g.y = GROUND; g.vy *= -0.4; g.vx *= 0.7; }
+      if (g.y > GROUND) {
+        g.y = GROUND; g.vy *= -0.4; g.vx *= 0.55;
+        // detonate shortly after it actually lands, not wherever it happens
+        // to be when the original flight fuse runs out — a grenade that's
+        // still sailing through the air 460px from the thrower can't hit
+        // anything its own blast radius could ever reach
+        g.fuse = Math.min(g.fuse, 0.3);
+      }
       if (chance(0.5))
         this.particles.push({ x: g.x, y: g.y, vx: R(-10, 10), vy: R(-10, 10), life: 0.2, max: 0.2, size: 1.6, color: "#9ca3af", grav: 0, add: false });
       if (g.fuse <= 0) this.explodeGrenade(g);

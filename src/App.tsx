@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Engine } from "./game/engine";
-import type { EngineEvent, GameStats, HudState, MissionStats, UpgradeChoice } from "./game/types";
+import type {
+  EngineEvent, GameStats, HudState, InventorySnapshot, MissionStats, UpgradeChoice,
+} from "./game/types";
 import Hud from "./components/Hud";
 import { Menu, LevelUpModal, PauseMenu, GameOver, StageClear, MissionWin } from "./components/Overlays";
+import InventoryOverlay from "./components/InventoryOverlay";
+import SafeHouseOverlay from "./components/SafeHouseOverlay";
 import TouchControls from "./components/TouchControls";
 import { isTouchCapable } from "./game/input";
 
@@ -19,7 +23,10 @@ export default function App() {
     isTouchCapable(navigator.maxTouchPoints, window.matchMedia("(pointer: coarse)").matches)
   );
   const [stageClear, setStageClear] = useState<{ stage: number; next: number; wavesPerStage: number } | null>(null);
+  const [safeHouse, setSafeHouse] = useState(false);
   const [missionWin, setMissionWin] = useState<MissionStats | null>(null);
+  const [inv, setInv] = useState<InventorySnapshot | null>(null);
+  const [showInventory, setShowInventory] = useState(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -36,16 +43,19 @@ export default function App() {
           setOver(e.stats);
           setChoices(null);
           setStageClear(null);
+          setSafeHouse(false);
           setMissionWin(null);
           setPaused(false);
           break;
         case "stageclear":
           setStageClear({ stage: e.stage, next: e.next, wavesPerStage: e.wavesPerStage });
+          setSafeHouse(false);
           break;
         case "missionwin":
           setMissionWin(e.stats);
           setChoices(null);
           setStageClear(null);
+          setSafeHouse(false);
           setPaused(false);
           break;
         case "pause":
@@ -64,7 +74,12 @@ export default function App() {
 
     const iv = window.setInterval(() => {
       const eng = engineRef.current;
-      if (eng) setHud(eng.getHud());
+      if (!eng) return;
+      setHud(eng.getHud());
+      // bulk backpack/deposit state is polled on the same tick but gated on
+      // invVer so it doesn't force a re-render of grid UI every 66ms for no reason
+      const snap = eng.getInventory();
+      setInv((prev) => (prev && prev.invVer === snap.invVer ? prev : snap));
     }, 66);
 
     return () => {
@@ -83,7 +98,9 @@ export default function App() {
     setOver(null);
     setChoices(null);
     setStageClear(null);
+    setSafeHouse(false);
     setMissionWin(null);
+    setShowInventory(false);
     setPaused(false);
   }, []);
 
@@ -93,14 +110,26 @@ export default function App() {
     setOver(null);
     setChoices(null);
     setStageClear(null);
+    setSafeHouse(false);
     setMissionWin(null);
+    setShowInventory(false);
     setPaused(false);
   }, []);
 
-  const nextStage = useCallback(() => {
+  // StageClear's "CONTINUE" opens the safe house's resupply/backpack screen
+  // instead of advancing immediately; SafeHouseOverlay's own continue button
+  // is what actually calls advanceStage().
+  const openSafeHouse = useCallback(() => setSafeHouse(true), []);
+  const confirmSafeHouse = useCallback(() => {
     engineRef.current?.advanceStage();
+    setSafeHouse(false);
     setStageClear(null);
   }, []);
+  const depositAll = useCallback(() => engineRef.current?.depositAll(), []);
+  const moveBackpackItem = useCallback(
+    (id: string, x: number, y: number) => engineRef.current?.moveBackpackItem(id, x, y) ?? false,
+    []
+  );
 
   const switchWeapon = useCallback(
     (cls: string) => engineRef.current?.selectClass(cls as never),
@@ -139,6 +168,16 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, [choices, choose]);
 
+  // I toggles the non-blocking backpack viewer during normal play
+  useEffect(() => {
+    if (screen !== "game") return;
+    const handler = (ev: KeyboardEvent) => {
+      if (ev.code === "KeyI") setShowInventory((v) => !v);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [screen]);
+
   return (
     <div className="fixed inset-0 grid place-items-center overflow-hidden bg-black select-none">
       <div className="relative" style={{ width: "min(100vw, 177.78vh)", aspectRatio: "16 / 9" }}>
@@ -159,7 +198,7 @@ export default function App() {
             touch={touch}
           />
         )}
-        {screen === "game" && touch && !paused && !choices && !over && !missionWin && (
+        {screen === "game" && touch && !paused && !choices && !over && !missionWin && !stageClear && !showInventory && (
           <TouchControls
             onMoveStart={moveStart}
             onMoveEnd={moveEnd}
@@ -177,13 +216,27 @@ export default function App() {
 
         {choices && <LevelUpModal choices={choices} level={hud?.level ?? 1} onPick={choose} />}
 
-        {stageClear && !choices && !over && (
+        {stageClear && !safeHouse && !choices && !over && (
           <StageClear
             stage={stageClear.stage}
             next={stageClear.next}
             wavesPerStage={stageClear.wavesPerStage}
-            onContinue={nextStage}
+            onContinue={openSafeHouse}
           />
+        )}
+
+        {stageClear && safeHouse && !choices && !over && inv && (
+          <SafeHouseOverlay
+            next={stageClear.next}
+            inv={inv}
+            onMove={moveBackpackItem}
+            onDepositAll={depositAll}
+            onContinue={confirmSafeHouse}
+          />
+        )}
+
+        {showInventory && screen === "game" && inv && !choices && !stageClear && !paused && !over && !missionWin && (
+          <InventoryOverlay inv={inv} onMove={moveBackpackItem} onClose={() => setShowInventory(false)} />
         )}
 
         {paused && screen === "game" && !over && !choices && !missionWin && (
