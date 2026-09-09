@@ -30,6 +30,12 @@ export interface WeaponDef {
   noise: number;
   /** SUPPRESSOR DURABILITY — shots before it shatters */
   supp: number;
+  /** trigger-limited, not cyclic — no full-auto hold-to-fire */
+  semiAuto?: boolean;
+  /** multiplier on the pivot turn-delay; 1 = baseline */
+  pivotMul?: number;
+  /** hideout mag upgrade tiers — data only, not read until the hideout exists */
+  magUpgrades?: number[];
   desc: string;
 }
 
@@ -59,6 +65,16 @@ export const WEAPONS: Record<string, WeaponDef> = {
     mag: 17, reserve: -1, reload: 1.0, moveMul: 1.14, swap: 0.07, critBonus: 0.1,
     range: RANGE.pistol, noise: NOISE.pistol, supp: 40,
     desc: "Full-auto panic button. Infinite reserve, 17-round mag.",
+  },
+  p365: {
+    id: "p365", name: "SIG Sauer P365", short: "P365", cls: "pistol",
+    // semi-auto, no cyclic rate — trigger-limited, not the Glock 18's full-auto cyclic
+    rpm: 330, damage: 16, fireRate: rps(330), projectiles: 1, spread: 0, jitter: 0.03,
+    speed: 920, pierce: 0, knock: 34, recoil: 14, shake: 0.7,
+    mag: 12, reserve: -1, reload: 0.95, moveMul: 1.10, swap: 0.06, critBonus: 0.12,
+    range: RANGE.pistol * 0.95, noise: NOISE.pistol, supp: 40,
+    semiAuto: true, pivotMul: 0.90, magUpgrades: [15, 17],
+    desc: "Micro-compact 9×19, semi-auto. Infinite reserve, 12-round mag, fastest handling.",
   },
   tec9: {
     id: "tec9", name: "TEC-9", short: "TEC-9", cls: "pistol",
@@ -169,4 +185,4 @@ export const CLASS_ROLE: Record<WeaponClass, string> = {
 
 export const WEAPON_IDS = Object.keys(WEAPONS);
 export const byClass = (cls: WeaponClass) => WEAPON_IDS.filter((id) => WEAPONS[id].cls === cls);
-export const STARTER = "glock18";
+export const STARTER = "p365";

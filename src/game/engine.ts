@@ -154,6 +154,8 @@ export class Engine {
   private target: Zombie | null = null;
   private onTarget = false;
   private laserFlash = 0;
+  /** blocks fire() briefly after a lane flip; scaled by the weapon's pivotMul */
+  private pivotT = 0;
 
   /* --- noise / threat --- */
   private threat = 0;
@@ -320,6 +322,7 @@ export class Engine {
     this.threat = 0;
     this.ambushT = 0;
     this.laserFlash = 0;
+    this.pivotT = 0;
     this.zombies = [];
     this.bullets = [];
     this.eshots = [];
@@ -435,11 +438,18 @@ export class Engine {
     if (this.mode === "play" && !this.over && !this.paused && !this.modalOpen) {
       const half = this.mouse.x > W / 2 ? 1 : -1;
       if (half !== this.facing) {
-        this.facing = half as 1 | -1;
+        this.pivotTo(half as 1 | -1);
         this.target = null;
       }
     }
   };
+
+  /** Flips the locked lane and starts the brief post-pivot fire lockout. */
+  private pivotTo(dir: 1 | -1) {
+    this.facing = dir;
+    const w = WDEF[this.kind] ?? WDEF.pistol;
+    this.pivotT = 0.12 * (w.pivotMul ?? 1);
+  }
 
   toggleFireMode() {
     this.autoFire = !this.autoFire;
@@ -607,11 +617,12 @@ export class Engine {
     p.walk += dt * (run ? 10 + Math.abs(p.vx) * 0.014 : 3);
 
     // ---- DIRECTIONAL LOCK: movement input pivots the lane ----
-    if (mov !== 0) this.facing = mov > 0 ? 1 : -1;
+    if (mov !== 0 && Math.sign(mov) !== this.facing) this.pivotTo(mov > 0 ? 1 : -1);
     p.face = this.facing;
     this.acquireTarget();
     p.aim = this.aimAngle();
     if (this.laserFlash > 0) this.laserFlash -= dt;
+    if (this.pivotT > 0) this.pivotT -= dt;
 
     // reload + auto-fire (all weapons are full-auto; rate differs per weapon)
     this.updateReload(dt);
@@ -619,7 +630,7 @@ export class Engine {
       // can't shoot mid-reload
     } else if (this.ammo[this.kind] <= 0) {
       this.startReload(); // auto reload the instant the mag runs dry
-    } else if (p.cd <= 0) {
+    } else if (p.cd <= 0 && this.pivotT <= 0) {
       // AUTO-FIRE ON: shoot only when a zombie is on the laser line.
       // AUTO-FIRE OFF: manual trigger via mouse.
       if (this.autoFire ? this.onTarget : this.mouse.down) this.fire();
@@ -1243,7 +1254,7 @@ export class Engine {
     const w = WDEF[this.kind] ?? WDEF.pistol;
     // multishot adds pellets to shotgun, extra rounds to everything else
     const extra = s("multi");
-    const projectiles = w.projectiles + extra * (this.kind === "shotgun" ? 2 : 1);
+    const projectiles = w.projectiles + extra * (w.cls === "shotgun" ? 2 : 1);
     const spread = w.projectiles > 1 ? w.spread : 0.07;
     this.st = {
       damage: w.damage * (1 + 0.3 * s("dmg")),
