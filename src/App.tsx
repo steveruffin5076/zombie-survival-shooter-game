@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Engine } from "./game/engine";
-import type { EngineEvent, GameStats, HudState, UpgradeChoice } from "./game/types";
+import type {
+  EngineEvent, GameStats, HudState, InventorySnapshot, MissionStats, UpgradeChoice,
+} from "./game/types";
+import type { Deployable, DeployableKind } from "./game/arena";
 import Hud from "./components/Hud";
-import { Menu, LevelUpModal, PauseMenu, GameOver, StageClear } from "./components/Overlays";
+import { Menu, LevelUpModal, PauseMenu, GameOver, StageClear, MissionWin } from "./components/Overlays";
+import InventoryOverlay from "./components/InventoryOverlay";
+import SafeHouseOverlay from "./components/SafeHouseOverlay";
+import RepairPanel from "./components/RepairPanel";
 import TouchControls from "./components/TouchControls";
 import { isTouchCapable } from "./game/input";
 
@@ -18,7 +24,12 @@ export default function App() {
   const [touch] = useState(() =>
     isTouchCapable(navigator.maxTouchPoints, window.matchMedia("(pointer: coarse)").matches)
   );
-  const [stageClear, setStageClear] = useState<{ stage: number; next: number } | null>(null);
+  const [stageClear, setStageClear] = useState<{ stage: number; next: number; wavesPerStage: number } | null>(null);
+  const [safeHouse, setSafeHouse] = useState(false);
+  const [missionWin, setMissionWin] = useState<MissionStats | null>(null);
+  const [inv, setInv] = useState<InventorySnapshot | null>(null);
+  const [showInventory, setShowInventory] = useState(false);
+  const [deployables, setDeployables] = useState<Deployable[]>([]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -35,10 +46,20 @@ export default function App() {
           setOver(e.stats);
           setChoices(null);
           setStageClear(null);
+          setSafeHouse(false);
+          setMissionWin(null);
           setPaused(false);
           break;
         case "stageclear":
-          setStageClear({ stage: e.stage, next: e.next });
+          setStageClear({ stage: e.stage, next: e.next, wavesPerStage: e.wavesPerStage });
+          setSafeHouse(false);
+          break;
+        case "missionwin":
+          setMissionWin(e.stats);
+          setChoices(null);
+          setStageClear(null);
+          setSafeHouse(false);
+          setPaused(false);
           break;
         case "pause":
           setPaused(e.value);
@@ -47,10 +68,24 @@ export default function App() {
     });
     engineRef.current = engine;
     engine.begin();
+    // ?debug=1 exposes the engine on window for the same debug tooling that
+    // draws the ?debug=1 HUD overlay (see engine.ts render()) — lets manual
+    // QA fast-forward wave/stage state instead of grinding real playtime.
+    if (new URLSearchParams(window.location.search).get("debug") === "1") {
+      (window as unknown as { __engine?: Engine }).__engine = engine;
+    }
 
     const iv = window.setInterval(() => {
       const eng = engineRef.current;
-      if (eng) setHud(eng.getHud());
+      if (!eng) return;
+      const h = eng.getHud();
+      setHud(h);
+      // bulk backpack/deposit state is polled on the same tick but gated on
+      // invVer so it doesn't force a re-render of grid UI every 66ms for no reason
+      const snap = eng.getInventory();
+      setInv((prev) => (prev && prev.invVer === snap.invVer ? prev : snap));
+      // the arena's deployable list is small (<=12) — cheap to just re-poll while it's relevant
+      if (h.arena) setDeployables(eng.getDeployables());
     }, 66);
 
     return () => {
@@ -61,11 +96,17 @@ export default function App() {
   }, []);
 
   const start = useCallback(() => {
-    engineRef.current?.startGame();
+    // TEMP dev hook until Phase 2 wires a real Mission/Endless menu selector:
+    // ?mode=mission plays the finite 4-stage build, everything else stays endless.
+    const mode = new URLSearchParams(window.location.search).get("mode") === "mission" ? "mission" : "endless";
+    engineRef.current?.startGame(mode);
     setScreen("game");
     setOver(null);
     setChoices(null);
     setStageClear(null);
+    setSafeHouse(false);
+    setMissionWin(null);
+    setShowInventory(false);
     setPaused(false);
   }, []);
 
@@ -75,16 +116,37 @@ export default function App() {
     setOver(null);
     setChoices(null);
     setStageClear(null);
+    setSafeHouse(false);
+    setMissionWin(null);
+    setShowInventory(false);
     setPaused(false);
   }, []);
 
-  const nextStage = useCallback(() => {
+  // StageClear's "CONTINUE" opens the safe house's resupply/backpack screen
+  // instead of advancing immediately; SafeHouseOverlay's own continue button
+  // is what actually calls advanceStage().
+  const openSafeHouse = useCallback(() => setSafeHouse(true), []);
+  const confirmSafeHouse = useCallback(() => {
     engineRef.current?.advanceStage();
+    setSafeHouse(false);
     setStageClear(null);
   }, []);
+  const depositAll = useCallback(() => engineRef.current?.depositAll(), []);
+  const moveBackpackItem = useCallback(
+    (id: string, x: number, y: number) => engineRef.current?.moveBackpackItem(id, x, y) ?? false,
+    []
+  );
 
   const switchWeapon = useCallback(
     (cls: string) => engineRef.current?.selectClass(cls as never),
+    []
+  );
+  const selectTool = useCallback(
+    (kind: DeployableKind) => engineRef.current?.selectDeployable(kind),
+    []
+  );
+  const repairDeployable = useCallback(
+    (id: string) => engineRef.current?.repairDeployable(id),
     []
   );
   const toggleFireMode = useCallback(() => engineRef.current?.toggleFireMode(), []);
@@ -120,6 +182,16 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, [choices, choose]);
 
+  // I toggles the non-blocking backpack viewer during normal play
+  useEffect(() => {
+    if (screen !== "game") return;
+    const handler = (ev: KeyboardEvent) => {
+      if (ev.code === "KeyI") setShowInventory((v) => !v);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [screen]);
+
   return (
     <div className="fixed inset-0 grid place-items-center overflow-hidden bg-black select-none">
       <div className="relative" style={{ width: "min(100vw, 177.78vh)", aspectRatio: "16 / 9" }}>
@@ -137,10 +209,20 @@ export default function App() {
             onPause={togglePause}
             onSwitch={switchWeapon}
             onFireMode={toggleFireMode}
+            onSelectTool={selectTool}
             touch={touch}
           />
         )}
-        {screen === "game" && touch && !paused && !choices && !over && (
+        {screen === "game" && hud && hud.repairWindowT > 0 && (
+          <RepairPanel
+            deployables={deployables}
+            scrap={hud.scrap}
+            windowT={hud.repairWindowT}
+            windowMax={hud.repairWindowMax}
+            onRepair={repairDeployable}
+          />
+        )}
+        {screen === "game" && touch && !paused && !choices && !over && !missionWin && !stageClear && !showInventory && (
           <TouchControls
             onMoveStart={moveStart}
             onMoveEnd={moveEnd}
@@ -158,11 +240,30 @@ export default function App() {
 
         {choices && <LevelUpModal choices={choices} level={hud?.level ?? 1} onPick={choose} />}
 
-        {stageClear && !choices && !over && (
-          <StageClear stage={stageClear.stage} next={stageClear.next} onContinue={nextStage} />
+        {stageClear && !safeHouse && !choices && !over && (
+          <StageClear
+            stage={stageClear.stage}
+            next={stageClear.next}
+            wavesPerStage={stageClear.wavesPerStage}
+            onContinue={openSafeHouse}
+          />
         )}
 
-        {paused && screen === "game" && !over && !choices && (
+        {stageClear && safeHouse && !choices && !over && inv && (
+          <SafeHouseOverlay
+            next={stageClear.next}
+            inv={inv}
+            onMove={moveBackpackItem}
+            onDepositAll={depositAll}
+            onContinue={confirmSafeHouse}
+          />
+        )}
+
+        {showInventory && screen === "game" && inv && !choices && !stageClear && !paused && !over && !missionWin && (
+          <InventoryOverlay inv={inv} onMove={moveBackpackItem} onClose={() => setShowInventory(false)} />
+        )}
+
+        {paused && screen === "game" && !over && !choices && !missionWin && (
           <PauseMenu
             onResume={resume}
             onRestart={start}
@@ -173,6 +274,8 @@ export default function App() {
         )}
 
         {over && <GameOver stats={over} onRestart={start} onQuit={quit} />}
+
+        {missionWin && <MissionWin stats={missionWin} onRestart={start} onQuit={quit} />}
       </div>
     </div>
   );

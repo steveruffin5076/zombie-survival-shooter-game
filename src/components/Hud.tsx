@@ -1,8 +1,15 @@
 import type { HudState } from "../game/types";
+import { DEPLOYABLE_DEFS, type DeployableKind } from "../game/arena";
 import {
   Heart, Skull, Pause, Volume2, VolumeX, Crosshair, Zap, Trophy, Lock,
-  Ear, Bot, Hand,
+  Ear, Bot, Hand, DoorOpen, Gem,
 } from "lucide-react";
+
+const TOOL_KEYS: { kind: DeployableKind; key: string }[] = [
+  { kind: "barricade", key: "1" },
+  { kind: "wire", key: "2" },
+  { kind: "claymore", key: "3" },
+];
 
 interface Props {
   hud: HudState;
@@ -10,10 +17,11 @@ interface Props {
   onPause: () => void;
   onSwitch: (id: string) => void;
   onFireMode: () => void;
+  onSelectTool: (kind: DeployableKind) => void;
   touch?: boolean;
 }
 
-export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch = false }: Props) {
+export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSelectTool, touch = false }: Props) {
   const hpPct = Math.max(0, Math.min(1, hud.hp / hud.maxHp));
   const xpPct = Math.max(0, Math.min(1, hud.xp / hud.xpNext));
   const dashPct = hud.dashMax > 0 ? 1 - Math.max(0, hud.dashT) / hud.dashMax : 1;
@@ -67,47 +75,105 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch 
         </div>
       </div>
 
-      {/* top-center: stage + wave */}
+      {/* top-center: stage + wave, or travel progress */}
       <div className="absolute left-1/2 top-4 -translate-x-1/2 text-center">
         <div className="text-[10px] font-bold tracking-[0.42em] text-white/45">
           STAGE {hud.stage}
         </div>
-        <div
-          className={`font-display text-2xl tracking-[0.18em] ${
-            hud.isBossWave
-              ? "text-red-400 drop-shadow-[0_0_16px_rgba(239,68,68,0.6)]"
-              : "text-amber-300 drop-shadow-[0_0_14px_rgba(245,158,11,0.45)]"
-          }`}
-        >
-          {hud.isBossWave ? "BOSS WAVE" : `WAVE ${Math.max(1, hud.waveInStage)}`}
-        </div>
-        {/* 10-wave stage pips */}
-        <div className="mt-1.5 flex items-center justify-center gap-1">
-          {Array.from({ length: hud.wavesPerStage }).map((_, i) => {
-            const n = i + 1;
-            const done = n < hud.waveInStage;
-            const cur = n === hud.waveInStage;
-            const boss = n === 5 || n === hud.wavesPerStage;
-            return (
-              <span
-                key={i}
-                className={`h-1.5 rounded-full transition-all ${boss ? "w-3.5" : "w-2.5"} ${
-                  cur
-                    ? boss
-                      ? "bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.9)]"
-                      : "bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.9)]"
-                    : done
-                      ? boss ? "bg-red-500/60" : "bg-amber-500/50"
-                      : boss ? "bg-red-500/25" : "bg-white/15"
-                }`}
+        {hud.phase === "prep" ? (
+          <>
+            <div className="font-display text-2xl tracking-[0.18em] text-emerald-300 drop-shadow-[0_0_14px_rgba(52,211,153,0.45)]">
+              PREP — WAVE {Math.max(1, hud.waveInStage + 1)}
+            </div>
+            <div className="mx-auto mt-1.5 h-1.5 w-56 overflow-hidden rounded-full border border-white/10 bg-black/60">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-emerald-600 to-emerald-300 transition-[width] duration-100"
+                style={{ width: `${(hud.prepT / hud.prepMax) * 100}%` }}
               />
-            );
-          })}
-        </div>
-        <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[11px] font-semibold tracking-widest text-white/55">
-          <Skull className="h-3.5 w-3.5" />
-          {hud.waveInStage > 0 ? `${hud.remaining} REMAIN` : "GET READY"}
-        </div>
+            </div>
+            <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[11px] font-semibold tracking-widest text-white/55">
+              {Math.ceil(hud.prepT)}s · <span className="kbd">ENTER</span> READY
+            </div>
+            <div className="pointer-events-auto mt-2 flex items-center justify-center gap-2">
+              <div className="flex items-center gap-1.5 rounded-full border border-slate-400/30 bg-black/60 px-3 py-1.5 text-[11px] font-bold tracking-widest text-slate-200 backdrop-blur-sm">
+                <Gem className="h-3.5 w-3.5 text-slate-400" /> {hud.scrap}
+              </div>
+              {TOOL_KEYS.map(({ kind, key }) => {
+                const def = DEPLOYABLE_DEFS[kind];
+                const active = hud.placingKind === kind;
+                return (
+                  <button
+                    key={kind}
+                    onClick={() => onSelectTool(kind)}
+                    title={def.desc}
+                    className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[10px] font-bold tracking-wide backdrop-blur-sm transition ${
+                      active
+                        ? "border-emerald-400/70 bg-emerald-400/15 text-emerald-200 shadow-[0_0_14px_rgba(52,211,153,0.35)]"
+                        : "border-white/12 bg-black/50 text-white/60 hover:border-white/30"
+                    }`}
+                  >
+                    <span className="kbd">{key}</span> {def.short}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        ) : hud.phase === "travel" ? (
+          <>
+            <div className="font-display text-2xl tracking-[0.18em] text-cyan-300 drop-shadow-[0_0_14px_rgba(103,232,249,0.45)]">
+              MOVE OUT
+            </div>
+            <div className="mx-auto mt-1.5 h-1.5 w-56 overflow-hidden rounded-full border border-white/10 bg-black/60">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-cyan-600 to-cyan-300 transition-[width] duration-200"
+                style={{ width: `${hud.travelDistance * 100}%` }}
+              />
+            </div>
+            <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[11px] font-semibold tracking-widest text-white/55">
+              <DoorOpen className="h-3.5 w-3.5" />
+              {hud.travelGatesOpened}/{hud.travelGatesTotal} GATES · SAFE HOUSE AHEAD
+            </div>
+          </>
+        ) : (
+          <>
+            <div
+              className={`font-display text-2xl tracking-[0.18em] ${
+                hud.isBossWave
+                  ? "text-red-400 drop-shadow-[0_0_16px_rgba(239,68,68,0.6)]"
+                  : "text-amber-300 drop-shadow-[0_0_14px_rgba(245,158,11,0.45)]"
+              }`}
+            >
+              {hud.isBossWave ? "BOSS WAVE" : `WAVE ${Math.max(1, hud.waveInStage)}`}
+            </div>
+            {/* per-stage wave pips */}
+            <div className="mt-1.5 flex items-center justify-center gap-1">
+              {Array.from({ length: hud.wavesPerStage }).map((_, i) => {
+                const n = i + 1;
+                const done = n < hud.waveInStage;
+                const cur = n === hud.waveInStage;
+                const boss = hud.bossWaves.includes(n);
+                return (
+                  <span
+                    key={i}
+                    className={`h-1.5 rounded-full transition-all ${boss ? "w-3.5" : "w-2.5"} ${
+                      cur
+                        ? boss
+                          ? "bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.9)]"
+                          : "bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.9)]"
+                        : done
+                          ? boss ? "bg-red-500/60" : "bg-amber-500/50"
+                          : boss ? "bg-red-500/25" : "bg-white/15"
+                    }`}
+                  />
+                );
+              })}
+            </div>
+            <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[11px] font-semibold tracking-widest text-white/55">
+              <Skull className="h-3.5 w-3.5" />
+              {hud.waveInStage > 0 ? `${hud.remaining} REMAIN` : "GET READY"}
+            </div>
+          </>
+        )}
       </div>
 
       {/* top-right: score + controls */}
@@ -123,6 +189,11 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch 
             <span className="flex items-center gap-1">
               <Trophy className="h-3.5 w-3.5 text-amber-400/80" /> {hud.high.toLocaleString()}
             </span>
+            {hud.arena && (
+              <span className="flex items-center gap-1 text-slate-300">
+                <Gem className="h-3.5 w-3.5 text-slate-400" /> {hud.scrap}
+              </span>
+            )}
           </div>
         </div>
         <div className="pointer-events-auto flex flex-col gap-2">
@@ -299,7 +370,7 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch 
               {hud.threat > 0.75 ? "DETECTED" : hud.threat > 0.4 ? "HEARD" : "QUIET"}
             </span>
           </div>
-          <div className="h-2 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
+          <div className="relative h-2 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
             <div
               className={`h-full rounded-full transition-[width] duration-150 ${
                 hud.threat > 0.75
@@ -310,6 +381,11 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch 
               }`}
               style={{ width: `${hud.threat * 100}%` }}
             />
+            {/* LOOT LOCK tick — bypass/quiet-kill windows close past this threat */}
+            <div className="absolute inset-y-0 w-px bg-white/50" style={{ left: "35%" }} />
+          </div>
+          <div className="relative mt-0.5 h-2.5 text-[7px] font-bold tracking-widest text-white/35">
+            <span className="absolute -translate-x-1/2" style={{ left: "35%" }}>LOOT LOCK</span>
           </div>
         </div>
 
@@ -365,6 +441,65 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch 
         </div>
       </div>
 
+      {/* bottom-center: crate interact prompt */}
+      {hud.crateNear && (
+        <div className="absolute bottom-40 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
+          <div
+            className={`flex items-center gap-2 rounded-full border px-4 py-1.5 text-[11px] font-bold tracking-[0.15em] backdrop-blur-sm ${
+              hud.crateLocked
+                ? "border-red-400/40 bg-red-950/50 text-red-300"
+                : "border-white/15 bg-black/60 text-zinc-200"
+            }`}
+          >
+            {hud.crateLocked ? (
+              "TOO LOUD — WAIT FOR QUIET"
+            ) : (
+              <>
+                <span className="kbd">E</span> HOLD TO OPEN
+                <span className="text-white/40">· TIER {hud.crateTier}</span>
+              </>
+            )}
+          </div>
+          {!hud.crateLocked && hud.crateOpenPct > 0 && (
+            <div className="h-1 w-32 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
+              <div
+                className="h-full rounded-full bg-amber-400 transition-[width] duration-75"
+                style={{ width: `${hud.crateOpenPct * 100}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* bottom-center: gate bypass prompt — always optional, never required */}
+      {hud.gateBypassNear && !hud.crateNear && (
+        <div className="absolute bottom-40 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
+          <div
+            className={`flex items-center gap-2 rounded-full border px-4 py-1.5 text-[11px] font-bold tracking-[0.15em] backdrop-blur-sm ${
+              hud.gateBypassLocked
+                ? "border-red-400/40 bg-red-950/50 text-red-300"
+                : "border-violet-400/30 bg-violet-950/40 text-violet-200"
+            }`}
+          >
+            {hud.gateBypassLocked ? (
+              "TOO LOUD TO SLIP THROUGH"
+            ) : (
+              <>
+                <span className="kbd">E</span> HOLD TO BYPASS QUIETLY
+              </>
+            )}
+          </div>
+          {!hud.gateBypassLocked && hud.gateBypassPct > 0 && (
+            <div className="h-1 w-32 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
+              <div
+                className="h-full rounded-full bg-violet-400 transition-[width] duration-75"
+                style={{ width: `${hud.gateBypassPct * 100}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {/* bottom-center: controls hint */}
       {!touch && hud.stage === 1 && hud.waveInStage <= 1 && (
         <div className="absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-4 text-[10px] font-semibold tracking-wider text-white/35">
@@ -374,6 +509,9 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch 
           <span><span className="kbd">1</span>-<span className="kbd">4</span> CLASS</span>
           <span><span className="kbd">R</span> RELOAD</span>
           <span><span className="kbd">F</span> FIRE MODE</span>
+          <span><span className="kbd">E</span> OPEN CRATE</span>
+          <span><span className="kbd">I</span> BACKPACK</span>
+          <span><span className="kbd">G</span>/<span className="kbd">B</span>/<span className="kbd">N</span>/<span className="kbd">T</span> ITEMS</span>
         </div>
       )}
     </div>
