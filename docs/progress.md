@@ -4,13 +4,13 @@
 
 - **Full plan:** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
-- **Last updated:** 2026-09-09 (Phase 4 complete)
+- **Last updated:** 2026-09-09 (Phase 5 in progress)
 
 ---
 
 ## Current status
 
-Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–4 are complete.** Section 5 of the spec (defend-the-base climax) still has no code — that's Phases 5–7 below.
+Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–4 are complete.** Phase 5 (Stage 4 arena) is in progress. Section 5 of the spec (defend-the-base climax) is what Phases 5–6 are building.
 
 **Immediate next action:** Phase 5 — Stage 4 arena: lock the camera, add the prep phase (45s + READY skip), deployable placement (barricade/razor wire/claymore), `awardSupply()`, and scrap/repair.
 
@@ -89,7 +89,7 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 - **Verified in-browser** via the `?debug=1` hook: standing/walking slowly inside a sleeper's 90px radius leaves it dormant after 250ms; approaching at >220px/s wakes it; `quietKill()` called directly kills a sleeper without waking one 150px away, while `wakeZombie(z, true)` called directly wakes both a 150px-away sleeper and leaves a 500px-away one untouched; the real bullet-hit path confirmed end-to-end — a suppressed pistol auto-engaging a sleeper removes it silently, an unsuppressed one wakes it and deals visible damage instead; a hazard didn't trip on a slow approach but did (with `threat` climbing) on a fast one; **holding E under threat 0.35 opened a gate with the sleeper next to it staying dormant, and separately walking straight into a gate opened it loud and woke that same sleeper** — the explicit "clear one stage-1 gate both ways" verify item · a full 4-stage mission fast-forward afterward confirmed no regressions (gates/sleepers spawned correctly every stage, mission still completed cleanly)
 - **Rule honored:** stealth is never required to progress — the loud path through any gate or past any sleeper is always available and instant; quiet is strictly an optional, better outcome (no wake, no noise)
 
-### Phase 5 — Stage 4: arena, prep, deployables, scrap (~4 days) — NOT STARTED
+### Phase 5 — Stage 4: arena, prep, deployables, scrap (~4 days) — IN PROGRESS (2026-09-09)
 - [ ] Arena: set `this.cam` to a constant origin (no camera mode flag); `worldW ≈ 1600`, not 1280
 - [ ] Prep phase: `phase = "prep"`, 45s + READY skip (**not** `modalOpen` — it would freeze the clock)
 - [ ] Pointer-event placement with ghost + validity tint; pure `canPlaceAt()`; max 6 per lane
