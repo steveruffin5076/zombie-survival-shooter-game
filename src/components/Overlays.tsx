@@ -46,8 +46,8 @@ export function Menu({ onStart, high, muted, onMute }: { onStart: () => void; hi
       </h1>
 
       <p className="anim-rise mt-5 max-w-md text-center text-sm leading-relaxed text-zinc-400" style={{ animationDelay: "120ms" }}>
-        Armed with whatever you can scrape together, survive wave after wave of the
-        shambling horde. Level up, forge your arsenal, and don't stop moving.
+        Two lanes. One survivor. Your laser locks the lane you face — but every
+        shot you fire tells them exactly where you are.
       </p>
 
       <button
@@ -67,12 +67,12 @@ export function Menu({ onStart, high, muted, onMute }: { onStart: () => void; hi
       )}
 
       <div className="anim-rise mt-10 flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-[10px] font-semibold tracking-wider text-white/40" style={{ animationDelay: "260ms" }}>
-        <span className="flex items-center gap-1.5"><span className="kbd">A</span><span className="kbd">D</span> MOVE</span>
+        <span className="flex items-center gap-1.5"><span className="kbd">A</span><span className="kbd">D</span> MOVE · PIVOT LANE</span>
         <span className="flex items-center gap-1.5"><span className="kbd">W</span> DOUBLE JUMP</span>
         <span className="flex items-center gap-1.5"><span className="kbd">SHIFT</span> DASH</span>
         <span className="flex items-center gap-1.5"><span className="kbd">1</span>-<span className="kbd">4</span> WEAPON CLASS</span>
         <span className="flex items-center gap-1.5"><span className="kbd">R</span> RELOAD</span>
-        <span className="flex items-center gap-1.5"><span className="kbd">MOUSE</span> AIM · HOLD TO FIRE</span>
+        <span className="flex items-center gap-1.5"><span className="kbd">F</span> AUTO / MANUAL FIRE</span>
         <span className="flex items-center gap-1.5"><span className="kbd">ESC</span> PAUSE</span>
       </div>
     </div>

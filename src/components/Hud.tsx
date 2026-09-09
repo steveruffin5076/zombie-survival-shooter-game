@@ -1,14 +1,18 @@
 import type { HudState } from "../game/types";
-import { Heart, Skull, Pause, Volume2, VolumeX, Crosshair, Zap, Trophy, Lock } from "lucide-react";
+import {
+  Heart, Skull, Pause, Volume2, VolumeX, Crosshair, Zap, Trophy, Lock,
+  Ear, Bot, Hand,
+} from "lucide-react";
 
 interface Props {
   hud: HudState;
   onMute: () => void;
   onPause: () => void;
   onSwitch: (id: string) => void;
+  onFireMode: () => void;
 }
 
-export default function Hud({ hud, onMute, onPause, onSwitch }: Props) {
+export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode }: Props) {
   const hpPct = Math.max(0, Math.min(1, hud.hp / hud.maxHp));
   const xpPct = Math.max(0, Math.min(1, hud.xp / hud.xpNext));
   const dashPct = hud.dashMax > 0 ? 1 - Math.max(0, hud.dashT) / hud.dashMax : 1;
@@ -161,7 +165,17 @@ export default function Hud({ hud, onMute, onPause, onSwitch }: Props) {
                 {String(hud.ammo).padStart(2, "0")}
               </span>
               <span className="text-lg text-white/35">/ {hud.mag}</span>
-              <span className="ml-1 text-xs text-white/30">∞</span>
+              <span
+                className={`ml-1 text-xs font-semibold ${
+                  hud.reserve < 0
+                    ? "text-emerald-400"
+                    : hud.reserve === 0
+                      ? "text-red-400"
+                      : "text-white/45"
+                }`}
+              >
+                {hud.reserve < 0 ? "∞" : hud.reserve}
+              </span>
             </div>
             {/* reload progress / ammo bar */}
             <div className="mt-1.5 h-1.5 w-40 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
@@ -181,6 +195,34 @@ export default function Hud({ hud, onMute, onPause, onSwitch }: Props) {
             </div>
             <div className="mt-1 h-3 text-[9px] font-bold tracking-[0.25em] text-amber-400/80">
               {hud.reloading ? "RELOADING…" : hud.ammo === 0 ? "PRESS R" : ""}
+            </div>
+
+            {/* suppressor durability */}
+            <div className="mt-1.5 flex items-center gap-2">
+              <span
+                className={`text-[9px] font-bold tracking-[0.15em] ${
+                  hud.suppBroken ? "text-red-400" : "text-white/45"
+                }`}
+              >
+                {hud.suppMax >= 999 ? "INTEGRAL SUPP" : hud.suppBroken ? "SUPP BROKEN" : "SUPP"}
+              </span>
+              {hud.suppMax < 999 && (
+                <>
+                  <div className="h-1 w-16 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
+                    <div
+                      className={`h-full rounded-full ${
+                        hud.suppBroken
+                          ? "bg-red-600"
+                          : hud.supp / hud.suppMax < 0.3
+                            ? "bg-amber-500"
+                            : "bg-emerald-500"
+                      }`}
+                      style={{ width: `${(hud.supp / hud.suppMax) * 100}%` }}
+                    />
+                  </div>
+                  <span className="text-[9px] tabular-nums text-white/40">{hud.supp}</span>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -236,6 +278,66 @@ export default function Hud({ hud, onMute, onPause, onSwitch }: Props) {
         </div>
       </div>
 
+      {/* right column: fire mode + threat */}
+      <div className="absolute bottom-28 right-6 flex flex-col items-end gap-3">
+        {/* THREAT METER */}
+        <div className="w-44 rounded-xl border border-white/10 bg-black/50 px-3 py-2 backdrop-blur-sm">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="flex items-center gap-1 text-[9px] font-bold tracking-[0.2em] text-white/55">
+              <Ear className="h-3 w-3" /> NOISE
+            </span>
+            <span
+              className={`text-[9px] font-bold tracking-widest ${
+                hud.threat > 0.75 ? "text-red-400 animate-pulse" : "text-white/40"
+              }`}
+            >
+              {hud.threat > 0.75 ? "DETECTED" : hud.threat > 0.4 ? "HEARD" : "QUIET"}
+            </span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
+            <div
+              className={`h-full rounded-full transition-[width] duration-150 ${
+                hud.threat > 0.75
+                  ? "bg-gradient-to-r from-red-600 to-red-400"
+                  : hud.threat > 0.4
+                    ? "bg-gradient-to-r from-amber-600 to-amber-400"
+                    : "bg-gradient-to-r from-emerald-700 to-emerald-500"
+              }`}
+              style={{ width: `${hud.threat * 100}%` }}
+            />
+          </div>
+        </div>
+
+        {/* FIRE MODE TOGGLE */}
+        <button
+          onClick={onFireMode}
+          className={`pointer-events-auto flex w-44 items-center gap-2.5 rounded-xl border px-3 py-2.5 backdrop-blur-sm transition-all active:scale-[0.97] ${
+            hud.autoFire
+              ? "border-emerald-400/50 bg-emerald-500/10 hover:bg-emerald-500/20"
+              : "border-amber-400/50 bg-amber-500/10 hover:bg-amber-500/20"
+          }`}
+        >
+          {hud.autoFire ? (
+            <Bot className="h-5 w-5 text-emerald-300" />
+          ) : (
+            <Hand className="h-5 w-5 text-amber-300" />
+          )}
+          <div className="text-left">
+            <div
+              className={`text-[11px] font-bold tracking-[0.14em] ${
+                hud.autoFire ? "text-emerald-200" : "text-amber-200"
+              }`}
+            >
+              {hud.autoFire ? "AUTO-FIRE" : "MANUAL"}
+            </div>
+            <div className="text-[8px] tracking-[0.12em] text-white/40">
+              {hud.autoFire ? "FIRES ON LASER CONTACT" : "CLICK TO SHOOT"}
+            </div>
+          </div>
+          <span className="kbd ml-auto text-[8px]">F</span>
+        </button>
+      </div>
+
       {/* bottom-right: dash */}
       <div className="absolute bottom-6 right-6">
         <div
@@ -261,12 +363,12 @@ export default function Hud({ hud, onMute, onPause, onSwitch }: Props) {
       {/* bottom-center: controls hint */}
       {hud.stage === 1 && hud.waveInStage <= 1 && (
         <div className="absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-4 text-[10px] font-semibold tracking-wider text-white/35">
-          <span><span className="kbd">A</span> <span className="kbd">D</span> MOVE</span>
-          <span><span className="kbd">W</span> JUMP ×2</span>
+          <span><span className="kbd">A</span> <span className="kbd">D</span> MOVE + PIVOT LANE</span>
+          <span><span className="kbd">W</span> JUMP</span>
           <span><span className="kbd">SHIFT</span> DASH</span>
-          <span><span className="kbd">1</span>-<span className="kbd">4</span> CLASS (TAP AGAIN = SWAP)</span>
+          <span><span className="kbd">1</span>-<span className="kbd">4</span> CLASS</span>
           <span><span className="kbd">R</span> RELOAD</span>
-          <span><span className="kbd">MOUSE</span> HOLD TO FIRE</span>
+          <span><span className="kbd">F</span> FIRE MODE</span>
         </div>
       )}
     </div>

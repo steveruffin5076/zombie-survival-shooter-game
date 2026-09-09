@@ -82,6 +82,7 @@ export default function App() {
     (cls: string) => engineRef.current?.selectClass(cls as never),
     []
   );
+  const toggleFireMode = useCallback(() => engineRef.current?.toggleFireMode(), []);
   const choose = useCallback((id: string) => engineRef.current?.applyUpgrade(id), []);
   const resume = useCallback(() => engineRef.current?.setPaused(false), []);
   const togglePause = useCallback(() => engineRef.current?.togglePause(), []);
@@ -109,7 +110,13 @@ export default function App() {
         <div className="scanlines pointer-events-none absolute inset-0 z-10 opacity-60" />
 
         {screen === "game" && hud && (
-          <Hud hud={hud} onMute={toggleMute} onPause={togglePause} onSwitch={switchWeapon} />
+          <Hud
+            hud={hud}
+            onMute={toggleMute}
+            onPause={togglePause}
+            onSwitch={switchWeapon}
+            onFireMode={toggleFireMode}
+          />
         )}
 
         {screen === "menu" && (

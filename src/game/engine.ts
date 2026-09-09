@@ -136,11 +136,29 @@ export class Engine {
   private equipped: Partial<Record<WeaponClass, string>> = { pistol: STARTER };
   /** currently equipped weapon id */
   kind: string = STARTER;
-  /** rounds currently in each weapon's magazine (reserve ammo is unlimited) */
+  /** rounds currently in each weapon's magazine */
   private ammo: Record<string, number> = {};
+  /** spare rounds per weapon (-1 = unlimited) */
+  private reserve: Record<string, number> = {};
   private reloading = false;
   private reloadT = 0;
   private reloadDur = 0;
+
+  /* --- targeting / fire mode --- */
+  /** true = Automated Engagement, false = Manual Trigger */
+  private autoFire = true;
+  /** lane the player is locked to */
+  private facing: 1 | -1 = 1;
+  /** current auto-aim target */
+  private target: Zombie | null = null;
+  private onTarget = false;
+  private laserFlash = 0;
+
+  /* --- noise / threat --- */
+  private threat = 0;
+  private ambushT = 0;
+  /** suppressor durability per weapon */
+  private supp: Record<string, number> = {};
 
   private zombies: Zombie[] = [];
   private bullets: Bullet[] = [];
@@ -284,10 +302,23 @@ export class Engine {
     this.equipped = { pistol: STARTER };
     this.kind = STARTER;
     this.ammo = {};
-    for (const id of WEAPON_IDS) this.ammo[id] = WDEF[id].mag;
+    this.reserve = {};
+    this.supp = {};
+    for (const id of WEAPON_IDS) {
+      this.ammo[id] = WDEF[id].mag;
+      this.reserve[id] = WDEF[id].reserve;
+      this.supp[id] = WDEF[id].supp;
+    }
     this.reloading = false;
     this.reloadT = 0;
     this.reloadDur = 0;
+    this.autoFire = true;
+    this.facing = 1;
+    this.target = null;
+    this.onTarget = false;
+    this.threat = 0;
+    this.ambushT = 0;
+    this.laserFlash = 0;
     this.zombies = [];
     this.bullets = [];
     this.eshots = [];
@@ -373,6 +404,7 @@ export class Engine {
     }
     if (c === "KeyQ") this.cycleWeapon(1);
     if (c === "KeyR") this.startReload(true);
+    if (c === "KeyF" || c === "KeyV") this.toggleFireMode();
   };
 
   private onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.code);
@@ -397,7 +429,25 @@ export class Engine {
     if (e.button !== 0) return;
     this.sfx.ensure();
     this.mouse.down = true;
+    // right/left half of the screen pivots the lane (mobile-style tap to turn)
+    if (this.mode === "play" && !this.over && !this.paused && !this.modalOpen) {
+      const half = this.mouse.x > W / 2 ? 1 : -1;
+      if (half !== this.facing) {
+        this.facing = half as 1 | -1;
+        this.target = null;
+      }
+    }
   };
+
+  toggleFireMode() {
+    this.autoFire = !this.autoFire;
+    this.sfx.click();
+    this.texts.push({
+      x: this.pl.x, y: this.pl.y - 92, vy: -46, life: 0.8, max: 0.8,
+      text: this.autoFire ? "AUTO-FIRE ON" : "MANUAL TRIGGER",
+      color: this.autoFire ? "#4ade80" : "#fbbf24", size: 13,
+    });
+  }
 
   private onMouseUp = () => (this.mouse.down = false);
   private onCtx = (e: Event) => e.preventDefault();
@@ -514,10 +564,12 @@ export class Engine {
     const run = Math.abs(p.vx) > 26 && p.grounded;
     p.walk += dt * (run ? 10 + Math.abs(p.vx) * 0.014 : 3);
 
-    // aim
-    const mxw = this.mouse.x + this.cam;
-    p.aim = Math.atan2(this.mouse.y - (p.y - 40), mxw - p.x);
-    p.face = Math.cos(p.aim) >= 0 ? 1 : -1;
+    // ---- DIRECTIONAL LOCK: movement input pivots the lane ----
+    if (mov !== 0) this.facing = mov > 0 ? 1 : -1;
+    p.face = this.facing;
+    this.acquireTarget();
+    p.aim = this.aimAngle();
+    if (this.laserFlash > 0) this.laserFlash -= dt;
 
     // reload + auto-fire (all weapons are full-auto; rate differs per weapon)
     this.updateReload(dt);
@@ -525,9 +577,14 @@ export class Engine {
       // can't shoot mid-reload
     } else if (this.ammo[this.kind] <= 0) {
       this.startReload(); // auto reload the instant the mag runs dry
-    } else if (this.mouse.down && p.cd <= 0) {
-      this.fire();
+    } else if (p.cd <= 0) {
+      // AUTO-FIRE ON: shoot only when a zombie is on the laser line.
+      // AUTO-FIRE OFF: manual trigger via mouse.
+      if (this.autoFire ? this.onTarget : this.mouse.down) this.fire();
     }
+    // threat decays while you stay quiet
+    if (this.ambushT > 0) this.ambushT -= dt;
+    this.threat = Math.max(0, this.threat - dt * 0.05);
 
     // regen
     if (this.st.regen > 0) p.hp = Math.min(this.st.maxHp, p.hp + this.st.regen * dt);
@@ -581,12 +638,115 @@ export class Engine {
     this.shakeY = R(-this.shakeMag, this.shakeMag) * 0.7;
   }
 
+  /* ============ TARGETING: directional lock auto-aim ============ */
+
+  /** Nearest zombie in the faced lane, within the weapon's effective range. */
+  private acquireTarget() {
+    const p = this.pl;
+    const w = WDEF[this.kind];
+    const range = w.range * (1 + 0.12 * (this.stacks["velo"] || 0));
+    let best: Zombie | null = null;
+    let bestD = Infinity;
+    for (const z of this.zombies) {
+      if (z.dead) continue;
+      const dx = z.x - p.x;
+      // strictly the lane we're facing
+      if (this.facing === 1 ? dx < -14 : dx > 14) continue;
+      const d = Math.abs(dx);
+      if (d > range) continue;
+      // must be roughly on our plane (not mid-air above us)
+      if (Math.abs(z.y - p.y) > 90) continue;
+      if (d < bestD) { bestD = d; best = z; }
+    }
+    const had = this.onTarget;
+    this.target = best;
+    this.onTarget = best !== null;
+    if (this.onTarget && !had) this.laserFlash = 0.25;
+  }
+
+  /** Angle toward the locked target, else flat along the faced lane. */
+  private aimAngle() {
+    const p = this.pl;
+    if (this.target && !this.target.dead) {
+      const tx = this.target.x;
+      const ty = this.target.y - 36 * this.target.scale;
+      return Math.atan2(ty - (p.y - 40), tx - p.x);
+    }
+    return this.facing === 1 ? 0 : Math.PI;
+  }
+
+  /* ============ NOISE / THREAT ============ */
+
+  /** Every unsuppressed shot builds the threat meter. */
+  private addNoise(amount: number) {
+    this.threat = clamp(this.threat + amount, 0, 1);
+    if (this.threat >= 1 && this.ambushT <= 0) this.triggerAmbush(3);
+  }
+
+  /** Spawn Runners behind the player to punish loud play. */
+  private triggerAmbush(count: number) {
+    this.threat = 0;
+    this.ambushT = 6;
+    const behind = -this.facing as 1 | -1;
+    for (let i = 0; i < count; i++) {
+      const x = clamp(this.pl.x + behind * (W * 0.55 + R(0, 260)), 22, WORLD_W - 22);
+      const z = this.mkZombie("runner", x, 1 + (this.wave - 1) * 0.2, 1.25);
+      z.face = x > this.pl.x ? -1 : 1;
+      this.zombies.push(z);
+      for (let k = 0; k < 8; k++)
+        this.particles.push({
+          x, y: GROUND, vx: R(-80, 80), vy: R(-200, -30), life: R(0.3, 0.6), max: 0.6,
+          size: R(2, 5), color: "#7f1d1d", grav: 900, add: false,
+        });
+    }
+    this.announce("THEY HEARD YOU", "runners closing from behind");
+    this.sfx.wave();
+    this.shake(5);
+  }
+
+  /** Suppressor takes a shot of wear; shatters at zero. */
+  private wearSuppressor() {
+    const w = WDEF[this.kind];
+    if (w.supp >= 999) return; // integrally suppressed (AS Val)
+    if (this.supp[this.kind] <= 0) return; // already broken
+    this.supp[this.kind]--;
+    if (this.supp[this.kind] <= 0) {
+      // THE SHATTER MECHANIC
+      this.sfx.reloadEnd();
+      this.sfx.hurt();
+      this.shake(7);
+      this.announce("SUPPRESSOR SHATTERED", "your position is exposed");
+      this.texts.push({
+        x: this.pl.x, y: this.pl.y - 92, vy: -50, life: 1, max: 1,
+        text: "SUPPRESSOR BROKEN!", color: "#f87171", size: 15,
+      });
+      for (let i = 0; i < 14; i++)
+        this.particles.push({
+          x: this.pl.x + Math.cos(this.pl.aim) * 46, y: this.pl.y - 40,
+          vx: R(-190, 190), vy: R(-190, 40), life: R(0.3, 0.6), max: 0.6,
+          size: R(1.5, 3.5), color: "#cbd5e1", grav: 1100, add: false,
+        });
+      this.triggerAmbush(3);
+    }
+  }
+
   /** Begin a reload if it makes sense to. */
   startReload(manual = false) {
     const w = WDEF[this.kind] ?? WDEF.pistol;
     if (this.reloading) return;
     if (this.ammo[this.kind] >= w.mag) {
       if (manual) this.sfx.click();
+      return;
+    }
+    // limited reserve weapons need spare rounds (pistols are unlimited)
+    if (this.reserve[this.kind] === 0) {
+      if (manual) {
+        this.sfx.dryFire();
+        this.texts.push({
+          x: this.pl.x, y: this.pl.y - 88, vy: -46, life: 0.9, max: 0.9,
+          text: "NO RESERVE AMMO", color: "#f87171", size: 12,
+        });
+      }
       return;
     }
     this.reloading = true;
@@ -602,8 +762,15 @@ export class Engine {
   }
 
   private finishReload() {
-    const w = WDEF[this.kind] ?? WDEF.pistol;
-    this.ammo[this.kind] = w.mag;
+    const w = WDEF[this.kind];
+    const need = w.mag - this.ammo[this.kind];
+    if (this.reserve[this.kind] < 0) {
+      this.ammo[this.kind] = w.mag; // unlimited reserve (pistols)
+    } else {
+      const take = Math.min(need, this.reserve[this.kind]);
+      this.ammo[this.kind] += take;
+      this.reserve[this.kind] -= take;
+    }
     this.reloading = false;
     this.reloadT = 0;
     this.sfx.reloadEnd();
@@ -655,9 +822,16 @@ export class Engine {
         x: mzx, y: mzy,
         vx: Math.cos(a) * st.bulletSpeed, vy: Math.sin(a) * st.bulletSpeed,
         dmg: st.damage * (crit ? 2.2 : 1) * R(0.92, 1.08),
-        pierce: st.pierce, crit, life: w.life, hits: new Set(),
+        pierce: st.pierce, crit,
+        // bullets expire at the weapon's effective range
+        life: (w.range * (1 + 0.12 * (this.stacks["velo"] || 0))) / st.bulletSpeed,
+        hits: new Set(),
       });
     }
+    // noise + suppressor wear
+    this.wearSuppressor();
+    const broken = w.supp < 999 && this.supp[this.kind] <= 0;
+    this.addNoise((w.noise / (W * 1.5)) * (broken ? 0.055 : 0.016));
     for (let i = 0; i < 5; i++)
       this.particles.push({ x: mzx, y: mzy, vx: Math.cos(base + R(-0.5, 0.5)) * R(120, 420), vy: Math.sin(base + R(-0.5, 0.5)) * R(120, 420), life: R(0.08, 0.16), max: 0.16, size: R(1.5, 3.5), color: chance(0.5) ? "#fde68a" : "#f59e0b", grav: 0, add: true });
     this.particles.push({ x: p.x - Math.cos(base) * 4, y: p.y - 42, vx: -p.face * R(50, 130), vy: R(-190, -140), life: 0.55, max: 0.55, size: 2, color: "#fbbf24", grav: 1500, add: false });
@@ -1235,6 +1409,15 @@ export class Engine {
       }),
       ammo: this.ammo[this.kind] ?? 0,
       mag: WDEF[this.kind].mag,
+      reserve: this.reserve[this.kind] ?? 0,
+      autoFire: this.autoFire,
+      threat: this.threat,
+      supp: Math.max(0, this.supp[this.kind] ?? 0),
+      suppMax: WDEF[this.kind].supp,
+      suppBroken: WDEF[this.kind].supp < 999 && (this.supp[this.kind] ?? 0) <= 0,
+      facing: this.facing,
+      onTarget: this.onTarget,
+      range: WDEF[this.kind].range,
       reloading: this.reloading,
       reloadPct: this.reloadDur > 0 ? 1 - this.reloadT / this.reloadDur : 0,
       paused: this.paused,
@@ -1473,6 +1656,76 @@ export class Engine {
       }
     }
 
+    /* --- LASER SIGHT (effective range indicator) --- */
+    if (this.mode === "play" && !this.over && !this.reloading) {
+      const p = this.pl;
+      const w = WDEF[this.kind];
+      const range = w.range * (1 + 0.12 * (this.stacks["velo"] || 0));
+      const ox = p.x - cam + Math.cos(p.aim) * 44;
+      const oy = p.y - 40 + camY + Math.sin(p.aim) * 44;
+      const ex = ox + Math.cos(p.aim) * range;
+      const ey = oy + Math.sin(p.aim) * range;
+      const hot = this.onTarget;
+      const flash = Math.max(0, this.laserFlash);
+      c.save();
+      c.globalCompositeOperation = "lighter";
+      // outer glow beam
+      c.strokeStyle = hot
+        ? `rgba(255,60,60,${0.5 + 0.3 * Math.sin(t * 18) + flash})`
+        : "rgba(255,40,40,0.16)";
+      c.lineWidth = hot ? 3.2 : 1.6;
+      c.beginPath();
+      c.moveTo(ox, oy);
+      c.lineTo(ex, ey);
+      c.stroke();
+      // bright core
+      c.strokeStyle = hot ? "rgba(255,220,220,0.95)" : "rgba(255,120,120,0.3)";
+      c.lineWidth = hot ? 1.3 : 0.7;
+      c.beginPath();
+      c.moveTo(ox, oy);
+      c.lineTo(ex, ey);
+      c.stroke();
+      // range terminator tick
+      c.strokeStyle = hot ? "rgba(255,90,90,0.9)" : "rgba(255,60,60,0.35)";
+      c.lineWidth = 2;
+      c.beginPath();
+      c.moveTo(ex - Math.sin(p.aim) * 7, ey + Math.cos(p.aim) * 7);
+      c.lineTo(ex + Math.sin(p.aim) * 7, ey - Math.cos(p.aim) * 7);
+      c.stroke();
+      // dot on the locked target
+      if (hot && this.target) {
+        const tx = this.target.x - cam;
+        const ty = this.target.y - 36 * this.target.scale + camY;
+        c.fillStyle = "rgba(255,70,70,0.9)";
+        c.beginPath();
+        c.arc(tx, ty, 3.5 + Math.sin(t * 20) * 1.2, 0, TAU);
+        c.fill();
+        c.strokeStyle = "rgba(255,120,120,0.7)";
+        c.lineWidth = 1.4;
+        c.beginPath();
+        c.arc(tx, ty, 11 + Math.sin(t * 12) * 1.6, 0, TAU);
+        c.stroke();
+      }
+      c.restore();
+    }
+
+    /* --- facing / lane arrow --- */
+    if (this.mode === "play" && !this.over) {
+      const p = this.pl;
+      const ax = p.x - cam + this.facing * 34;
+      const ay = p.y - 96 + camY;
+      c.save();
+      c.globalAlpha = 0.5;
+      c.fillStyle = this.onTarget ? "#f87171" : "#94a3b8";
+      c.beginPath();
+      c.moveTo(ax + this.facing * 9, ay);
+      c.lineTo(ax - this.facing * 4, ay - 6);
+      c.lineTo(ax - this.facing * 4, ay + 6);
+      c.closePath();
+      c.fill();
+      c.restore();
+    }
+
     /* --- reload ring above player --- */
     if (this.mode === "play" && !this.over && this.reloading) {
       const rx = this.pl.x - cam;
@@ -1535,8 +1788,8 @@ export class Engine {
       (c as unknown as { letterSpacing: string }).letterSpacing = "0px";
     }
 
-    /* --- reticle --- */
-    if (this.mode === "play" && !this.over && !this.modalOpen && !this.paused) {
+    /* --- reticle (manual mode only) --- */
+    if (this.mode === "play" && !this.over && !this.modalOpen && !this.paused && !this.autoFire) {
       const r = 11 + Math.max(0, this.pl.cd) * 14;
       c.strokeStyle = "rgba(254,240,138,0.9)";
       c.lineWidth = 1.6;
