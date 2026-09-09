@@ -10,9 +10,10 @@ interface Props {
   onPause: () => void;
   onSwitch: (id: string) => void;
   onFireMode: () => void;
+  touch?: boolean;
 }
 
-export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode }: Props) {
+export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, touch = false }: Props) {
   const hpPct = Math.max(0, Math.min(1, hud.hp / hud.maxHp));
   const xpPct = Math.max(0, Math.min(1, hud.xp / hud.xpNext));
   const dashPct = hud.dashMax > 0 ? 1 - Math.max(0, hud.dashT) / hud.dashMax : 1;
@@ -23,8 +24,12 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode }: Prop
         ? "from-amber-500 to-yellow-400"
         : "from-red-600 to-orange-500";
 
+  // z-40 sits above TouchControls (z-30) so the Pause/Mute cluster stays
+  // tappable instead of being swallowed by the aim-drag surface. Every other
+  // panel here is pointer-events-none, so touch input elsewhere still
+  // reaches TouchControls.
   return (
-    <div className="pointer-events-none absolute inset-0 z-20 p-6 font-sans">
+    <div className="pointer-events-none absolute inset-0 z-40 p-6 font-sans">
       {/* top-left: vitals */}
       <div className="absolute left-6 top-6 flex flex-col gap-2.5">
         <div className="flex items-center gap-3">
@@ -361,7 +366,7 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode }: Prop
       </div>
 
       {/* bottom-center: controls hint */}
-      {hud.stage === 1 && hud.waveInStage <= 1 && (
+      {!touch && hud.stage === 1 && hud.waveInStage <= 1 && (
         <div className="absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-4 text-[10px] font-semibold tracking-wider text-white/35">
           <span><span className="kbd">A</span> <span className="kbd">D</span> MOVE + PIVOT LANE</span>
           <span><span className="kbd">W</span> JUMP</span>

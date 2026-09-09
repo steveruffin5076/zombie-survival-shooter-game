@@ -4,3 +4,4 @@ dist
 *.local
 .worktrees
 .superpowers
+.claude/launch.json

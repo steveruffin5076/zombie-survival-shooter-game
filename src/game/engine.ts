@@ -4,6 +4,7 @@ import {
   type WeaponClass,
 } from "./weapons";
 import { Sfx } from "./audio";
+import { canvasPointFromClient } from "./input";
 import type { EngineEvent, GameStats, HudState, UpgradeChoice } from "./types";
 
 /* ------------------------------------------------------------------ */
@@ -343,6 +344,9 @@ export class Engine {
     this.cam = clamp(this.pl.x - W / 2, 0, WORLD_W - W);
     this.mouse.x = W / 2;
     this.mouse.y = 280;
+    // Clear held input so a key/fire state stuck by a touch gesture that never
+    // saw its pointerup can't be inherited by a fresh run (death -> Restart).
+    this.keys.clear();
     this.mouse.down = false;
   }
 
@@ -420,9 +424,7 @@ export class Engine {
   };
 
   private onMouseMove = (e: MouseEvent) => {
-    const rect = this.canvas.getBoundingClientRect();
-    this.mouse.x = ((e.clientX - rect.left) / rect.width) * W;
-    this.mouse.y = ((e.clientY - rect.top) / rect.height) * H;
+    this.setAimFromClient(e.clientX, e.clientY);
   };
 
   private onMouseDown = (e: MouseEvent) => {
@@ -451,6 +453,46 @@ export class Engine {
 
   private onMouseUp = () => (this.mouse.down = false);
   private onCtx = (e: Event) => e.preventDefault();
+
+  /* ---------------- touch input (mirrors keyboard/mouse state) ---------------- */
+
+  /** Marks a virtual key as held — same effect as a keydown for movement keys. */
+  pressKey(code: string) {
+    this.keys.add(code);
+  }
+
+  /** Releases a virtual key — same effect as a keyup. */
+  releaseKey(code: string) {
+    this.keys.delete(code);
+  }
+
+  /** Sets the aim point from a raw touch/pointer client position. */
+  setAimFromClient(clientX: number, clientY: number) {
+    const rect = this.canvas.getBoundingClientRect();
+    const p = canvasPointFromClient(clientX, clientY, rect, W, H);
+    this.mouse.x = p.x;
+    this.mouse.y = p.y;
+  }
+
+  /** Starts/stops continuous fire — same effect as holding/releasing the mouse button. */
+  setFiring(down: boolean) {
+    if (down) this.sfx.ensure();
+    this.mouse.down = down;
+  }
+
+  /** Triggers a jump, respecting the same game-state guards as the keyboard handler. */
+  triggerJump() {
+    if (this.mode !== "play" || this.over || this.paused || this.modalOpen) return;
+    this.sfx.ensure();
+    this.jump();
+  }
+
+  /** Triggers a dash, respecting the same game-state guards as the keyboard handler. */
+  triggerDash() {
+    if (this.mode !== "play" || this.over || this.paused || this.modalOpen) return;
+    this.sfx.ensure();
+    this.dash();
+  }
 
   private bind() {
     window.addEventListener("keydown", this.onKeyDown);
