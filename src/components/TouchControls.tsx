@@ -1,14 +1,19 @@
-import { useEffect, useRef } from "react";
-import { ChevronLeft, ChevronRight, ArrowUp, Zap } from "lucide-react";
+import { useEffect } from "react";
+import { ChevronLeft, ChevronRight, ArrowUp, Zap, Crosshair, Hand } from "lucide-react";
 
 interface Props {
   onMoveStart: (dir: -1 | 1) => void;
   onMoveEnd: () => void;
   onJump: () => void;
   onDash: () => void;
-  onAimStart: (clientX: number, clientY: number) => void;
-  onAimMove: (clientX: number, clientY: number) => void;
-  onAimEnd: () => void;
+  /** tap-to-act: pivots the lane, or places the selected deployable during prep */
+  onTap: (clientX: number, clientY: number) => void;
+  onFireStart: () => void;
+  onFireEnd: () => void;
+  /** held-E equivalent: crate open / gate bypass / boss force-target */
+  showInteract: boolean;
+  onInteractStart: () => void;
+  onInteractEnd: () => void;
 }
 
 const btnClass =
@@ -19,57 +24,34 @@ export default function TouchControls({
   onMoveEnd,
   onJump,
   onDash,
-  onAimStart,
-  onAimMove,
-  onAimEnd,
+  onTap,
+  onFireStart,
+  onFireEnd,
+  showInteract,
+  onInteractStart,
+  onInteractEnd,
 }: Props) {
-  // pointerId of the finger that owns the aim drag, or null when idle. Using
-  // the id (rather than a bare boolean) keeps a second finger touching the
-  // aim surface from ending the first finger's drag.
-  const aimPointer = useRef<number | null>(null);
-
   // If this component unmounts while a finger is still down (a level-up or
   // pause can flip mid-gesture), no pointerup/pointercancel ever fires — so
-  // release the held move key and stop firing on the way out. Without this
-  // the engine keeps auto-firing or auto-running with nothing on screen.
+  // release every held input on the way out. Without this the engine keeps
+  // firing, running, or holding E with nothing on screen.
   useEffect(() => {
     return () => {
-      aimPointer.current = null;
       onMoveEnd();
-      onAimEnd();
+      onFireEnd();
+      onInteractEnd();
     };
-  }, [onMoveEnd, onAimEnd]);
+  }, [onMoveEnd, onFireEnd, onInteractEnd]);
 
   return (
     <div className="pointer-events-none absolute inset-0 z-30">
-      {/* drag-to-aim surface: right two-thirds of the screen */}
+      {/* tap-to-pivot / tap-to-place surface — auto-aim handles the rest, so this
+       * only needs a discrete tap, not a tracked drag. Sits under every button
+       * below (later in DOM order = on top for hit-testing), so it never steals
+       * their taps. */}
       <div
-        className="pointer-events-auto absolute right-0 top-0 h-full w-2/3 touch-none"
-        onPointerDown={(e) => {
-          if (aimPointer.current !== null) return;
-          // Capture is best-effort: if it throws we still want the drag to
-          // start, otherwise the id below would wedge aiming permanently.
-          try {
-            (e.target as HTMLElement).setPointerCapture(e.pointerId);
-          } catch {
-            /* pointer already gone — keep aiming anyway */
-          }
-          aimPointer.current = e.pointerId;
-          onAimStart(e.clientX, e.clientY);
-        }}
-        onPointerMove={(e) => {
-          if (aimPointer.current === e.pointerId) onAimMove(e.clientX, e.clientY);
-        }}
-        onPointerUp={(e) => {
-          if (aimPointer.current !== e.pointerId) return;
-          aimPointer.current = null;
-          onAimEnd();
-        }}
-        onPointerCancel={(e) => {
-          if (aimPointer.current !== e.pointerId) return;
-          aimPointer.current = null;
-          onAimEnd();
-        }}
+        className="pointer-events-auto absolute inset-0 touch-none"
+        onPointerDown={(e) => onTap(e.clientX, e.clientY)}
       />
 
       {/* bottom-left: move buttons (bottom-24 clears the HUD weapon panel at bottom-6) */}
@@ -102,8 +84,40 @@ export default function TouchControls({
         </button>
       </div>
 
-      {/* bottom-right: jump + dash (bottom-24 clears the HUD dash panel at bottom-6) */}
+      {/* interact — only shown near a crate/gate, mirrors held KeyE */}
+      {showInteract && (
+        <div className="pointer-events-auto absolute bottom-52 left-1/2 -translate-x-1/2">
+          <button
+            className={btnClass}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              onInteractStart();
+            }}
+            onPointerUp={onInteractEnd}
+            onPointerCancel={onInteractEnd}
+            onPointerLeave={onInteractEnd}
+            aria-label="Interact"
+          >
+            <Hand className="h-7 w-7" />
+          </button>
+        </div>
+      )}
+
+      {/* bottom-right: fire + jump + dash (bottom-24 clears the HUD dash panel at bottom-6) */}
       <div className="pointer-events-auto absolute bottom-24 right-6 flex gap-4">
+        <button
+          className={btnClass}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            onFireStart();
+          }}
+          onPointerUp={onFireEnd}
+          onPointerCancel={onFireEnd}
+          onPointerLeave={onFireEnd}
+          aria-label="Fire"
+        >
+          <Crosshair className="h-7 w-7" />
+        </button>
         <button
           className={btnClass}
           onPointerDown={(e) => {

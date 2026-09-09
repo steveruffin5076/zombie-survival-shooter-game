@@ -164,12 +164,14 @@ export default function App() {
   }, []);
   const triggerJump = useCallback(() => engineRef.current?.triggerJump(), []);
   const triggerDash = useCallback(() => engineRef.current?.triggerDash(), []);
-  const aimStart = useCallback((x: number, y: number) => {
-    engineRef.current?.setAimFromClient(x, y);
-    engineRef.current?.setFiring(true);
+  const tap = useCallback((x: number, y: number) => engineRef.current?.triggerTap(x, y), []);
+  const fireStart = useCallback(() => engineRef.current?.setFiring(true), []);
+  const fireEnd = useCallback(() => engineRef.current?.setFiring(false), []);
+  const interactStart = useCallback(() => {
+    engineRef.current?.pressKey("KeyE");
+    engineRef.current?.toggleBossForceTarget();
   }, []);
-  const aimMove = useCallback((x: number, y: number) => engineRef.current?.setAimFromClient(x, y), []);
-  const aimEnd = useCallback(() => engineRef.current?.setFiring(false), []);
+  const interactEnd = useCallback(() => engineRef.current?.releaseKey("KeyE"), []);
 
   // keyboard shortcuts for upgrade choices
   useEffect(() => {
@@ -228,9 +230,12 @@ export default function App() {
             onMoveEnd={moveEnd}
             onJump={triggerJump}
             onDash={triggerDash}
-            onAimStart={aimStart}
-            onAimMove={aimMove}
-            onAimEnd={aimEnd}
+            onTap={tap}
+            onFireStart={fireStart}
+            onFireEnd={fireEnd}
+            showInteract={!!(hud?.crateNear || hud?.gateBypassNear)}
+            onInteractStart={interactStart}
+            onInteractEnd={interactEnd}
           />
         )}
 

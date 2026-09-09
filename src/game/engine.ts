@@ -4,7 +4,6 @@ import {
   type WeaponClass,
 } from "./weapons";
 import { Sfx } from "./audio";
-import { canvasPointFromClient } from "./input";
 import { stageDefFor, cumulativeWaveIndex, STAGES, type StageDef, type RunMode } from "./stages";
 import { THEMES, type ThemeDef } from "./themes";
 import { BACKPACK_SIZE, moveItem, placeItem, removeItem, type PlacedItem } from "./grid";
@@ -545,7 +544,7 @@ export class Engine {
     }
     // during a boss fight, E forces the lock onto it over a close add (crate/gate E is
     // a held check elsewhere in update(), so this discrete toggle never steals that input)
-    if (c === "KeyE" && this.boss && !this.boss.dead) this.bossForceTarget = !this.bossForceTarget;
+    if (c === "KeyE") this.toggleBossForceTarget();
     if (c === "KeyQ") this.cycleWeapon(1);
     if (c === "KeyR") this.startReload(true);
     if (c === "KeyF" || c === "KeyV") this.toggleFireMode();
@@ -567,8 +566,19 @@ export class Engine {
       this.setPaused(true);
   };
 
+  /** Converts a client-space point into the fixed logical canvas coordinate space,
+   * accounting for the canvas being scaled to fit the viewport. Desktop-only — touch
+   * input goes through triggerTap() instead, which no longer needs a live cursor. */
+  private clientToCanvas(clientX: number, clientY: number): { x: number; y: number } {
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return { x: 0, y: 0 };
+    return { x: ((clientX - rect.left) / rect.width) * W, y: ((clientY - rect.top) / rect.height) * H };
+  }
+
   private onMouseMove = (e: MouseEvent) => {
-    this.setAimFromClient(e.clientX, e.clientY);
+    const p = this.clientToCanvas(e.clientX, e.clientY);
+    this.mouse.x = p.x;
+    this.mouse.y = p.y;
   };
 
   private onMouseDown = (e: MouseEvent) => {
@@ -621,15 +631,8 @@ export class Engine {
     this.keys.delete(code);
   }
 
-  /** Sets the aim point from a raw touch/pointer client position. */
-  setAimFromClient(clientX: number, clientY: number) {
-    const rect = this.canvas.getBoundingClientRect();
-    const p = canvasPointFromClient(clientX, clientY, rect, W, H);
-    this.mouse.x = p.x;
-    this.mouse.y = p.y;
-  }
-
-  /** Starts/stops continuous fire — same effect as holding/releasing the mouse button. */
+  /** Starts/stops continuous fire — same effect as holding/releasing the mouse button.
+   * Only matters in manual-fire mode; auto-fire already engages on laser contact. */
   setFiring(down: boolean) {
     if (down) this.sfx.ensure();
     this.mouse.down = down;
@@ -647,6 +650,32 @@ export class Engine {
     if (this.mode !== "play" || this.over || this.paused || this.modalOpen) return;
     this.sfx.ensure();
     this.dash();
+  }
+
+  /** Touch's tap-to-act — mirrors onMouseDown's full decision tree (place during prep,
+   * else pivot the lane) from a raw client point instead of a live-tracked cursor. */
+  triggerTap(clientX: number, clientY: number) {
+    if (this.mode !== "play" || this.over || this.paused || this.modalOpen) return;
+    this.sfx.ensure();
+    const p = this.clientToCanvas(clientX, clientY);
+    this.mouse.x = p.x;
+    this.mouse.y = p.y;
+    if (this.phase === "prep" && this.placingKind) {
+      this.tryPlaceDeployable();
+      return;
+    }
+    const half = p.x > W / 2 ? 1 : -1;
+    if (half !== this.facing) {
+      this.pivotTo(half as 1 | -1);
+      this.target = null;
+    }
+  }
+
+  /** KeyE (or its touch interact-button equivalent) while a boss is alive forces
+   * auto-aim onto it over a close add — see acquireTarget()'s boss lock rule. */
+  toggleBossForceTarget() {
+    if (!this.boss || this.boss.dead) return;
+    this.bossForceTarget = !this.bossForceTarget;
   }
 
   private bind() {
