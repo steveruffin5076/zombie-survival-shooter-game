@@ -4,13 +4,13 @@
 
 - **Full plan:** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
-- **Last updated:** 2026-09-09 (Phase 3 complete)
+- **Last updated:** 2026-09-09 (Phase 4 in progress)
 
 ---
 
 ## Current status
 
-Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–3 are complete.** Section 5 of the spec (defend-the-base climax) still has no code — that's Phases 4–7 below.
+Converting an endless wave shooter into a finite, mission-based tactical survivor. **Phases 0–3 are complete.** Phase 4 (stealth vs assault) is in progress. Section 5 of the spec (defend-the-base climax) still has no code — that's Phases 5–7 below.
 
 **Immediate next action:** Phase 4 — stealth vs assault: `Zombie.dormant` sleepers, noise-trap `Hazard`s, `quietKill()`, gates gaining a `[E] BYPASS` verb below `threat < 0.35`, and a `LOOT LOCK` tick on the existing threat bar.
 
@@ -80,7 +80,7 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 - **Verified end-to-end in-browser** via the `?debug=1` → `window.__engine` hook: crate spawns after a wave clear and hold-`E` opens it with loot landing in the backpack grid; **looting against a full 16-item grid** doesn't crash or overfill it (16 in, 16 out, crate still marks opened); bandage heals 40→80 HP; the fixed grenade now does real blast damage to a zombie 60px from the thrower (200→190.5 HP) once isolated from the player's own gunfire; noise decoy zeroes threat; stim sets a ~6s buff; a class-typed ammo box auto-fills a limited-reserve weapon's reserve on reload (0→60) and is consumed; the full `StageClear → SafeHouseOverlay → ENTER STAGE` flow works, `DEPOSIT ALL` is correctly disabled on an empty backpack, and resupply correctly leaves an unlimited-reserve pistol's reserve at `-1` rather than corrupting it; death **with** a checkpoint restarts at the checkpoint's stage with level/score preserved, backpack emptied, and the run still playing (`over: false`); death **without** one still shows the classic GameOver screen; `InventoryOverlay` opens/closes on `I`; `GridPanel` drag-and-drop moves an item to a free cell and correctly snaps back (no state change) when dropped on an occupied one
 - **Note:** touch affordances for crate-hold/inventory-drag are explicitly Phase 7's job ("Touch affordances for prep placement, inventory drag, interact/loot"), not built here — this phase's new interactions (`E`, `I`, `G`/`B`/`N`/`T`) are keyboard-only for now, consistent with Phase 1/2's `?mode=`/`?debug=` dev-hook pattern of shipping the system before its final input polish
 
-### Phase 4 — Stealth vs Assault (~2.5 days) — NOT STARTED
+### Phase 4 — Stealth vs Assault (~2.5 days) — IN PROGRESS (2026-09-09)
 - [ ] `Zombie.dormant` sleepers (wake on threat/damage/proximity+speed)
 - [ ] `Hazard` noise traps (car alarms, glass, flares) — noise, not damage
 - [ ] `quietKill(z)` — gives suppressor durability a purpose beyond punishment
