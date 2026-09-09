@@ -4,7 +4,7 @@ import {
   type WeaponClass,
 } from "./weapons";
 import { Sfx } from "./audio";
-import { stageDefFor, cumulativeWaveIndex, STAGES, type StageDef, type RunMode } from "./stages";
+import { stageDefFor, cumulativeWaveIndex, difficultyFor, STAGES, type StageDef, type RunMode } from "./stages";
 import { THEMES, type ThemeDef } from "./themes";
 import { BACKPACK_SIZE, moveItem, placeItem, removeItem, type PlacedItem } from "./grid";
 import { ITEMS, shapeOfItem, itemForHotkey, type ConsumableKey } from "./items";
@@ -853,7 +853,7 @@ export class Engine {
         } else {
           const boss = this.stageDef.bossWaves.includes(this.waveInStage);
           this.beginRest(3.4);
-          if (this.stageDef.themeId === "arena") this.awardSupply(0.18, 0.6);
+          if (this.stageDef.fixedCamera) this.awardSupply(0.18, 0.6);
           else p.hp = Math.min(this.st.maxHp, p.hp + 12);
           this.spawnCrate(boss ? (chance(0.5) ? 3 : 2) : 1);
           this.announce(
@@ -881,7 +881,7 @@ export class Engine {
 
     // camera — the arena's prep/active phases hold a fixed frame; travel
     // afterward still follows the player like every other stage
-    if (this.stageDef.themeId === "arena" && this.phase !== "travel") {
+    if (this.stageDef.fixedCamera && this.phase !== "travel") {
       this.cam = this.camOrigin();
     } else {
       const target = clamp(p.x - W / 2 + Math.cos(p.aim) * 60, 0, this.worldW - W);
@@ -1124,7 +1124,7 @@ export class Engine {
   private updateZombies(dt: number) {
     const p = this.pl;
     const movingFast = Math.abs(p.vx) > 220;
-    const arena = this.stageDef.themeId === "arena";
+    const arena = this.stageDef.fixedCamera;
     const centerX = this.worldW / 2;
     for (const z of this.zombies) {
       z.t += dt;
@@ -1525,7 +1525,7 @@ export class Engine {
     for (let i = 0; i < n; i++)
       this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: total / n, t: R(0, 9), rest: false, kind: "xp" });
     // scrap — arena only, feeds RepairPanel
-    if (this.stageDef.themeId === "arena" && chance(0.22)) {
+    if (this.stageDef.fixedCamera && chance(0.22)) {
       this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: 1, t: R(0, 9), rest: false, kind: "scrap" });
     }
   }
@@ -1608,7 +1608,7 @@ export class Engine {
     this.invVer++;
     this.recompute();
     this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
-    this.cam = this.stageDef.themeId === "arena" ? this.camOrigin() : clamp(this.pl.x - W / 2, 0, this.worldW - W);
+    this.cam = this.stageDef.fixedCamera ? this.camOrigin() : clamp(this.pl.x - W / 2, 0, this.worldW - W);
     this.mode = "play";
     this.beginRest(2.4);
     this.announce("YOU DIED", `back at the safe house — ${this.stageDef.name}`, 2.8);
@@ -2012,7 +2012,7 @@ export class Engine {
 
   /** Starts the rest between waves — a plain break, or the arena's timed prep phase. */
   private beginRest(breakDur: number) {
-    if (this.stageDef.themeId === "arena") {
+    if (this.stageDef.fixedCamera) {
       this.phase = "prep";
       this.prepT = 45;
       this.repairWindowT = 12;
@@ -2073,7 +2073,7 @@ export class Engine {
 
   /** Claymore proximity trigger — holds through an active ambush instead of firing on the first zombie. */
   private updateDeployables() {
-    if (this.stageDef.themeId !== "arena" || this.ambushT > 0) return;
+    if (!this.stageDef.fixedCamera || this.ambushT > 0) return;
     const centerX = this.worldW / 2;
     for (const d of this.deployables) {
       if (d.kind !== "claymore" || !d.armed) continue;
@@ -2113,7 +2113,7 @@ export class Engine {
   private startWave(inStage: number) {
     this.waveInStage = inStage;
     this.waveIndex = cumulativeWaveIndex(this.stage, inStage, this.runMode);
-    this.power = this.waveIndex;
+    this.power = difficultyFor(this.stage, inStage, this.runMode);
     this.queue = this.buildWave(this.power, inStage);
     this.waveTotal = this.queue.length;
     this.phase = "active";
@@ -2283,7 +2283,7 @@ export class Engine {
     const bonus = 500 * cleared;
     this.score += bonus;
     // full heal between stages — except leaving the arena, which stays scrap-and-supply-only
-    if (this.stageDef.themeId !== "arena") this.pl.hp = this.st.maxHp;
+    if (!this.stageDef.fixedCamera) this.pl.hp = this.st.maxHp;
     // safe house resupply: reserve tops up to 50% (not full), suppressors renewed
     for (const id of WEAPON_IDS) {
       if (this.reserve[id] >= 0) this.reserve[id] = Math.max(this.reserve[id], Math.round(WDEF[id].reserve * 0.5));
@@ -2324,7 +2324,7 @@ export class Engine {
     // also what keeps startTravel()'s safeHouseX comfortably in-bounds
     this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
     this.pl.vx = 0;
-    this.cam = this.stageDef.themeId === "arena" ? this.camOrigin() : clamp(this.pl.x - W / 2, 0, this.worldW - W);
+    this.cam = this.stageDef.fixedCamera ? this.camOrigin() : clamp(this.pl.x - W / 2, 0, this.worldW - W);
     this.waveInStage = 0;
     this.stageIntermission = false;
     this.modals.delete("stageclear");
@@ -2465,7 +2465,7 @@ export class Engine {
       gateBypassNear: nearGate !== null,
       gateBypassPct: clamp(this.gateBypassT / 0.9, 0, 1),
       gateBypassLocked: nearGate !== null && this.threat >= 0.35,
-      arena: this.stageDef.themeId === "arena",
+      arena: this.stageDef.fixedCamera,
       prepT: Math.max(0, this.prepT),
       prepMax: 45,
       placingKind: this.placingKind,
@@ -2692,7 +2692,7 @@ export class Engine {
     }
 
     /* --- arena: deployables + placement ghost --- */
-    if (this.stageDef.themeId === "arena") {
+    if (this.stageDef.fixedCamera) {
       c.save();
       c.translate(-cam, camY);
       for (const d of this.deployables) this.drawDeployable(d, t);

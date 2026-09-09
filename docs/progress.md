@@ -6,7 +6,7 @@
 - **Completed plan (Phases 0–7):** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
 - **Design doc driving Phases 8+:** `enhancement-1.md` (repo root, on `main`)
-- **Last updated:** 2026-09-09 (Phases 0–7 done; Phases 8–12 planned, not started)
+- **Last updated:** 2026-09-09 (Phase 8 done; Phases 9–12 planned, not started)
 
 ---
 
@@ -16,7 +16,7 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 
 **Phases 8–12 are a new plan**, driven by `enhancement-1.md`: a narrative/campaign overhaul that replaces the 4-stage mission with **6 Acts × (3 exploration stages + 1 Terminal Defense stage)** under the Aetheris Dynamics / "Redshift" fiction. Scope decision: build the **Act I vertical slice** — the act framework sized to hold all six acts, with Act I fully authored and Acts II–VI present as thin data rows.
 
-**Immediate next action:** Phase 8. It is the gating phase — see the `power` scaling problem below, which makes every act past Act I unplayable until fixed.
+**Immediate next action:** Phase 9 (data-driven bosses + The Neighborhood Watch). Phase 8 (the gating phase) is done — the mission is winnable at all 24 stages now.
 
 ### Branch state
 
@@ -24,12 +24,7 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 
 **Phases 6 and 7 are NOT on `main`.** PR #1 merged `claude/progress-md-review-oyfo72` when it was still at Phase 5 (`2d2fba8`), so `main` (`2e38e72`) has everything through Phase 5 plus `enhancement-1.md` (added by a separate upload commit `7e145eb`). The branch carries two unmerged commits: `287e9b7` (Phase 6 Juggernaut) and `654e016` (Phase 7 touch).
 
-Phase 8 therefore starts with a rebase, keeping both commits and picking up `enhancement-1.md`:
-
-```
-git fetch origin main
-git rebase origin/main
-```
+Phase 8 started with a rebase, keeping both commits and picking up `enhancement-1.md` (done — rebased onto `2e38e72` with no conflicts, force-pushed).
 
 ---
 
@@ -165,12 +160,13 @@ git rebase origin/main
 
 Wave size (`:1975`) and the spawn cap (`:843`) saturate at their own `Math.min` ceilings, so nothing looks wrong there — the failure surfaces only as "Act II is unwinnable," which reads as a balance problem rather than a data-model bug. **Fix this in Phase 8, before any act row past Act I exists.**
 
-### Phase 8 — Act data model + difficulty decoupling + `fixedCamera` flag
-- [ ] New `src/game/acts.ts` owns `ACTS`; `stages.ts` derives the 24-entry `STAGES` via `ACTS.flatMap(...)`. `ActDef { id, numeral, name, sub, themeId, arenaThemeId, bossId, explorationWaves, defenseWaves, worldW, enemyPool? }`; `StageDef` gains `actId`, `indexInAct: 0|1|2|3`, `bossId?`, `fixedCamera: boolean`. An unfinished act is then **one data row**, not four copy-pasted ones
-- [ ] `stageDefFor`/`cumulativeWaveIndex` (`stages.ts:34-48`) need **no signature change** — mission already clamps at `STAGES.length`, endless already modulo-cycles, both table-length agnostic. `TOTAL_MISSION_WAVES` is exported but unused (only `STAGES.length` is consumed, at `engine.ts:2273`/`:2980`) — redefine freely
-- [ ] Add pure `difficultyFor(stageNum, inStage, mode)` to `stages.ts`; `engine.ts:2116` uses it. `waveIndex` stays `cumulativeWaveIndex` for **display only**. Target: ~40 by Act VI instead of 216, endless keeps its unbounded ramp
-- [ ] Replace the `themeId === "arena"` behavioral gate with `StageDef.fixedCamera` — it is used at **11 sites** (`engine.ts:856, 884, 1127, 1528, 1611, 2015, 2076, 2286, 2327, 2468, 2695`). Per-act arena themes are impossible until this is a flag, and renaming the theme without it silently disables the arena. Must land here, not deferred
-- **Verify:** Vitest — `difficultyFor` monotonicity, `difficultyFor(24, 9, "mission") < 50`, endless climbs past the mission cap, `STAGES.length === 24`, every act yields 3 exploration + 1 `fixedCamera` stage. In-browser — play Act I's four stages; teleport to stage 24 and confirm `missionwin` fires; confirm endless stage 25 wraps to Act I; confirm the arena still behaves as an arena after the flag swap
+### Phase 8 — Act data model + difficulty decoupling + `fixedCamera` flag — DONE (2026-09-09)
+- [x] New `src/game/acts.ts` — pure module, `ActDef { id, numeral, name, sub, bossId, stages: ActStageDef[4], enemyPool? }`, each `ActStageDef { name, sub, themeId, worldW, fixedCamera? }`. Deviated from the plan's literal field shape (a single `themeId`/`arenaThemeId` pair per act) in favor of a 4-entry `stages` array per act — Act I's four stages keep their own distinct existing themes (cemetery/suburbs/highway/arena), not one shared theme, so nothing about today's already-tuned content had to change. `ACTS` has all 6 acts; Act I is byte-identical to the old `BASE_STAGES` (same names/subs/themes/worldW), Acts II–VI are stub rows reusing suburbs/highway/cemetery/arena themes and `bossId: "juggernaut"` (Act IV's real boss per the doc) as a placeholder everywhere else, with a comment flagging Act VI's special gauntlet structure as deferred
+- [x] `stages.ts` rewritten: `StageDef` gains `actId`, `indexInAct: 0|1|2|3`, `bossId?` (set only on each act's 4th/defense stage — not yet read by `spawnBoss()`, that's Phase 9), `fixedCamera: boolean`. `STAGES` = `ACTS.flatMap(stagesForAct)` → 24 rows. `stageDefFor`/`cumulativeWaveIndex` needed **zero signature or body changes** — confirmed by full test coverage passing unmodified against the new 24-row table
+- [x] `difficultyFor(stageNum, inStage, mode)` added to `stages.ts`: identical to `cumulativeWaveIndex` through Act I's 36 waves (derived from the table itself, not a magic constant), then `ACT_I_WAVES + (idx - ACT_I_WAVES) * 0.03` beyond it. `engine.ts:2116` now calls it instead of `this.power = this.waveIndex`; `waveIndex` itself is untouched (still `cumulativeWaveIndex`, display-only)
+- [x] Replaced all **11** `themeId === "arena"`/`!== "arena"` sites (`engine.ts:856, 884, 1127, 1528, 1611, 2015, 2076, 2286, 2327, 2468, 2695`) with `this.stageDef.fixedCamera` — one mechanical `sed` pass, verified no site was missed and no other `"arena"` string comparison remains in `engine.ts`
+- **Verified:** `npx tsc --noEmit` clean · `npm test` **65/65** passing (50 baseline + 15 new: `acts.test.ts` — 6 acts, 4 stages each, only the 4th `fixedCamera`, Act I matches today exactly; `stages.test.ts` — 24-row table, mission clamp at stage 24, endless wrap at 25, `difficultyFor` monotonicity + exact equality with `cumulativeWaveIndex` through Act I + `difficultyFor(1,5,"mission") === 5` (the precise number Phase 6's boss balance was verified against) + `< 50` at stage 24 + endless climbing past the mission cap) · `npm run build` succeeds (415.4kB single-file output) · **in-browser** via `?debug=1`/`window.__engine`: teleported through all 4 of Act I's stages and confirmed names/`actId` unchanged from today; confirmed stage 4 (GROUND ZERO) still locks `cam` to `camOrigin()` while running and stage 2 does NOT (free-roam camera) — the `fixedCamera` swap didn't touch arena behavior; confirmed `power === 5` at stage1/wave5 (exactly Phase 6's tuned Juggernaut-balance number); teleported to stage 24/wave 9 and read `power = 41.4` live (was 216 before this phase); forced `reachSafeHouse()` at stage 24 and confirmed `missionwin` fires (`over: true`); confirmed endless-mode stage 25 wraps to `THE CEMETERY` (Act I) while keeping `stage: 25`; **a full 24-stage, 216-wave fast-forward** (insta-clear each wave's queue/zombies/boss, same teleport idiom as every prior phase) ran end-to-end with no console errors beyond the sandbox's expected Google-Fonts network failures, finishing at stage 24 "SECTOR VI-4" with `power` capped at 41.4 and `over: true`
+- **Rule honored:** `acts.ts`/`stages.ts` stay pure data + pure functions, `engine.ts` only gained one new call site (`difficultyFor`) and one mechanical rename (`fixedCamera`); every read site of `power` (28 of them) needed no changes since only its single assignment site moved
 
 ### Phase 9 — Data-driven bosses + The Neighborhood Watch
 - [ ] Extend `boss.ts` from one hardcoded attack set to `BOSS_DEFS: Record<string, BossDef>` — `BossDef { id, name, tellName, deathBanner, attacks, windup, hpMul, scale, r, tint, cooldownBase, cooldownStep, shield? }`; `BossAttack` grows `"shieldcharge"` (the union grows, never shrinks)
@@ -219,7 +215,7 @@ Wave size (`:1975`) and the spawn cap (`:843`) saturate at their own `Math.min` 
 
 ### Risks carried into Phases 8–12
 
-- **Difficulty scaling (highest).** `difficultyFor` in Phase 8 is load-bearing. Ship the 24-stage table without it and Act II onward is unwinnable, presenting as a balance problem rather than a data-model bug. See the table in the Phase 8 section.
+- ~~**Difficulty scaling (highest).**~~ **Resolved in Phase 8** — `difficultyFor` caps mission difficulty at 41.4 by stage 24 (was 216); see the Phase 8 writeup for the verified number.
 - **Per-act boss art.** Six bespoke sprites would add 500+ lines to an already-3,831-line `engine.ts`. Parameterize one silhouette; if bespoke art becomes non-negotiable, extract a `bossArt.ts` of pure `(ctx, boss) => void` functions **before** the second boss lands.
 - **Six hours is a 6× content multiplier on a ~15-minute game.** 24 stages of the same procedural corridor (`startTravel:2155-2188`) will feel identical by Act III. Act I will not expose this; Act II will.
 - **Three features in `enhancement-1.md` assume mechanics that don't exist.** Act III's "Blind Smasher — immune to body damage, target the legs" and Act VI's "lasers alter lane positioning" both need systems strictly larger than the headshot change rejected in Phase 10. Act II's Vaulter is tractable — `acquireTarget`'s lane check is a single line (`engine.ts:914`). All three are **unbudgeted**; settle scope before committing to Acts III/VI.
