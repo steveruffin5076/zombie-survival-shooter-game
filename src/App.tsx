@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Engine } from "./game/engine";
 import type { EngineEvent, GameStats, HudState, UpgradeChoice } from "./game/types";
 import Hud from "./components/Hud";
-import { Menu, LevelUpModal, PauseMenu, GameOver } from "./components/Overlays";
+import { Menu, LevelUpModal, PauseMenu, GameOver, StageClear } from "./components/Overlays";
 import TouchControls from "./components/TouchControls";
 import { isTouchCapable } from "./game/input";
 
@@ -18,6 +18,7 @@ export default function App() {
   const [touch] = useState(() =>
     isTouchCapable(navigator.maxTouchPoints, window.matchMedia("(pointer: coarse)").matches)
   );
+  const [stageClear, setStageClear] = useState<{ stage: number; next: number } | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -33,7 +34,11 @@ export default function App() {
         case "gameover":
           setOver(e.stats);
           setChoices(null);
+          setStageClear(null);
           setPaused(false);
+          break;
+        case "stageclear":
+          setStageClear({ stage: e.stage, next: e.next });
           break;
         case "pause":
           setPaused(e.value);
@@ -60,6 +65,7 @@ export default function App() {
     setScreen("game");
     setOver(null);
     setChoices(null);
+    setStageClear(null);
     setPaused(false);
   }, []);
 
@@ -68,9 +74,19 @@ export default function App() {
     setScreen("menu");
     setOver(null);
     setChoices(null);
+    setStageClear(null);
     setPaused(false);
   }, []);
 
+  const nextStage = useCallback(() => {
+    engineRef.current?.advanceStage();
+    setStageClear(null);
+  }, []);
+
+  const switchWeapon = useCallback(
+    (cls: string) => engineRef.current?.selectClass(cls as never),
+    []
+  );
   const choose = useCallback((id: string) => engineRef.current?.applyUpgrade(id), []);
   const resume = useCallback(() => engineRef.current?.setPaused(false), []);
   const togglePause = useCallback(() => engineRef.current?.togglePause(), []);
@@ -114,7 +130,7 @@ export default function App() {
         <div className="scanlines pointer-events-none absolute inset-0 z-10 opacity-60" />
 
         {screen === "game" && hud && (
-          <Hud hud={hud} onMute={toggleMute} onPause={togglePause} touch={touch} />
+          <Hud hud={hud} onMute={toggleMute} onPause={togglePause} touch={touch} onSwitch={switchWeapon} />
         )}
         {screen === "game" && touch && !paused && !choices && !over && (
           <TouchControls
@@ -133,6 +149,10 @@ export default function App() {
         )}
 
         {choices && <LevelUpModal choices={choices} level={hud?.level ?? 1} onPick={choose} />}
+
+        {stageClear && !choices && !over && (
+          <StageClear stage={stageClear.stage} next={stageClear.next} onContinue={nextStage} />
+        )}
 
         {paused && screen === "game" && !over && !choices && (
           <PauseMenu

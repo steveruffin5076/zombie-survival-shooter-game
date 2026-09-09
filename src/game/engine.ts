@@ -1,4 +1,8 @@
 import { UPGRADES, type UpgradeDef } from "./upgrades";
+import {
+  WEAPONS as WDEF, WEAPON_IDS, CLASS_ORDER, CLASS_LABEL, CLASS_ROLE, byClass, STARTER,
+  type WeaponClass,
+} from "./weapons";
 import { Sfx } from "./audio";
 import { canvasPointFromClient } from "./input";
 import type { EngineEvent, GameStats, HudState, UpgradeChoice } from "./types";
@@ -33,15 +37,25 @@ const ZCONF: Record<ZType, ZConf> = {
   brute: { hp: 150, speed: 36, dmg: 22, r: 30, scale: 1.5, xp: 6, score: 45 },
 };
 
-const WEAPONS = [
-  "Rusty Revolver",
-  "Scrap SMG",
-  "Tactical Carbine",
-  "Storm Rifle",
-  "Hellfire Repeater",
-  "Dawnbringer Engine",
+const WAVES_PER_STAGE = 10;
+
+const STAGE_NAMES = [
+  "THE CEMETERY",
+  "RUINED SUBURBS",
+  "THE HIGHWAY",
+  "DOWNTOWN RUINS",
+  "THE QUARANTINE ZONE",
+  "GROUND ZERO",
 ];
-const TIER_PTS = [2, 4, 7, 10, 13];
+
+const STAGE_SUBS = [
+  "where it all began",
+  "nothing left to save",
+  "keep moving forward",
+  "the city has fallen",
+  "no way out but through",
+  "the end of the night",
+];
 
 const WAVE_SUBS = [
   "they smell your blood",
@@ -117,7 +131,17 @@ export class Engine {
   private pl = this.freshPlayer();
   private st = this.baseStats();
   private stacks: Record<string, number> = {};
-  private tier = 1;
+  /** weapons the player permanently owns */
+  private owned = new Set<string>([STARTER]);
+  /** which variant is selected within each class */
+  private equipped: Partial<Record<WeaponClass, string>> = { pistol: STARTER };
+  /** currently equipped weapon id */
+  kind: string = STARTER;
+  /** rounds currently in each weapon's magazine (reserve ammo is unlimited) */
+  private ammo: Record<string, number> = {};
+  private reloading = false;
+  private reloadT = 0;
+  private reloadDur = 0;
 
   private zombies: Zombie[] = [];
   private bullets: Bullet[] = [];
@@ -127,7 +151,10 @@ export class Engine {
   private texts: FloatText[] = [];
   private decals: Decal[] = [];
 
-  private wave = 0;
+  private wave = 0;              // global wave counter (difficulty)
+  private stage = 1;
+  private waveInStage = 0;       // 1..WAVES_PER_STAGE
+  private stageIntermission = false;
   private phase: "break" | "active" = "break";
   private breakT = 0;
   private spawnT = 0;
@@ -198,10 +225,11 @@ export class Engine {
   startGame() {
     this.sfx.ensure();
     this.reset();
+    this.recompute();
     this.mode = "play";
     this.phase = "break";
-    this.breakT = 1.6;
-    this.announce("GRAVEYARD SHIFT", "survive the night", 2.4);
+    this.breakT = 2.2;
+    this.announce(`STAGE 1 — ${STAGE_NAMES[0]}`, STAGE_SUBS[0], 2.6);
   }
 
   toMenu() {
@@ -243,7 +271,8 @@ export class Engine {
   private baseStats() {
     return {
       damage: 13, fireRate: 3.1, bulletSpeed: 800, jitter: 0.02,
-      projectiles: 1, pierce: 0, crit: 0.05,
+      projectiles: 1, projSpread: 0, projJitter: 1,
+      pierce: 0, crit: 0.05,
       speed: 275, maxHp: 100, magnet: 1, lifesteal: 0, regen: 0, dashMax: 2.3,
     };
   }
@@ -252,7 +281,14 @@ export class Engine {
     this.pl = this.freshPlayer();
     this.st = this.baseStats();
     this.stacks = {};
-    this.tier = 1;
+    this.owned = new Set<string>([STARTER]);
+    this.equipped = { pistol: STARTER };
+    this.kind = STARTER;
+    this.ammo = {};
+    for (const id of WEAPON_IDS) this.ammo[id] = WDEF[id].mag;
+    this.reloading = false;
+    this.reloadT = 0;
+    this.reloadDur = 0;
     this.zombies = [];
     this.bullets = [];
     this.eshots = [];
@@ -261,6 +297,9 @@ export class Engine {
     this.texts = [];
     this.decals = [];
     this.wave = 0;
+    this.stage = 1;
+    this.waveInStage = 0;
+    this.stageIntermission = false;
     this.waveTotal = 0;
     this.queue = [];
     this.score = 0;
@@ -331,6 +370,13 @@ export class Engine {
     if (this.paused || this.modalOpen) return;
     if (c === "Space" || c === "KeyW" || c === "ArrowUp") this.jump();
     if (c === "ShiftLeft" || c === "ShiftRight") this.dash();
+    // weapon switching (only when the upgrade modal is closed)
+    if (c.startsWith("Digit")) {
+      const i = Number(c.slice(5)) - 1;
+      if (i >= 0 && i < CLASS_ORDER.length) this.selectClass(CLASS_ORDER[i]);
+    }
+    if (c === "KeyQ") this.cycleWeapon(1);
+    if (c === "KeyR") this.startReload(true);
   };
 
   private onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.code);
@@ -515,16 +561,25 @@ export class Engine {
     p.aim = Math.atan2(this.mouse.y - (p.y - 40), mxw - p.x);
     p.face = Math.cos(p.aim) >= 0 ? 1 : -1;
 
-    // fire
-    if (this.mouse.down && p.cd <= 0) this.fire();
+    // reload + auto-fire (all weapons are full-auto; rate differs per weapon)
+    this.updateReload(dt);
+    if (this.reloading) {
+      // can't shoot mid-reload
+    } else if (this.ammo[this.kind] <= 0) {
+      this.startReload(); // auto reload the instant the mag runs dry
+    } else if (this.mouse.down && p.cd <= 0) {
+      this.fire();
+    }
 
     // regen
     if (this.st.regen > 0) p.hp = Math.min(this.st.maxHp, p.hp + this.st.regen * dt);
 
     // waves
     if (this.phase === "break") {
-      this.breakT -= dt;
-      if (this.breakT <= 0) this.startWave(this.wave + 1);
+      if (!this.stageIntermission) {
+        this.breakT -= dt;
+        if (this.breakT <= 0) this.startWave(this.waveInStage + 1);
+      }
     } else {
       this.spawnT -= dt;
       const cap = Math.min(26, 8 + this.wave);
@@ -534,11 +589,18 @@ export class Engine {
         for (let i = 0; i < n && this.queue.length > 0; i++) this.spawnZombie(this.queue.shift()!);
       }
       if (this.queue.length === 0 && this.zombies.length === 0) {
-        this.phase = "break";
-        this.breakT = 3.4;
         this.score += 50 * this.wave;
-        p.hp = Math.min(this.st.maxHp, p.hp + 12);
-        this.announce(`WAVE ${this.wave} CLEARED`, `+${50 * this.wave} score — breathe while you can`);
+        if (this.waveInStage >= WAVES_PER_STAGE) {
+          this.completeStage();
+        } else {
+          this.phase = "break";
+          this.breakT = 3.4;
+          p.hp = Math.min(this.st.maxHp, p.hp + 12);
+          this.announce(
+            `WAVE ${this.waveInStage} CLEARED`,
+            `${WAVES_PER_STAGE - this.waveInStage} to go — breathe while you can`
+          );
+        }
       }
     }
 
@@ -561,31 +623,88 @@ export class Engine {
     this.shakeY = R(-this.shakeMag, this.shakeMag) * 0.7;
   }
 
+  /** Begin a reload if it makes sense to. */
+  startReload(manual = false) {
+    const w = WDEF[this.kind] ?? WDEF.pistol;
+    if (this.reloading) return;
+    if (this.ammo[this.kind] >= w.mag) {
+      if (manual) this.sfx.click();
+      return;
+    }
+    this.reloading = true;
+    this.reloadDur = w.reload;
+    this.reloadT = w.reload;
+    this.sfx.reloadStart();
+    // eject spent magazine
+    const p = this.pl;
+    this.particles.push({
+      x: p.x, y: p.y - 40, vx: -p.face * R(40, 90), vy: R(-40, 10),
+      life: 0.7, max: 0.7, size: 3, color: "#78716c", grav: 1400, add: false,
+    });
+  }
+
+  private finishReload() {
+    const w = WDEF[this.kind] ?? WDEF.pistol;
+    this.ammo[this.kind] = w.mag;
+    this.reloading = false;
+    this.reloadT = 0;
+    this.sfx.reloadEnd();
+    this.texts.push({
+      x: this.pl.x, y: this.pl.y - 78, vy: -46, life: 0.7, max: 0.7,
+      text: "RELOADED", color: "#fbbf24", size: 12,
+    });
+  }
+
+  private updateReload(dt: number) {
+    if (!this.reloading) return;
+    this.reloadT -= dt;
+    if (this.reloadT <= 0) this.finishReload();
+  }
+
   private fire() {
     const p = this.pl;
     const st = this.st;
+    const w = WDEF[this.kind] ?? WDEF.pistol;
+    // out of ammo -> auto reload
+    if (this.ammo[this.kind] <= 0) {
+      this.sfx.dryFire();
+      this.startReload();
+      p.cd = 0.25;
+      return;
+    }
+    this.ammo[this.kind]--;
     p.cd = 1 / st.fireRate;
-    p.flash = 0.06;
+    p.flash = 0.07;
+    // eject a spent casing
+    this.particles.push({
+      x: p.x - Math.cos(p.aim) * 4, y: p.y - 42,
+      vx: -p.face * R(60, 150), vy: R(-210, -150),
+      life: 0.6, max: 0.6, size: 1.8, color: "#fbbf24", grav: 1500, add: false,
+    });
     const n = st.projectiles;
     const base = p.aim;
-    const mzx = p.x + Math.cos(base) * 46;
-    const mzy = p.y - 40 + Math.sin(base) * 46;
+    const wc = WDEF[this.kind].cls;
+    const muzzle = wc === "carbine" ? 58 : wc === "smg" ? 48 : 46;
+    const mzx = p.x + Math.cos(base) * muzzle;
+    const mzy = p.y - 40 + Math.sin(base) * muzzle;
+    const spread = st.projSpread;
+    const jit = st.jitter;
     for (let i = 0; i < n; i++) {
-      const off = (i - (n - 1) / 2) * 0.08;
-      const a = base + off + R(-st.jitter, st.jitter);
+      const off = n > 1 ? (i - (n - 1) / 2) * spread : 0;
+      const a = base + off + R(-jit, jit);
       const crit = chance(st.crit);
       this.bullets.push({
         x: mzx, y: mzy,
         vx: Math.cos(a) * st.bulletSpeed, vy: Math.sin(a) * st.bulletSpeed,
         dmg: st.damage * (crit ? 2.2 : 1) * R(0.92, 1.08),
-        pierce: st.pierce, crit, life: 1.5, hits: new Set(),
+        pierce: st.pierce, crit, life: w.life, hits: new Set(),
       });
     }
     for (let i = 0; i < 5; i++)
       this.particles.push({ x: mzx, y: mzy, vx: Math.cos(base + R(-0.5, 0.5)) * R(120, 420), vy: Math.sin(base + R(-0.5, 0.5)) * R(120, 420), life: R(0.08, 0.16), max: 0.16, size: R(1.5, 3.5), color: chance(0.5) ? "#fde68a" : "#f59e0b", grav: 0, add: true });
     this.particles.push({ x: p.x - Math.cos(base) * 4, y: p.y - 42, vx: -p.face * R(50, 130), vy: R(-190, -140), life: 0.55, max: 0.55, size: 2, color: "#fbbf24", grav: 1500, add: false });
-    p.vx -= Math.cos(base) * 26;
-    this.shake(1.1);
+    p.vx -= Math.cos(base) * (w.recoil * 0.55);
+    this.shake(w.shake);
     this.sfx.shoot();
   }
 
@@ -749,7 +868,9 @@ export class Engine {
   private hitZombie(z: Zombie, b: Bullet) {
     z.hp -= b.dmg;
     z.flash = 0.09;
-    z.vx += Math.sign(b.vx) * (b.crit ? 120 : 60) / z.scale;
+    // weapon-specific stagger (Deagle/shotguns hurl zombies backwards)
+    const kb = WDEF[this.kind]?.knock ?? 60;
+    z.vx += (Math.sign(b.vx) * kb * (b.crit ? 1.6 : 1)) / (z.scale * (z.boss ? 3 : 1));
     const dir = Math.sign(b.vx);
     for (let i = 0; i < (b.crit ? 8 : 5); i++)
       this.particles.push({ x: b.x, y: b.y, vx: dir * R(30, 190) + R(-60, 60), vy: R(-130, 40), life: R(0.25, 0.5), max: 0.5, size: R(2, 4.5), color: BLOOD[RI(0, BLOOD.length - 1)], grav: 1100, add: false });
@@ -809,7 +930,7 @@ export class Engine {
       localStorage.setItem("graveyard-shift-high", String(this.high));
     }
     const stats: GameStats = {
-      wave: this.wave, kills: this.kills, level: this.pl.level,
+      stage: this.stage, wave: this.waveInStage, kills: this.kills, level: this.pl.level,
       score: this.score, time: this.playTime, best: this.high, isBest,
     };
     this.onEvent({ type: "gameover", stats });
@@ -840,54 +961,128 @@ export class Engine {
   }
 
   private rollChoices(): UpgradeChoice[] {
+    const out: UpgradeChoice[] = [];
+    // weapon unlock cards for anything not yet owned
+    const locked = WEAPON_IDS.filter((w) => !this.owned.has(w));
+    // prefer offering a class the player has never touched
+    const freshClasses = locked.filter((w) => !this.equipped[WDEF[w].cls]);
+    const forceWeapon = locked.length > 0 && (this.pl.level % 2 === 0 || this.owned.size === 1);
+    if (forceWeapon) {
+      const pickFrom = freshClasses.length > 0 && chance(0.7) ? freshClasses : locked;
+      const wid = pickFrom[RI(0, pickFrom.length - 1)];
+      const w = WDEF[wid];
+      out.push({
+        id: `unlock_${wid}`, name: w.name, icon: "Crosshair", max: 1, rarity: "weapon",
+        stacks: 0,
+        desc: `${CLASS_LABEL[w.cls]} · ${w.rpm} RPM · ${w.mag} RDS — ${w.desc}`,
+      });
+    }
     const avail = UPGRADES.filter((u) => (this.stacks[u.id] || 0) < u.max);
-    const picks: UpgradeDef[] = [];
     const pool = [...avail];
-    while (picks.length < Math.min(3, pool.length)) picks.push(pool.splice(RI(0, pool.length - 1), 1)[0]);
-    return picks.map((u) => ({
-      id: u.id, name: u.name, icon: u.icon, max: u.max, rarity: u.rarity,
-      stacks: this.stacks[u.id] || 0,
-      desc: u.desc((this.stacks[u.id] || 0) + 1),
-    }));
+    while (out.length < 3 && pool.length > 0) {
+      const u: UpgradeDef = pool.splice(RI(0, pool.length - 1), 1)[0];
+      out.push({
+        id: u.id, name: u.name, icon: u.icon, max: u.max, rarity: u.rarity,
+        stacks: this.stacks[u.id] || 0,
+        desc: u.desc((this.stacks[u.id] || 0) + 1),
+      });
+    }
+    return out;
   }
 
   applyUpgrade(id: string) {
     if (!this.modalOpen) return;
-    const prevTier = this.weaponTier();
-    this.stacks[id] = (this.stacks[id] || 0) + 1;
-    this.recompute();
-    if (id === "hp") this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + 30);
-    const t = this.weaponTier();
-    if (t > prevTier) {
-      this.tier = t;
-      this.announce("ARSENAL UPGRADED", `${WEAPONS[t - 1]} online`);
+    if (id.startsWith("unlock_")) {
+      const wid = id.slice(7);
+      this.owned.add(wid);
+      this.equip(wid, true);
+      const slot = CLASS_ORDER.indexOf(WDEF[wid].cls) + 1;
+      this.announce("WEAPON ACQUIRED", `${WDEF[wid].name} — press ${slot} to equip`);
+      this.sfx.levelup();
+    } else {
+      this.stacks[id] = (this.stacks[id] || 0) + 1;
+      this.recompute();
+      if (id === "hp") this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + 30);
+      this.sfx.upgrade();
     }
-    this.sfx.upgrade();
     this.lvlPending--;
     if (this.lvlPending > 0) {
       this.onEvent({ type: "levelup", choices: this.rollChoices() });
     } else {
-      this.modalOpen = false;
+      // stay frozen if the stage-clear screen is still up
+      this.modalOpen = this.stageIntermission;
       this.onEvent({ type: "resume" });
     }
   }
 
-  private weaponTier() {
-    const pts = (this.stacks["dmg"] || 0) + (this.stacks["rate"] || 0) + (this.stacks["multi"] || 0) + (this.stacks["pierce"] || 0) + (this.stacks["velo"] || 0);
-    return clamp(1 + TIER_PTS.filter((t) => pts >= t).length, 1, WEAPONS.length);
+  /** Equip a specific owned weapon (also becomes that class's active variant). */
+  equip(wid: string, silent = false) {
+    if (!this.owned.has(wid) || this.kind === wid) return;
+    this.kind = wid;
+    this.equipped[WDEF[wid].cls] = wid;
+    // swapping cancels an in-progress reload (per-weapon mags are preserved)
+    this.reloading = false;
+    this.reloadT = 0;
+    if (this.ammo[wid] === undefined) this.ammo[wid] = WDEF[wid].mag;
+    this.recompute();
+    // heavier weapons take longer to bring up
+    this.pl.cd = Math.max(this.pl.cd, WDEF[wid].swap);
+    if (!silent) this.sfx.click();
+    for (let i = 0; i < 8; i++)
+      this.particles.push({
+        x: this.pl.x + R(-10, 10), y: this.pl.y - 40 + R(-10, 10),
+        vx: R(-60, 60), vy: R(-70, -10), life: 0.35, max: 0.35,
+        size: R(1.5, 3), color: "#fbbf24", grav: 120, add: true,
+      });
+  }
+
+  /**
+   * Press a class key: equip that class's active variant.
+   * Pressing it again while already on that class cycles through owned variants.
+   */
+  selectClass(cls: WeaponClass) {
+    const list = byClass(cls).filter((w) => this.owned.has(w));
+    if (list.length === 0) return;
+    if (WDEF[this.kind].cls === cls && list.length > 1) {
+      const i = list.indexOf(this.kind);
+      const next = list[(i + 1) % list.length];
+      this.equip(next);
+      this.texts.push({
+        x: this.pl.x, y: this.pl.y - 88, vy: -44, life: 0.7, max: 0.7,
+        text: WDEF[next].short, color: "#fbbf24", size: 12,
+      });
+    } else {
+      this.equip(this.equipped[cls] ?? list[0]);
+    }
+  }
+
+  /** Q cycles through every owned weapon regardless of class. */
+  cycleWeapon(dir = 1) {
+    const list = WEAPON_IDS.filter((w) => this.owned.has(w));
+    if (list.length < 2) return;
+    const i = list.indexOf(this.kind);
+    this.equip(list[(i + dir + list.length) % list.length]);
   }
 
   private recompute() {
     const s = (id: string) => this.stacks[id] || 0;
+    const w = WDEF[this.kind] ?? WDEF.pistol;
+    // multishot adds pellets to shotgun, extra rounds to everything else
+    const extra = s("multi");
+    const projectiles = w.projectiles + extra * (this.kind === "shotgun" ? 2 : 1);
+    const spread = w.projectiles > 1 ? w.spread : 0.07;
     this.st = {
-      damage: 13 * (1 + 0.3 * s("dmg")),
-      fireRate: 3.1 * (1 + 0.22 * s("rate")),
-      bulletSpeed: 800 * (1 + 0.3 * s("velo")),
-      jitter: Math.max(0.006, 0.02 + 0.01 * s("multi") - 0.007 * s("velo")),
-      projectiles: 1 + s("multi"),
-      pierce: s("pierce"),
-      crit: 0.05 + 0.12 * s("crit"),
-      speed: 275 * (1 + 0.16 * s("speed")),
+      damage: w.damage * (1 + 0.3 * s("dmg")),
+      fireRate: w.fireRate * (1 + 0.22 * s("rate")),
+      bulletSpeed: w.speed * (1 + 0.3 * s("velo")),
+      jitter: Math.max(0.002, w.jitter * (1 - 0.22 * s("velo"))),
+      projectiles,
+      projSpread: spread,
+      projJitter: 1,
+      pierce: w.pierce + s("pierce"),
+      crit: 0.05 + w.critBonus + 0.12 * s("crit"),
+      // weapon class governs mobility (shotgun/BR are heavy, SMG/pistol are light)
+      speed: 275 * (1 + 0.16 * s("speed")) * w.moveMul,
       maxHp: 100 + 30 * s("hp"),
       magnet: 1 + 0.7 * s("magnet"),
       lifesteal: 0.03 * s("vamp"),
@@ -898,9 +1093,17 @@ export class Engine {
 
   /* ---------------- waves ---------------- */
 
-  private buildWave(n: number): SpawnItem[] {
+  /** Is this in-stage wave number a boss wave? (5th and 10th) */
+  private isBossWave(w: number) {
+    return w === 5 || w === WAVES_PER_STAGE;
+  }
+
+  private buildWave(n: number, inStage: number): SpawnItem[] {
     const items: SpawnItem[] = [];
-    const count = Math.min(52, Math.round(5 + n * 2.6 + n * n * 0.12));
+    const boss = this.isBossWave(inStage);
+    const count = boss
+      ? Math.min(30, Math.round(6 + n * 1.3))
+      : Math.min(52, Math.round(5 + n * 2.6 + n * n * 0.1));
     const wWalker = 1;
     const wRunner = n >= 2 ? 0.42 + n * 0.02 : 0;
     const wSpitter = n >= 4 ? 0.3 : 0;
@@ -915,23 +1118,63 @@ export class Engine {
       else type = "brute";
       items.push({ type });
     }
-    if (n % 5 === 0) items.push({ type: "brute", boss: true });
-    // shuffle
+    // shuffle the fodder
     for (let i = items.length - 1; i > 0; i--) {
       const j = RI(0, i);
       [items[i], items[j]] = [items[j], items[i]];
     }
+    if (boss) {
+      // wave 10 = double boss (stage finale)
+      const bosses = inStage === WAVES_PER_STAGE ? 1 + Math.min(2, Math.floor(this.stage / 2)) : 1;
+      for (let i = 0; i < bosses; i++) items.unshift({ type: "brute", boss: true });
+    }
     return items;
   }
 
-  private startWave(n: number) {
-    this.wave = n;
-    this.queue = this.buildWave(n);
+  private startWave(inStage: number) {
+    this.waveInStage = inStage;
+    this.wave = (this.stage - 1) * WAVES_PER_STAGE + inStage;
+    this.queue = this.buildWave(this.wave, inStage);
     this.waveTotal = this.queue.length;
     this.phase = "active";
     this.spawnT = 0.6;
-    this.announce(`WAVE ${n}`, WAVE_SUBS[n % WAVE_SUBS.length]);
+    if (this.isBossWave(inStage)) {
+      this.announce(
+        inStage === WAVES_PER_STAGE ? "FINAL WAVE" : "BOSS WAVE",
+        inStage === WAVES_PER_STAGE ? "clear it to escape this place" : "something enormous approaches"
+      );
+    } else {
+      this.announce(`WAVE ${inStage} / ${WAVES_PER_STAGE}`, WAVE_SUBS[this.wave % WAVE_SUBS.length]);
+    }
     this.sfx.wave();
+  }
+
+  /** Called after the 10th wave of a stage is cleared. */
+  private completeStage() {
+    const cleared = this.stage;
+    this.stageIntermission = true;
+    this.modalOpen = true; // freeze the sim behind the stage-clear screen
+    this.phase = "break";
+    const bonus = 500 * cleared;
+    this.score += bonus;
+    this.pl.hp = this.st.maxHp; // full heal between stages
+    this.sfx.levelup();
+    this.onEvent({ type: "stageclear", stage: cleared, next: cleared + 1 });
+  }
+
+  /** Player confirmed the stage-clear screen. */
+  advanceStage() {
+    if (!this.stageIntermission) return;
+    this.stage++;
+    this.waveInStage = 0;
+    this.stageIntermission = false;
+    this.modalOpen = false;
+    this.bullets = [];
+    this.eshots = [];
+    this.phase = "break";
+    this.breakT = 2.6;
+    const i = (this.stage - 1) % STAGE_NAMES.length;
+    this.announce(`STAGE ${this.stage} — ${STAGE_NAMES[i]}`, STAGE_SUBS[i], 2.8);
   }
 
   private mkZombie(type: ZType, x: number, hpMul: number, speedMul: number): Zombie {
@@ -1003,7 +1246,10 @@ export class Engine {
       xp: Math.round(p.xp),
       xpNext: p.xpNext,
       level: p.level,
-      wave: this.wave,
+      stage: this.stage,
+      waveInStage: this.waveInStage,
+      wavesPerStage: WAVES_PER_STAGE,
+      isBossWave: this.isBossWave(this.waveInStage),
       waveTotal: this.waveTotal,
       remaining: this.queue.length + this.zombies.length,
       score: this.score,
@@ -1011,9 +1257,28 @@ export class Engine {
       high: this.high,
       dashT: Math.max(0, p.dashCd),
       dashMax: this.st.dashMax,
-      weapon: WEAPONS[this.tier - 1],
-      tier: this.tier,
-      tierMax: WEAPONS.length,
+      weapon: WDEF[this.kind].name,
+      weaponRole: CLASS_ROLE[WDEF[this.kind].cls],
+      weapons: CLASS_ORDER.map((cls, i) => {
+        const ownedInClass = byClass(cls).filter((w) => this.owned.has(w));
+        const active = this.equipped[cls] ?? ownedInClass[0];
+        const shown = active ?? byClass(cls)[0];
+        return {
+          cls,
+          label: CLASS_LABEL[cls],
+          short: ownedInClass.length > 0 ? WDEF[shown].short : CLASS_LABEL[cls],
+          owned: ownedInClass.length > 0,
+          active: WDEF[this.kind].cls === cls,
+          key: String(i + 1),
+          ammo: this.ammo[shown] ?? 0,
+          mag: WDEF[shown].mag,
+          variants: ownedInClass.length,
+        };
+      }),
+      ammo: this.ammo[this.kind] ?? 0,
+      mag: WDEF[this.kind].mag,
+      reloading: this.reloading,
+      reloadPct: this.reloadDur > 0 ? 1 - this.reloadT / this.reloadDur : 0,
       paused: this.paused,
       muted: this.sfx.muted,
       playing: this.mode === "play" && !this.over,
@@ -1250,11 +1515,60 @@ export class Engine {
       }
     }
 
+    /* --- reload ring above player --- */
+    if (this.mode === "play" && !this.over && this.reloading) {
+      const rx = this.pl.x - cam;
+      const ry = this.pl.y - 96 + camY;
+      const pct = this.reloadDur > 0 ? 1 - this.reloadT / this.reloadDur : 0;
+      c.save();
+      c.lineCap = "round";
+      c.strokeStyle = "rgba(0,0,0,0.5)";
+      c.lineWidth = 4.5;
+      c.beginPath();
+      c.arc(rx, ry, 13, 0, TAU);
+      c.stroke();
+      c.strokeStyle = "#fbbf24";
+      c.lineWidth = 3.4;
+      c.beginPath();
+      c.arc(rx, ry, 13, -Math.PI / 2, -Math.PI / 2 + TAU * pct);
+      c.stroke();
+      c.textAlign = "center";
+      c.font = '700 9px "Space Grotesk", sans-serif';
+      c.fillStyle = "#fde68a";
+      c.fillText("RELOAD", rx, ry + 25);
+      c.restore();
+    }
+
+    /* --- low / empty ammo warning --- */
+    if (this.mode === "play" && !this.over && !this.reloading) {
+      const cur = this.ammo[this.kind] ?? 0;
+      const mag = (WDEF[this.kind] ?? WDEF.pistol).mag;
+      if (cur === 0) {
+        c.save();
+        c.textAlign = "center";
+        c.globalAlpha = 0.6 + 0.4 * Math.sin(t * 9);
+        c.font = '700 13px "Space Grotesk", sans-serif';
+        c.fillStyle = "#f87171";
+        (c as unknown as { letterSpacing: string }).letterSpacing = "3px";
+        c.fillText("PRESS R TO RELOAD", this.pl.x - cam, this.pl.y - 96 + camY);
+        (c as unknown as { letterSpacing: string }).letterSpacing = "0px";
+        c.restore();
+      } else if (cur / mag <= 0.25) {
+        c.save();
+        c.textAlign = "center";
+        c.globalAlpha = 0.45 + 0.3 * Math.sin(t * 6);
+        c.font = '700 11px "Space Grotesk", sans-serif';
+        c.fillStyle = "#fbbf24";
+        c.fillText("LOW AMMO", this.pl.x - cam, this.pl.y - 96 + camY);
+        c.restore();
+      }
+    }
+
     /* --- banner --- */
     if (this.banners.length > 0) this.drawBanner(this.banners[0]);
 
     /* --- next wave countdown --- */
-    if (this.mode === "play" && !this.over && this.phase === "break" && this.wave > 0) {
+    if (this.mode === "play" && !this.over && this.phase === "break" && !this.stageIntermission && this.wave > 0) {
       c.textAlign = "center";
       c.font = '600 13px "Space Grotesk", sans-serif';
       c.fillStyle = "rgba(226,232,240,0.55)";
@@ -1432,99 +1746,168 @@ export class Engine {
     c.fill();
   }
 
+  private limb(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, w1: number, w2: number, color: string) {
+    const c = this.ctx;
+    const a = Math.atan2(y2 - y1, x2 - x1);
+    const b = Math.atan2(y3 - y2, x3 - x2);
+    c.fillStyle = color;
+    c.beginPath();
+    c.moveTo(x1 + Math.cos(a + Math.PI / 2) * w1, y1 + Math.sin(a + Math.PI / 2) * w1);
+    c.lineTo(x2 + Math.cos(b + Math.PI / 2) * w2, y2 + Math.sin(b + Math.PI / 2) * w2);
+    c.lineTo(x3, y3);
+    c.lineTo(x2 - Math.cos(b + Math.PI / 2) * w2, y2 - Math.sin(b + Math.PI / 2) * w2);
+    c.lineTo(x1 - Math.cos(a + Math.PI / 2) * w1, y1 - Math.sin(a + Math.PI / 2) * w1);
+    c.closePath();
+    c.fill();
+  }
+
   private drawZombie(z: Zombie, cam: number, camY: number, t: number) {
     const c = this.ctx;
     const px = z.x - cam;
     if (px < -100 || px > W + 100) return;
     const py = z.y + camY;
-    // shadow
-    c.fillStyle = "rgba(0,0,0,0.42)";
+    // soft shadow
+    c.fillStyle = "rgba(0,0,0,0.45)";
     c.beginPath();
-    c.ellipse(px, GROUND + 5 + camY, 17 * z.scale, 4.5, 0, 0, TAU);
+    c.ellipse(px, GROUND + 6 + camY, 16 * z.scale, 4.5, 0, 0, TAU);
     c.fill();
 
-    const skin = SKIN[Math.floor(z.tint * SKIN.length) % SKIN.length];
+    const skinIdx = Math.floor(z.tint * SKIN.length) % SKIN.length;
+    const skin = SKIN[skinIdx];
+    const skinDark = CLOTH[skinIdx];
     const cloth = CLOTH[Math.floor(z.tint * 7) % CLOTH.length];
-    const walk = z.t * (2.6 + z.speed * 0.028);
+    const clothDark = "#161b26";
+
+    // per-type proportions
+    const bulk = z.type === "brute" ? 1.35 : z.type === "runner" ? 0.88 : 1;
+    const hunch = z.type === "runner" ? 0.3 : z.type === "spitter" ? 0.26 : 0.13;
+    const walk = z.t * (2.4 + z.speed * 0.03);
     const shamble = Math.sin(walk);
+    const shamble2 = Math.cos(walk * 0.6 + z.wob);
     const attacking = z.atk > (z.type === "brute" ? 0.75 : 0.42);
+    const reach = attacking ? 8 : 0;
 
     c.save();
     c.translate(px, py);
     c.scale(z.face * z.scale, z.scale);
 
-    // legs
-    c.strokeStyle = "#1d2430";
-    c.lineWidth = 6.4;
-    c.lineCap = "round";
-    const l1 = shamble * 7, l2 = -shamble * 7;
-    c.beginPath();
-    c.moveTo(-2, -28); c.lineTo(-3 + l1 * 0.5, -14); c.lineTo(-4 + l1, 0);
-    c.moveTo(2, -28); c.lineTo(3 + l2 * 0.5, -13); c.lineTo(4 + l2, 0);
-    c.stroke();
+    // ---- legs (staggering gait) ----
+    const l1 = shamble * 8 * bulk;
+    const l2 = -shamble * 8 * bulk;
+    const kneeLift = Math.max(0, shamble) * 5;
+    this.limb(-3, -30, -4 + l1 * 0.5, -17 + kneeLift * 0.4, -5 + l1, -1, 4.6 * bulk, 3.4, skinDark);
+    this.limb(3, -30, 4 + l2 * 0.5, -16, 5 + l2, -1, 4.6 * bulk, 3.4, skinDark);
+    // tattered trouser bottoms
+    c.fillStyle = "rgba(0,0,0,0.28)";
+    c.beginPath(); c.ellipse(-5 + l1, -1, 3.4, 1.6, 0, 0, TAU); c.fill();
+    c.beginPath(); c.ellipse(5 + l2, -1, 3.4, 1.6, 0, 0, TAU); c.fill();
 
-    // torso
+    // ---- torso ----
     c.save();
-    c.translate(0, -28);
-    c.rotate(0.14 + Math.sin(walk * 0.5 + z.wob) * 0.05);
+    c.translate(0, -30);
+    c.rotate(hunch + shamble2 * 0.04);
+    // torso mass — ragged shirt
     c.fillStyle = cloth;
-    this.rr(-9, -26, 19, 28, 5);
+    this.rr(-9 * bulk, -26 * bulk, 19 * bulk, 29, 6);
     c.fill();
-    // rips
-    c.fillStyle = "rgba(0,0,0,0.25)";
-    c.fillRect(-6, -12, 4, 7);
-    c.fillRect(3, -20, 3, 5);
+    // torn hem (ragged edges)
+    c.fillStyle = clothDark;
+    for (let i = 0; i < 5; i++) {
+      const rx = -9 * bulk + i * (19 * bulk / 5);
+      const rh = 3 + ((Math.floor(z.tint * 13) + i) % 3) * 2.4;
+      c.fillRect(rx, -1, 19 * bulk / 5, rh);
+    }
+    // grime + torn rips
+    c.fillStyle = "rgba(0,0,0,0.22)";
+    c.beginPath(); c.ellipse(-2, -16, 6 * bulk, 7, 0.2, 0, TAU); c.fill();
+    c.fillStyle = "rgba(80,14,18,0.32)";
+    c.beginPath(); c.ellipse(4, -22, 3.4 * bulk, 4, -0.3, 0, TAU); c.fill();
+    // spine/ribs hint
+    c.strokeStyle = "rgba(0,0,0,0.25)";
+    c.lineWidth = 1;
+    c.beginPath(); c.moveTo(-3, -22); c.lineTo(-3, -8); c.stroke();
 
-    // arms — reaching forward
-    c.strokeStyle = skin;
+    // ---- arms (reaching, clawed) ----
     c.lineCap = "round";
-    const reach = attacking ? 6 : 0;
-    c.lineWidth = 5.4;
-    c.beginPath();
-    c.moveTo(1, -20);
-    c.lineTo(13 + reach, -18 + Math.sin(walk) * 2);
-    c.lineTo(20 + reach, -12 + Math.sin(walk) * 2.5);
-    c.stroke();
-    c.globalAlpha = 0.55;
-    c.beginPath();
-    c.moveTo(0, -16);
-    c.lineTo(11 + reach, -10 + Math.cos(walk * 0.8) * 2);
-    c.stroke();
+    const armY = -20 + Math.sin(walk) * 2.4;
+    const armY2 = -13 + Math.cos(walk * 0.8) * 2.6;
+    const upperW = 4.4 * bulk, foreW = 3.4 * bulk;
+    // back arm (dimmer)
+    c.globalAlpha = 0.7;
+    this.limb(-1, -20, 8 + reach * 0.7, armY2 - 3, 13 + reach * 0.7, armY2 - 1, upperW, foreW, skinDark);
     c.globalAlpha = 1;
+    // front arm
+    this.limb(2, -20, 13 + reach, armY, 21 + reach, armY + 6, upperW, foreW, skin);
+    // claws
+    c.strokeStyle = "rgba(230,230,225,0.55)";
+    c.lineWidth = 1.2;
+    for (let i = -1; i <= 1; i++) {
+      c.beginPath();
+      c.moveTo(21 + reach, armY + 6 + i * 2);
+      c.lineTo(26 + reach + i, armY + 8 + i * 2.6);
+      c.stroke();
+    }
 
-    // head
+    // ---- head (jaw hanging open) ----
+    const headX = 7, headY = -33 + Math.sin(walk * 0.8 + 1) * 1.2;
+    // neck
+    this.limb(2, -25, headX - 4, headY + 5, headX - 2, headY, 3.4, 3.6, skinDark);
+    // skull
     c.fillStyle = skin;
     c.beginPath();
-    c.arc(6, -34, 8.6, 0, TAU);
+    c.ellipse(headX, headY, 8, 8.6, 0.06, 0, TAU);
     c.fill();
-    // jaw
-    c.fillStyle = "rgba(0,0,0,0.3)";
-    c.fillRect(8, -29, 6, 3);
-    // eyes
-    const eye = z.boss || z.type === "brute" ? "#f87171" : "#fef08a";
-    c.fillStyle = eye;
-    c.beginPath(); c.arc(10.5, -36, 1.7, 0, TAU); c.fill();
-    c.beginPath(); c.arc(10.5, -31.5, 1.4, 0, TAU); c.fill();
+    // grime shading on skull
+    c.fillStyle = "rgba(0,0,0,0.18)";
+    c.beginPath(); c.ellipse(headX - 2, headY + 3, 6, 5.4, 0, 0, TAU); c.fill();
+    // hanging jaw
+    c.save();
+    c.translate(headX + 4, headY + 3);
+    c.rotate(0.25 + shamble2 * 0.08);
+    c.fillStyle = skin;
+    this.rr(0, 0, 5, 6, 2.4);
+    c.fill();
+    c.fillStyle = "rgba(0,0,0,0.45)";
+    for (let i = 0; i < 2; i++) c.fillRect(1 + i * 2.2, 1.6, 1.4, 3);
+    c.restore();
+    // eyes — glowing
+    const eye = z.boss || z.type === "brute" ? "#ef4444" : "#fde047";
     c.globalAlpha = 0.3;
-    c.beginPath(); c.arc(10.5, -36, 3.4, 0, TAU); c.fill();
+    c.fillStyle = eye;
+    c.beginPath(); c.arc(headX + 4.5, headY - 2.4, 3.4, 0, TAU); c.fill();
+    c.beginPath(); c.arc(headX + 4.5, headY + 2.6, 2.8, 0, TAU); c.fill();
     c.globalAlpha = 1;
+    c.fillStyle = eye;
+    c.beginPath(); c.arc(headX + 4.6, headY - 2.4, 1.5, 0, TAU); c.fill();
+    c.beginPath(); c.arc(headX + 4.6, headY + 2.6, 1.2, 0, TAU); c.fill();
 
-    // spitter sack
+    // spitter sac on chest
     if (z.type === "spitter") {
-      c.fillStyle = "rgba(132,204,22,0.85)";
-      c.beginPath();
-      c.arc(2, -8, 6 + Math.sin(t * 5 + z.wob) * 1.2, 0, TAU);
-      c.fill();
+      const pulse = 1 + Math.sin(t * 5 + z.wob) * 0.12;
+      c.globalCompositeOperation = "lighter";
+      const gr = c.createRadialGradient(0, -9, 1, 0, -9, 9 * pulse);
+      gr.addColorStop(0, "rgba(190,242,100,0.6)");
+      gr.addColorStop(1, "rgba(132,204,22,0)");
+      c.fillStyle = gr;
+      c.fillRect(-11, -20, 22, 22);
+      c.globalCompositeOperation = "source-over";
+    }
+
+    // boss crown of gore
+    if (z.boss) {
+      c.fillStyle = "rgba(127,29,29,0.5)";
+      c.beginPath(); c.ellipse(headX, headY - 4, 9, 4, 0, 0, TAU); c.fill();
     }
 
     // hit flash
     if (z.flash > 0) {
-      c.globalAlpha = clamp(z.flash * 9, 0, 0.85);
+      c.globalAlpha = clamp(z.flash * 9, 0, 0.8);
       c.fillStyle = "#ffffff";
-      this.rr(-9, -26, 19, 28, 5);
+      c.beginPath();
+      c.ellipse(0, -14, 11 * bulk, 16, 0, 0, TAU);
       c.fill();
       c.beginPath();
-      c.arc(6, -34, 8.6, 0, TAU);
+      c.ellipse(headX, headY, 8.4, 9, 0, 0, TAU);
       c.fill();
       c.globalAlpha = 1;
     }
@@ -1548,8 +1931,10 @@ export class Engine {
     const p = this.pl;
     const px = p.x - cam;
     const py = p.y + camY;
+    const dir = p.face >= 0 ? 1 : -1;
 
-    c.fillStyle = "rgba(0,0,0,0.45)";
+    // soft contact shadow (stays under feet)
+    c.fillStyle = "rgba(0,0,0,0.5)";
     c.beginPath();
     c.ellipse(px, GROUND + 5 + camY, 19, 4.5, 0, 0, TAU);
     c.fill();
@@ -1557,110 +1942,207 @@ export class Engine {
     c.save();
     c.translate(px, py);
     if (p.ifr > 0) c.globalAlpha = 0.55 + 0.45 * Math.sin(t * 42);
-    if (p.dashT > 0) c.globalAlpha = 0.8;
+    if (p.dashT > 0) c.globalAlpha = 0.82;
 
     const run = Math.abs(p.vx) > 26 && p.grounded;
-    const bob = run ? Math.abs(Math.sin(p.walk)) * 2.2 : p.grounded ? Math.sin(t * 2.1) * 0.9 : -2;
-    const swing = run ? Math.sin(p.walk) * 0.55 : 0;
+    const bob = run ? Math.abs(Math.sin(p.walk)) * 2.4 : p.grounded ? Math.sin(t * 2.1) * 1.0 : -2.2;
+    const swing = run ? Math.sin(p.walk) : 0;
     const airLegs = !p.grounded;
 
-    c.save();
-    c.scale(p.face, 1);
-
-    // legs
-    c.strokeStyle = "#1f2a3a";
-    c.lineWidth = 7;
-    c.lineCap = "round";
+    // ---- legs (flip x in screen space by dir) ----
     const l1 = airLegs ? 6 : swing * 8;
     const l2 = airLegs ? -7 : -swing * 8;
-    c.beginPath();
-    c.moveTo(-1, -28 + bob);
-    c.lineTo(-2 + l1 * 0.55, -14 + bob * 0.5);
-    c.lineTo(-3 + l1, airLegs ? -8 : 0);
-    c.moveTo(1, -28 + bob);
-    c.lineTo(2 + l2 * 0.55, -13 + bob * 0.5);
-    c.lineTo(3 + l2, airLegs ? -4 : 0);
-    c.stroke();
+    this.limb(-1, -28 + bob, dir * (-2 + l1 * 0.55), -14 + bob * 0.5, dir * (-3 + l1), airLegs ? -9 : 0, 7, 4.4, "#1b2536");
+    this.limb(1, -28 + bob, dir * (2 + l2 * 0.55), -13 + bob * 0.5, dir * (3 + l2), airLegs ? -5 : 0, 7, 4.4, "#243349");
     // boots
-    c.fillStyle = "#0b0f16";
-    c.fillRect(-6 + (airLegs ? 6 : swing * 8), airLegs ? -10 : -2.5, 10, 4.5);
-    c.fillRect(-2 + (airLegs ? -7 : -swing * 8), airLegs ? -6 : -2.5, 10, 4.5);
-
-    // torso (jacket)
-    c.fillStyle = "#0e7490";
-    this.rr(-10, -56 + bob, 20, 28, 6);
-    c.fill();
-    c.fillStyle = "#155e75";
-    this.rr(-10, -56 + bob, 20, 9, 6);
-    c.fill();
-    // zipper
-    c.strokeStyle = "rgba(255,255,255,0.25)";
-    c.lineWidth = 1;
+    c.fillStyle = "#080c13";
     c.beginPath();
-    c.moveTo(0, -47 + bob);
-    c.lineTo(0, -30 + bob);
+    c.ellipse(dir * (-3 + l1) + dir * 3, airLegs ? -9.5 : -1.4, 5.6, 3.2, 0, 0, TAU);
+    c.fill();
+    c.beginPath();
+    c.ellipse(dir * (3 + l2) + dir * 3, airLegs ? -5.4 : -1.4, 5.6, 3.2, 0, 0, TAU);
+    c.fill();
+
+    // ---- torso (olive tactical jacket) with lean ----
+    c.save();
+    const lean = clamp(p.vx * 0.0009, -0.12, 0.12);
+    c.translate(0, bob);
+    c.rotate(lean * dir);
+    // back strap / pack
+    c.fillStyle = "#0b3a47";
+    this.rr(-11 * dir, -56, 19 * dir, 29, 6);
+    c.fill();
+    c.fillStyle = "#0e7490";
+    this.rr(-11 * dir, -56, 19 * dir, 10, 6);
+    c.fill();
+    // chest rig + ammo pouch
+    c.fillStyle = "#0c4a5e";
+    this.rr(-9 * dir, -50, 15 * dir, 9, 3);
+    c.fill();
+    c.fillStyle = "#0a3542";
+    this.rr(-2 * dir, -40, 8 * dir, 7, 2);
+    c.fill();
+    // zipper + highlight
+    c.strokeStyle = "rgba(255,255,255,0.28)";
+    c.lineWidth = 1.2;
+    c.beginPath();
+    c.moveTo(0 * dir, -46);
+    c.lineTo(0 * dir, -28);
+    c.stroke();
+    c.strokeStyle = "rgba(255,255,255,0.14)";
+    c.lineWidth = 1.4;
+    c.beginPath();
+    c.moveTo(-9 * dir, -50); c.lineTo(-9 * dir, -30);
     c.stroke();
 
-    // head + beanie
-    c.fillStyle = "#e8b08c";
-    c.beginPath();
-    c.arc(2, -63 + bob, 8.4, 0, TAU);
+    // ---- head + beanie ----
+    c.save();
+    c.translate(2 * dir, -64);
+    c.rotate(clamp(lean * 0.6 * dir, -0.1, 0.1));
+    // neck
+    c.fillStyle = "#a9764f";
+    this.rr(-2.4 * dir, 5, 5 * dir, 6, 2);
     c.fill();
+    // skull
+    c.fillStyle = "#e8b892";
+    c.beginPath();
+    c.ellipse(0, 0, 8.4, 8.8, 0, 0, TAU);
+    c.fill();
+    // jaw shade
+    c.fillStyle = "rgba(160,110,70,0.5)";
+    c.beginPath();
+    c.ellipse(-2 * dir, 3, 6, 5, 0, 0, TAU);
+    c.fill();
+    // beanie
     c.fillStyle = "#7f1d1d";
     c.beginPath();
-    c.arc(2, -65.4 + bob, 8.6, Math.PI * 1.02, Math.PI * 1.98);
+    c.ellipse(0, -1.6, 8.8, 8.4, 0, Math.PI, TAU);
     c.fill();
-    c.fillRect(-6.6, -67.4 + bob, 17.2, 3.4);
+    c.fillRect(-8.8, -3, 17.6, 4);
+    c.fillStyle = "#5b1414";
+    c.fillRect(-8.8, -0.2, 17.6, 1.6);
     // eye
     c.fillStyle = "#1c1917";
-    c.fillRect(6.4, -63.5 + bob, 2.2, 2.4);
+    c.beginPath();
+    c.ellipse(4.4 * dir, 0.4, 1.7, 1.9, 0, 0, TAU);
+    c.fill();
+    c.fillStyle = "rgba(255,255,255,0.5)";
+    c.beginPath();
+    c.ellipse(4.9 * dir, -0.2, 0.6, 0.7, 0, 0, TAU);
+    c.fill();
+    c.restore();
 
-    // arm + gun (rotates with aim)
-    const aimL = p.face === 1 ? p.aim : Math.PI - p.aim;
+    // ---- arm + weapon (rotates in screen space — no mirroring) ----
+    const kick = clamp(p.flash * 12, 0, 1);
+    const recoil = kick * 5;
+    const shoulderX = 1 * dir, shoulderY = -49 + bob;
+    const wcls = WDEF[this.kind].cls;
+    const gunLen =
+      this.kind === "deagle" ? 38
+      : wcls === "carbine" ? 42
+      : wcls === "smg" ? 36
+      : wcls === "shotgun" ? 40
+      : 32;
     c.save();
-    c.translate(1, -49 + bob);
-    c.rotate(clamp(aimL, -1.25, 1.25));
+    c.translate(shoulderX, shoulderY);
+    // arm points along aim (screen space, so left/right both work)
+    c.rotate(p.aim);
+    // sleeve
     c.strokeStyle = "#0b5a6e";
-    c.lineWidth = 6;
+    c.lineWidth = 6.4;
+    c.lineCap = "round";
     c.beginPath();
     c.moveTo(0, 0);
-    c.lineTo(14, 0);
+    c.lineTo(gunLen * 0.42, recoil * 0.4);
     c.stroke();
-    // gun
-    c.fillStyle = "#0f172a";
-    this.rr(10, -5.5, 30, 9, 2);
+    // hand
+    c.fillStyle = "#e8b892";
+    c.beginPath();
+    c.arc(gunLen * 0.46, recoil * 0.4, 2.6, 0, TAU);
     c.fill();
-    c.fillStyle = "#334155";
-    c.fillRect(34, -3.5, 13, 4);
-    c.fillRect(17, 2.5, 5, 9);
-    c.fillStyle = "#64748b";
-    c.fillRect(12, -5.5, 8, 2);
+    // weapon body
+    const bx = gunLen * 0.4 + recoil;
+    c.fillStyle = "#111a26";
+    this.rr(bx, -5, gunLen - gunLen * 0.4, 9, 2);
+    c.fill();
+    c.fillStyle = "#28323f";
+    // silhouette by weapon class / notable model
+    const tail = bx + (gunLen - gunLen * 0.4);
+    if (wcls === "shotgun") {
+      c.fillRect(tail, -3.6, gunLen * 0.6, 4);
+      c.fillRect(tail, 1.2, gunLen * 0.5, 3);
+      if (this.kind === "benelli") {
+        c.fillStyle = "#3f2a18";
+        c.fillRect(bx - 4, 1.5, 8, 6); // classic stock, tube fed
+      } else {
+        c.fillStyle = "#1c2634";
+        c.beginPath();
+        c.arc(bx + 8, 6.5, 5.4, 0, TAU); // big drum magazine
+        c.fill();
+      }
+    } else if (wcls === "carbine") {
+      c.fillRect(tail, -3, gunLen * 0.62, 3.6);
+      c.fillStyle = "#1c2634";
+      this.rr(bx - 4, -4.4, 8, 6, 2);
+      c.fill(); // optic
+      c.fillRect(bx + 7, 3, 4, 9); // straight mag
+      if (this.kind === "asval") {
+        c.fillStyle = "#0d141d";
+        c.fillRect(tail + gunLen * 0.2, -4.2, gunLen * 0.42, 6); // suppressor shroud
+      }
+    } else if (wcls === "smg") {
+      c.fillRect(tail, -3.2, gunLen * 0.5, 3.2);
+      c.fillStyle = "#1c2634";
+      if (this.kind === "bizon") {
+        this.rr(bx + 3, 3, 17, 5, 2.5); // helical mag under barrel
+        c.fill();
+      } else if (this.kind === "p90") {
+        this.rr(bx - 2, -8, 20, 4, 2); // top-mounted horizontal mag
+        c.fill();
+      } else {
+        c.fillRect(bx + 6, 3, 4, 10); // vector box mag
+      }
+    } else {
+      // pistols
+      c.fillRect(tail, -3.4, gunLen * 0.46, 3.4);
+      c.fillStyle = "#3f2a18";
+      c.fillRect(bx - 3, 1, 6, 8); // grip
+      if (this.kind === "deagle") {
+        c.fillStyle = "#4b5563";
+        c.fillRect(tail, -5, gunLen * 0.46, 1.8); // heavy slab slide rib
+      } else if (this.kind === "tec9") {
+        c.fillStyle = "#1c2634";
+        c.fillRect(bx + 4, 2, 3.4, 11); // long stick mag
+      }
+    }
     // muzzle flash
     if (p.flash > 0) {
       const fa = clamp(p.flash * 16, 0, 1);
+      const mx = gunLen + recoil;
       c.globalCompositeOperation = "lighter";
-      const fg = c.createRadialGradient(50, 0, 0, 50, 0, 26);
+      const fg = c.createRadialGradient(mx, 0, 0, mx, 0, 26);
       fg.addColorStop(0, `rgba(254,240,138,${0.95 * fa})`);
-      fg.addColorStop(0.4, `rgba(251,146,60,${0.6 * fa})`);
+      fg.addColorStop(0.4, `rgba(251,146,60,${0.55 * fa})`);
       fg.addColorStop(1, "rgba(251,146,60,0)");
       c.fillStyle = fg;
-      c.fillRect(50 - 26, -26, 52, 52);
-      c.strokeStyle = `rgba(254,240,138,${0.8 * fa})`;
-      c.lineWidth = 2;
+      c.fillRect(mx - 26, -26, 52, 52);
+      c.strokeStyle = `rgba(254,240,138,${0.85 * fa})`;
+      c.lineWidth = 2.2;
       c.beginPath();
-      c.moveTo(50, 0); c.lineTo(50 + 16 * fa, -7 * fa);
-      c.moveTo(50, 0); c.lineTo(50 + 18 * fa, 5 * fa);
+      c.moveTo(mx, 0); c.lineTo(mx + 16 * fa, -7 * fa);
+      c.moveTo(mx, 0); c.lineTo(mx + 18 * fa, 5 * fa);
+      c.moveTo(mx, 0); c.lineTo(mx + 12 * fa, 0);
       c.stroke();
       c.globalCompositeOperation = "source-over";
     }
-    c.restore(); // arm/gun
-    c.restore(); // face scale
+    c.restore();
+    c.restore(); // torso lean
     c.restore(); // root
 
     // muzzle world light
     if (p.flash > 0) {
-      const mzx = p.x + Math.cos(p.aim) * 50 - cam;
-      const mzy = p.y - 49 + bob + Math.sin(p.aim) * 50 + camY;
+      const mzx = p.x + Math.cos(p.aim) * (gunLen + 6) - cam;
+      const mzy = p.y - 49 + bob + Math.sin(p.aim) * (gunLen + 6) + camY;
       this.ctx.globalCompositeOperation = "lighter";
       const lg = this.ctx.createRadialGradient(mzx, mzy, 4, mzx, mzy, 130);
       lg.addColorStop(0, `rgba(251,191,36,${0.16 * clamp(p.flash * 16, 0, 1)})`);
