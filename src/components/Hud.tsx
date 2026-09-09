@@ -1,5 +1,6 @@
 import type { HudState } from "../game/types";
 import { DEPLOYABLE_DEFS, type DeployableKind } from "../game/arena";
+import { ATTACK_LABELS } from "../game/boss";
 import {
   Heart, Skull, Pause, Volume2, VolumeX, Crosshair, Zap, Trophy, Lock,
   Ear, Bot, Hand, DoorOpen, Gem,
@@ -182,12 +183,8 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
       {hud.bossActive && (
         <div className="absolute left-1/2 top-24 w-[420px] -translate-x-1/2">
           <div className="mb-1 flex items-center justify-between text-[10px] font-bold tracking-[0.2em] text-red-300">
-            <span>◤ THE JUGGERNAUT ALPHA ◢</span>
-            <span className="text-white/40">
-              {hud.bossAttack
-                ? hud.bossAttack === "slam" ? "GROUND SLAM" : hud.bossAttack === "mortar" ? "PUKE MORTAR" : "SCREAMING CALL"
-                : ""}
-            </span>
+            <span>{hud.bossName ? `◤ ${hud.bossName} ◢` : ""}</span>
+            <span className="text-white/40">{hud.bossAttack ? ATTACK_LABELS[hud.bossAttack] : ""}</span>
           </div>
           <div className="relative flex h-2.5 gap-0.5 overflow-hidden rounded-full border border-red-400/25 bg-black/60">
             {[0, 1, 2].map((seg) => {

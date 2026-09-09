@@ -91,8 +91,10 @@ export interface HudState {
   /** seconds left in the per-prep repair window — RepairPanel shows while > 0 */
   repairWindowT: number;
   repairWindowMax: number;
-  /** the Juggernaut Alpha is alive — gates the 3-segment boss bar */
+  /** a Terminal Defense boss is alive — gates the 3-segment boss bar */
   bossActive: boolean;
+  /** display name for the boss bar — data-driven per BOSS_DEFS, null when no boss is active */
+  bossName: string | null;
   bossHp: number;
   bossHpMax: number;
   bossPhase: 0 | 1 | 2;

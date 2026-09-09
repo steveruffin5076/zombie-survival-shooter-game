@@ -8,7 +8,9 @@ export interface StageDef {
   sub: string;
   /** waves in this stage; the last one plus WAVES_PER_STAGE/2 is also a boss wave */
   wavesPerStage: number;
-  /** in-stage wave numbers (1-based) that spawn a boss */
+  /** in-stage wave numbers (1-based) that get boss-tier treatment (HUD pips,
+   *  buildWave's finale-swarm stacking); empty on exploration stages, which
+   *  never have a boss at all */
   bossWaves: number[];
   worldW: number;
   themeId: string;
@@ -16,22 +18,25 @@ export interface StageDef {
   actId: number;
   /** this stage's position within its act — 3 is always the Terminal Defense */
   indexInAct: 0 | 1 | 2 | 3;
-  /** the act's unique boss id, set only on the Terminal Defense stage. Not yet
-   *  consumed by spawnBoss() — see Phase 9 in docs/progress.md */
+  /** the act's unique boss id, set only on the Terminal Defense stage */
   bossId?: string;
   /** fixed-camera arena mode — replaces the old `themeId === "arena"` gate */
   fixedCamera: boolean;
 }
 
 const WAVES_PER_STAGE = 9;
-const BOSS_WAVES = [5, 9];
+/** boss + finale-swarm waves on the Terminal Defense stage — unchanged from
+ *  today's Ground Zero, so its already-tuned encounter doesn't move */
+const DEFENSE_BOSS_WAVES = [5, 9];
 
 function stagesForAct(act: ActDef): Omit<StageDef, "id">[] {
   return act.stages.map((s, i) => ({
     name: s.name,
     sub: s.sub,
     wavesPerStage: WAVES_PER_STAGE,
-    bossWaves: BOSS_WAVES,
+    // exploration stages: no boss, no finale swarm — the climax lives in the
+    // Terminal Defense stage only, per enhancement-1.md's per-act structure
+    bossWaves: s.fixedCamera ? DEFENSE_BOSS_WAVES : [],
     worldW: s.worldW,
     themeId: s.themeId,
     actId: act.id,

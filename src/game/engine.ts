@@ -15,7 +15,7 @@ import {
   type Deployable, type DeployableKind,
 } from "./arena";
 import {
-  cooldownFor, phaseFor, pickAttack, windupFor,
+  BOSS_DEFS, cooldownFor, phaseFor, pickAttack, windupFor,
   type AimTarget, type BossAttack,
 } from "./boss";
 import type { EngineEvent, GameStats, HudState, InventorySnapshot, UpgradeChoice } from "./types";
@@ -35,6 +35,13 @@ const RI = (a: number, b: number) => Math.floor(R(a, b + 1));
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const chance = (p: number) => Math.random() < p;
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+/** Darkens (factor<1) or lightens (factor>1) a "#rrggbb" hex color — used to
+ * derive a boss's torso/limb/head tones from one BossDef.color. */
+const shadeHex = (hex: string, factor: number) => {
+  const n = parseInt(hex.slice(1), 16);
+  const ch = (shift: number) => clamp(Math.round(((n >> shift) & 0xff) * factor), 0, 255);
+  return `rgb(${ch(16)}, ${ch(8)}, ${ch(0)})`;
+};
 
 type ZType = "walker" | "runner" | "brute" | "spitter";
 type ModalKind = "levelup" | "stageclear";
@@ -80,6 +87,8 @@ interface Zombie {
 /** The Juggernaut Alpha — a unique boss encounter, deliberately kept out of `zombies[]` so its
  * windup/attack state machine doesn't have to fit the generic per-zombie walk-toward-player loop. */
 interface Boss extends AimTarget {
+  /** which BOSS_DEFS entry this instance is — looked up wherever attack/timing/art needs it */
+  defId: string;
   vx: number; face: 1 | -1; flash: number; hurtT: number;
   hp: number; maxHp: number; phase: 0 | 1 | 2;
   state: "seek" | "windup" | "attack" | "cooldown";
@@ -1220,7 +1229,7 @@ export class Engine {
     this.zombies = zs.filter((z) => !z.dead);
   }
 
-  private static readonly BOSS_PITCH: Record<BossAttack, number> = { slam: 90, mortar: 260, call: 170 };
+  private static readonly BOSS_PITCH: Record<BossAttack, number> = { slam: 90, mortar: 260, call: 170, shieldcharge: 130 };
 
   private updateBoss(dt: number) {
     const b = this.boss;
@@ -1233,6 +1242,7 @@ export class Engine {
     const dx = p.x - b.x;
     b.face = dx >= 0 ? 1 : -1;
 
+    const def = BOSS_DEFS[b.defId];
     if (b.state === "seek" || b.state === "cooldown") {
       b.vx = lerp(b.vx, Math.sign(dx || 1) * 68, Math.min(1, 4 * dt));
       b.x = clamp(b.x + b.vx * dt, 10, this.worldW - 10);
@@ -1244,9 +1254,9 @@ export class Engine {
       }
       if (b.timer <= 0) {
         if (b.state === "seek") {
-          b.attack = pickAttack(b.attack);
+          b.attack = pickAttack(b.attack, def.attacks);
           b.state = "windup";
-          b.timer = windupFor(b.attack, b.phase);
+          b.timer = windupFor(b.attack, b.phase, def);
           this.spawnSuppressT = 2;
           if (b.attack === "mortar") { b.targetX = p.x; b.targetY = p.y; }
           this.sfx.bossWindup(Engine.BOSS_PITCH[b.attack]);
@@ -1261,7 +1271,7 @@ export class Engine {
       if (b.timer <= 0) {
         this.executeBossAttack(b);
         b.state = "cooldown";
-        b.timer = cooldownFor(b.phase);
+        b.timer = cooldownFor(b.phase, def);
       }
     }
   }
@@ -1304,6 +1314,27 @@ export class Engine {
           x: b.targetX + R(-30, 30), y: GROUND, vx: R(-140, 140), vy: R(-220, -40),
           life: R(0.3, 0.65), max: 0.65, size: R(2, 5), color: "#65a30d", grav: 900, add: true,
         });
+    } else if (b.attack === "shieldcharge") {
+      // The Neighborhood Watch's signature move — same melee-AOE-and-knockback
+      // shape as Ground Slam, just a tighter radius (a forward charge, not an
+      // omnidirectional ground pound) and its own tell color. No new physics.
+      const radius = 110;
+      this.sfx.bossSlam();
+      this.shake(9);
+      const dx = p.x - b.x;
+      if (Math.abs(dx) < radius && Math.abs(p.y - b.y) < 90) {
+        this.hurtPlayer(30 * (1 + (this.power - 1) * 0.05), Math.sign(dx || 1) * 320);
+      }
+      for (const d of this.deployables) {
+        const wx = slotToWorldX(d.lane, d.slot, centerX);
+        if (Math.abs(wx - b.x) < radius) d.hp = Math.max(0, d.hp - d.maxHp * 0.6);
+      }
+      this.deployables = this.deployables.filter((d) => d.hp > 0);
+      for (let i = 0; i < 20; i++)
+        this.particles.push({
+          x: b.x + R(-radius, radius), y: GROUND, vx: R(-100, 100), vy: R(-160, -20),
+          life: R(0.3, 0.6), max: 0.6, size: R(2, 5), color: "#38bdf8", grav: 900, add: false,
+        });
     } else {
       // Screaming Call — reuses the existing runner-ambush system rather than
       // rebuilding add-spawning; "one active ambush max" falls out for free
@@ -1326,6 +1357,7 @@ export class Engine {
   }
 
   private killBoss(b: Boss) {
+    const def = BOSS_DEFS[b.defId];
     b.dead = true;
     b.hp = 0;
     this.kills++;
@@ -1336,7 +1368,7 @@ export class Engine {
     for (let i = 0; i < 40; i++)
       this.particles.push({ x: b.x + R(-10, 10), y: b.y - 60 * b.scale + R(-16, 16), vx: R(-160, 160), vy: R(-220, 60), life: R(0.3, 0.75), max: 0.75, size: R(2.5, 6), color: BLOOD[RI(0, BLOOD.length - 1)], grav: 1200, add: false });
     this.decals.push({ x: b.x, s: b.scale * 1.6, a: 0.6 });
-    this.announce("THE JUGGERNAUT FALLS", "it's not getting back up", 2.6);
+    this.announce(def.deathBanner, def.deathSub, 2.6);
   }
 
   /** Rouses one sleeper. A loud wake (gunfire, high threat) spreads to nearby sleepers too. */
@@ -2121,12 +2153,15 @@ export class Engine {
     this.boss = null;
     this.bossForceTarget = false;
     const finalWave = inStage === this.stageDef.wavesPerStage;
-    const bossWave = this.stageDef.bossWaves.includes(inStage);
+    // exploration stages carry no bossId, so they never spawn a boss even if
+    // their bossWaves array still marks a wave for the finale-swarm treatment
+    const bossWave = this.stageDef.bossId != null && this.stageDef.bossWaves.includes(inStage);
     if (bossWave && !finalWave) this.spawnBoss();
     if (bossWave) {
+      const def = BOSS_DEFS[this.stageDef.bossId!] ?? BOSS_DEFS.juggernaut;
       this.announce(
-        finalWave ? "FINAL WAVE" : "◤ THE JUGGERNAUT ALPHA ◢",
-        finalWave ? "clear it to escape this place" : "it doesn't flinch"
+        finalWave ? "FINAL WAVE" : def.tellName,
+        finalWave ? "clear it to escape this place" : def.tellSub
       );
     } else {
       this.announce(`WAVE ${inStage} / ${this.stageDef.wavesPerStage}`, WAVE_SUBS[this.waveIndex % WAVE_SUBS.length]);
@@ -2134,14 +2169,19 @@ export class Engine {
     this.sfx.wave();
   }
 
-  /** Spawns the Juggernaut Alpha for the stage's mid-stage boss wave. */
+  /** Spawns the stage's Terminal Defense boss, per its `bossId` (defaults to the Juggernaut). */
   private spawnBoss() {
+    // stub acts (II, III, V, VI) name a bossId whose BOSS_DEFS entry doesn't
+    // exist until that act's own phase lands — fall back to the Juggernaut
+    // rather than crash, same as an unset bossId
+    const def = BOSS_DEFS[this.stageDef.bossId ?? "juggernaut"] ?? BOSS_DEFS.juggernaut;
     const hpMul = 1 + (this.power - 1) * 0.22;
-    const maxHp = Math.round(150 * hpMul * 4.4 * 1.3);
+    const maxHp = Math.round(150 * hpMul * 4.4 * 1.3 * def.hpMul);
     const side: 1 | -1 = chance(0.5) ? -1 : 1;
     const x = clamp(side < 0 ? this.cam - 200 : this.cam + W + 200, 40, this.worldW - 40);
     this.boss = {
-      x, y: GROUND, r: 40, scale: 2.1, dead: false,
+      defId: def.id,
+      x, y: GROUND, r: def.r, scale: def.scale, dead: false,
       vx: 0, face: -side as 1 | -1, flash: 0, hurtT: 0,
       hp: maxHp, maxHp, phase: 0,
       state: "seek", attack: null, timer: R(1, 1.8), atk: 0,
@@ -2473,12 +2513,13 @@ export class Engine {
       repairWindowT: Math.max(0, this.repairWindowT),
       repairWindowMax: 12,
       bossActive: !!this.boss && !this.boss.dead,
+      bossName: this.boss ? BOSS_DEFS[this.boss.defId].name : null,
       bossHp: this.boss?.hp ?? 0,
       bossHpMax: this.boss?.maxHp ?? 0,
       bossPhase: this.boss?.phase ?? 0,
       bossAttack: this.boss?.state === "windup" ? this.boss.attack : null,
       bossWindupPct: this.boss?.state === "windup" && this.boss.attack
-        ? 1 - clamp(this.boss.timer / windupFor(this.boss.attack, this.boss.phase), 0, 1)
+        ? 1 - clamp(this.boss.timer / windupFor(this.boss.attack, this.boss.phase, BOSS_DEFS[this.boss.defId]), 0, 1)
         : 0,
       bossForceTarget: this.bossForceTarget,
     };
@@ -3490,17 +3531,19 @@ export class Engine {
   }
 
   private static readonly BOSS_TELL_COLOR: Record<BossAttack, string> = {
-    slam: "#f97316", mortar: "#84cc16", call: "#c084fc",
+    slam: "#f97316", mortar: "#84cc16", call: "#c084fc", shieldcharge: "#38bdf8",
   };
 
   /** Ground telegraphs for the boss's windups — drawn under the boss so the tell reads clearly. */
   private drawBossTelegraphs(b: Boss, cam: number, camY: number) {
     if (b.state !== "windup" || !b.attack) return;
     const c = this.ctx;
-    const pct = 1 - clamp(b.timer / windupFor(b.attack, b.phase), 0, 1);
+    const def = BOSS_DEFS[b.defId];
+    const pct = 1 - clamp(b.timer / windupFor(b.attack, b.phase, def), 0, 1);
     const color = Engine.BOSS_TELL_COLOR[b.attack];
     const cx = b.attack === "mortar" ? b.targetX - cam : b.x - cam;
-    const radius = (b.attack === "slam" ? 150 : b.attack === "mortar" ? 95 : 0) * (0.35 + 0.65 * pct);
+    const meleeRadius = b.attack === "slam" ? 150 : b.attack === "shieldcharge" ? 110 : 0;
+    const radius = (b.attack === "mortar" ? 95 : meleeRadius) * (0.35 + 0.65 * pct);
     if (radius > 0) {
       c.save();
       c.globalAlpha = 0.35 + 0.25 * Math.sin(pct * 18);
@@ -3519,6 +3562,15 @@ export class Engine {
     if (px < -140 || px > W + 140) return;
     const py = b.y + camY;
     this.drawBossTelegraphs(b, cam, camY);
+    const def = BOSS_DEFS[b.defId];
+    // one base color per boss, shaded into torso/head/limb tones —
+    // parameterizes the art instead of duplicating this ~90-line anatomy per boss
+    const cTorso = def.color;
+    const cArmFront = def.color;
+    const cHead = shadeHex(def.color, 0.78);
+    const cLegBack = shadeHex(def.color, 0.73);
+    const cLegFront = shadeHex(def.color, 0.64);
+    const cArmBack = shadeHex(def.color, 0.87);
 
     c.fillStyle = "rgba(0,0,0,0.5)";
     c.beginPath();
@@ -3527,7 +3579,7 @@ export class Engine {
 
     const walk = b.state === "windup" ? 0 : b.t * 2.1;
     const shamble = Math.sin(walk);
-    const windupPct = b.state === "windup" && b.attack ? 1 - clamp(b.timer / windupFor(b.attack, b.phase), 0, 1) : 0;
+    const windupPct = b.state === "windup" && b.attack ? 1 - clamp(b.timer / windupFor(b.attack, b.phase, def), 0, 1) : 0;
     const coreColor = b.attack ? Engine.BOSS_TELL_COLOR[b.attack] : "#ef4444";
 
     c.save();
@@ -3536,11 +3588,11 @@ export class Engine {
 
     // legs
     const l1 = shamble * 6;
-    this.limb(-6, -34, -7 + l1 * 0.5, -18, -8 + l1, -2, 8, 6, "#2a2018");
-    this.limb(6, -34, 7 - l1 * 0.5, -18, 8 - l1, -2, 8, 6, "#241d16");
+    this.limb(-6, -34, -7 + l1 * 0.5, -18, -8 + l1, -2, 8, 6, cLegBack);
+    this.limb(6, -34, 7 - l1 * 0.5, -18, 8 - l1, -2, 8, 6, cLegFront);
 
     // torso — hulking slab
-    c.fillStyle = "#3a2c1e";
+    c.fillStyle = cTorso;
     this.rr(-17, -70, 34, 42, 8);
     c.fill();
     c.fillStyle = "rgba(0,0,0,0.3)";
@@ -3555,11 +3607,23 @@ export class Engine {
 
     // arms
     const armSwing = Math.sin(walk * 0.8) * 4;
-    this.limb(-14, -58, -24 + armSwing, -38, -28 + armSwing, -14, 8, 6.4, "#332616");
-    this.limb(14, -58, 24 - armSwing, -38, 28 - armSwing, -14, 8, 6.4, "#3a2c1e");
+    this.limb(-14, -58, -24 + armSwing, -38, -28 + armSwing, -14, 8, 6.4, cArmBack);
+    this.limb(14, -58, 24 - armSwing, -38, 28 - armSwing, -14, 8, 6.4, cArmFront);
+
+    // riot shield accessory — the Neighborhood Watch only, over the forward arm
+    if (def.shield) {
+      c.save();
+      c.fillStyle = "#334155";
+      c.strokeStyle = "rgba(226,232,240,0.35)";
+      c.lineWidth = 1.2;
+      this.rr(22, -48, 12, 32, 3);
+      c.fill();
+      c.stroke();
+      c.restore();
+    }
 
     // head, small relative to the frame
-    c.fillStyle = "#2c2118";
+    c.fillStyle = cHead;
     c.beginPath(); c.ellipse(0, -78, 10, 9.4, 0, 0, TAU); c.fill();
     c.fillStyle = coreColor;
     c.globalAlpha = 0.35 + 0.4 * windupPct;
