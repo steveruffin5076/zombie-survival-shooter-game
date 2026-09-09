@@ -1,4 +1,5 @@
 import type { DeployableKind } from "./arena";
+import type { BossAttack } from "./boss";
 
 export interface WeaponSlot {
   /** weapon class this slot represents */
@@ -90,6 +91,17 @@ export interface HudState {
   /** seconds left in the per-prep repair window — RepairPanel shows while > 0 */
   repairWindowT: number;
   repairWindowMax: number;
+  /** the Juggernaut Alpha is alive — gates the 3-segment boss bar */
+  bossActive: boolean;
+  bossHp: number;
+  bossHpMax: number;
+  bossPhase: 0 | 1 | 2;
+  /** the attack currently telegraphing, if the boss is mid-windup */
+  bossAttack: BossAttack | null;
+  /** 0..1 windup progress toward that attack landing */
+  bossWindupPct: number;
+  /** KeyE toggle — forces auto-aim onto the boss over a close add */
+  bossForceTarget: boolean;
 }
 
 export type Rarity = "common" | "rare" | "epic" | "weapon";

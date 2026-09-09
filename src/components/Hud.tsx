@@ -5,6 +5,8 @@ import {
   Ear, Bot, Hand, DoorOpen, Gem,
 } from "lucide-react";
 
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+
 const TOOL_KEYS: { kind: DeployableKind; key: string }[] = [
   { kind: "barricade", key: "1" },
   { kind: "wire", key: "2" },
@@ -175,6 +177,51 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
           </>
         )}
       </div>
+
+      {/* boss bar — 3 segments (one per enrage phase), the attack telegraph, and the E-lock hint */}
+      {hud.bossActive && (
+        <div className="absolute left-1/2 top-24 w-[420px] -translate-x-1/2">
+          <div className="mb-1 flex items-center justify-between text-[10px] font-bold tracking-[0.2em] text-red-300">
+            <span>◤ THE JUGGERNAUT ALPHA ◢</span>
+            <span className="text-white/40">
+              {hud.bossAttack
+                ? hud.bossAttack === "slam" ? "GROUND SLAM" : hud.bossAttack === "mortar" ? "PUKE MORTAR" : "SCREAMING CALL"
+                : ""}
+            </span>
+          </div>
+          <div className="relative flex h-2.5 gap-0.5 overflow-hidden rounded-full border border-red-400/25 bg-black/60">
+            {[0, 1, 2].map((seg) => {
+              const segStart = (2 - seg) / 3;
+              const segEnd = (3 - seg) / 3;
+              const hpFrac = hud.bossHpMax > 0 ? hud.bossHp / hud.bossHpMax : 0;
+              const filled = clamp01((hpFrac - segStart) / (segEnd - segStart));
+              return (
+                <div key={seg} className="relative h-full flex-1 overflow-hidden bg-black/40">
+                  <div
+                    className={`h-full transition-[width] duration-150 ${
+                      seg === 0 ? "bg-gradient-to-r from-red-600 to-red-400"
+                        : seg === 1 ? "bg-gradient-to-r from-orange-600 to-orange-400"
+                        : "bg-gradient-to-r from-amber-500 to-yellow-400"
+                    }`}
+                    style={{ width: `${filled * 100}%` }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          {hud.bossAttack && (
+            <div className="mx-auto mt-1 h-1 w-40 overflow-hidden rounded-full bg-black/50">
+              <div
+                className="h-full rounded-full bg-red-400 transition-[width] duration-75"
+                style={{ width: `${hud.bossWindupPct * 100}%` }}
+              />
+            </div>
+          )}
+          <div className={`mt-1 text-center text-[9px] font-bold tracking-widest ${hud.bossForceTarget ? "text-emerald-300" : "text-white/35"}`}>
+            <span className="kbd">E</span> {hud.bossForceTarget ? "LOCKED ON BOSS" : "FORCE TARGET"}
+          </div>
+        </div>
+      )}
 
       {/* top-right: score + controls */}
       <div className="absolute right-6 top-6 flex items-start gap-4">

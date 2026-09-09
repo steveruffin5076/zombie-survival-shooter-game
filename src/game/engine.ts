@@ -15,6 +15,10 @@ import {
   DEPLOYABLE_DEFS, canPlaceAt, slotToWorldX, worldXToSlot,
   type Deployable, type DeployableKind,
 } from "./arena";
+import {
+  cooldownFor, phaseFor, pickAttack, windupFor,
+  type AimTarget, type BossAttack,
+} from "./boss";
 import type { EngineEvent, GameStats, HudState, InventorySnapshot, UpgradeChoice } from "./types";
 
 /* ------------------------------------------------------------------ */
@@ -74,10 +78,28 @@ interface Zombie {
   slowT: number;
 }
 
+/** The Juggernaut Alpha — a unique boss encounter, deliberately kept out of `zombies[]` so its
+ * windup/attack state machine doesn't have to fit the generic per-zombie walk-toward-player loop. */
+interface Boss extends AimTarget {
+  vx: number; face: 1 | -1; flash: number; hurtT: number;
+  hp: number; maxHp: number; phase: 0 | 1 | 2;
+  state: "seek" | "windup" | "attack" | "cooldown";
+  attack: BossAttack | null;
+  /** counts down within the current state */
+  timer: number;
+  /** melee contact-damage cooldown, same idiom as Zombie.atk */
+  atk: number;
+  /** locked-in strike point for Puke Mortar, set the instant its windup starts */
+  targetX: number; targetY: number;
+  tint: number; wob: number; t: number;
+}
+
 interface Bullet {
   x: number; y: number; vx: number; vy: number;
   dmg: number; pierce: number; crit: boolean; life: number;
   hits: Set<Zombie>;
+  /** guards against re-hitting the boss on a later frame while a piercing shot is still overlapping it */
+  hitBoss: boolean;
 }
 
 interface EShot { x: number; y: number; vx: number; vy: number; dmg: number; life: number }
@@ -162,8 +184,8 @@ export class Engine {
   private autoFire = true;
   /** lane the player is locked to */
   private facing: 1 | -1 = 1;
-  /** current auto-aim target */
-  private target: Zombie | null = null;
+  /** current auto-aim target — a Zombie or the Boss, whichever wins acquireTarget()'s priority */
+  private target: AimTarget | null = null;
   private onTarget = false;
   private laserFlash = 0;
   /** blocks fire() briefly after a lane flip; scaled by the weapon's pivotMul */
@@ -182,6 +204,14 @@ export class Engine {
   private gems: Gem[] = [];
   private texts: FloatText[] = [];
   private decals: Decal[] = [];
+
+  /* --- boss: The Juggernaut Alpha, spawned on each stage's mid-stage boss wave --- */
+  private boss: Boss | null = null;
+  /** toggled by KeyE while the boss is alive — forces auto-aim onto it over a close add */
+  private bossForceTarget = false;
+  /** after any boss windup starts, regular lane-edge zombie spawns pause this long —
+   * keeps the telegraph readable instead of a fresh walker wandering into frame mid-tell */
+  private spawnSuppressT = 0;
 
   private power = 0;             // difficulty scalar, drives every balance formula
   private waveIndex = 0;         // monotonic global wave number, for display only
@@ -384,6 +414,9 @@ export class Engine {
     this.gems = [];
     this.texts = [];
     this.decals = [];
+    this.boss = null;
+    this.bossForceTarget = false;
+    this.spawnSuppressT = 0;
     this.waveInStage = 0;
     this.stageIntermission = false;
     this.waveTotal = 0;
@@ -510,6 +543,9 @@ export class Engine {
         this.selectClass(CLASS_ORDER[i]);
       }
     }
+    // during a boss fight, E forces the lock onto it over a close add (crate/gate E is
+    // a held check elsewhere in update(), so this discrete toggle never steals that input)
+    if (c === "KeyE" && this.boss && !this.boss.dead) this.bossForceTarget = !this.bossForceTarget;
     if (c === "KeyQ") this.cycleWeapon(1);
     if (c === "KeyR") this.startReload(true);
     if (c === "KeyF" || c === "KeyV") this.toggleFireMode();
@@ -773,14 +809,15 @@ export class Engine {
         if (this.prepT <= 0) this.startWave(this.waveInStage + 1);
       }
     } else if (this.phase === "active") {
+      if (this.spawnSuppressT > 0) this.spawnSuppressT -= dt;
       this.spawnT -= dt;
       const cap = Math.min(26, 8 + this.power);
-      if (this.spawnT <= 0 && this.queue.length > 0 && this.zombies.length < cap) {
+      if (this.spawnSuppressT <= 0 && this.spawnT <= 0 && this.queue.length > 0 && this.zombies.length < cap) {
         this.spawnT = Math.max(0.3, 1.5 - this.power * 0.07);
         const n = this.power >= 6 && this.queue.length > 2 && chance(0.4) ? 2 : 1;
         for (let i = 0; i < n && this.queue.length > 0; i++) this.spawnZombie(this.queue.shift()!);
       }
-      if (this.queue.length === 0 && this.zombies.length === 0) {
+      if (this.queue.length === 0 && this.zombies.length === 0 && (!this.boss || this.boss.dead)) {
         this.score += 50 * this.power;
         if (this.waveInStage >= this.stageDef.wavesPerStage) {
           this.startTravel();
@@ -802,6 +839,7 @@ export class Engine {
     this.updateDeployables();
 
     this.updateZombies(dt);
+    this.updateBoss(dt);
     this.updateBullets(dt);
     this.updateEshots(dt);
     this.updateGems(dt);
@@ -827,12 +865,14 @@ export class Engine {
 
   /* ============ TARGETING: directional lock auto-aim ============ */
 
-  /** Nearest zombie in the faced lane, within the weapon's effective range. */
+  /** Nearest zombie in the faced lane, within the weapon's effective range — plus the
+   * boss lock rule: with the Juggernaut alive, it wins the lock unless a regular zombie
+   * ("add") is within 130px, or the player forced it with KeyE (`bossForceTarget`). */
   private acquireTarget() {
     const p = this.pl;
     const w = WDEF[this.kind];
     const range = w.range * (1 + 0.12 * (this.stacks["velo"] || 0));
-    let best: Zombie | null = null;
+    let best: AimTarget | null = null;
     let bestD = Infinity;
     for (const z of this.zombies) {
       if (z.dead) continue;
@@ -844,6 +884,16 @@ export class Engine {
       // must be roughly on our plane (not mid-air above us)
       if (Math.abs(z.y - p.y) > 90) continue;
       if (d < bestD) { bestD = d; best = z; }
+    }
+    const boss = this.boss;
+    if (boss && !boss.dead) {
+      const dx = boss.x - p.x;
+      const inLane = this.facing === 1 ? dx >= -14 : dx <= 14;
+      const d = Math.abs(dx);
+      if (inLane && d <= range && Math.abs(boss.y - p.y) <= 90) {
+        const addIsClose = best !== null && bestD < 130;
+        if (!addIsClose || this.bossForceTarget) best = boss;
+      }
     }
     const had = this.onTarget;
     this.target = best;
@@ -1027,6 +1077,7 @@ export class Engine {
         // bullets expire at the weapon's effective range
         life: (w.range * (1 + 0.12 * (this.stacks["velo"] || 0))) / st.bulletSpeed,
         hits: new Set(),
+        hitBoss: false,
       });
     }
     // noise + suppressor wear
@@ -1140,6 +1191,125 @@ export class Engine {
     this.zombies = zs.filter((z) => !z.dead);
   }
 
+  private static readonly BOSS_PITCH: Record<BossAttack, number> = { slam: 90, mortar: 260, call: 170 };
+
+  private updateBoss(dt: number) {
+    const b = this.boss;
+    if (!b || b.dead) return;
+    const p = this.pl;
+    b.t += dt;
+    b.flash = Math.max(0, b.flash - dt);
+    b.hurtT = Math.max(0, b.hurtT - dt);
+    b.phase = phaseFor(b.hp / b.maxHp);
+    const dx = p.x - b.x;
+    b.face = dx >= 0 ? 1 : -1;
+
+    if (b.state === "seek" || b.state === "cooldown") {
+      b.vx = lerp(b.vx, Math.sign(dx || 1) * 68, Math.min(1, 4 * dt));
+      b.x = clamp(b.x + b.vx * dt, 10, this.worldW - 10);
+      b.timer -= dt;
+      if (b.atk > 0) b.atk -= dt;
+      else if (Math.abs(dx) < b.r + 18 && Math.abs(p.y - b.y) < 56) {
+        b.atk = 1.1;
+        this.hurtPlayer(26 * (1 + (this.power - 1) * 0.05), Math.sign(dx || 1) * 260);
+      }
+      if (b.timer <= 0) {
+        if (b.state === "seek") {
+          b.attack = pickAttack(b.attack);
+          b.state = "windup";
+          b.timer = windupFor(b.attack, b.phase);
+          this.spawnSuppressT = 2;
+          if (b.attack === "mortar") { b.targetX = p.x; b.targetY = p.y; }
+          this.sfx.bossWindup(Engine.BOSS_PITCH[b.attack]);
+        } else {
+          b.state = "seek";
+          b.timer = R(0.6, 1.2);
+        }
+      }
+    } else if (b.state === "windup") {
+      b.vx = 0;
+      b.timer -= dt;
+      if (b.timer <= 0) {
+        this.executeBossAttack(b);
+        b.state = "cooldown";
+        b.timer = cooldownFor(b.phase);
+      }
+    }
+  }
+
+  private executeBossAttack(b: Boss) {
+    const p = this.pl;
+    const centerX = this.worldW / 2;
+    if (b.attack === "slam") {
+      const radius = 150;
+      this.sfx.bossSlam();
+      this.shake(11);
+      const dx = p.x - b.x;
+      if (Math.abs(dx) < radius && Math.abs(p.y - b.y) < 90) {
+        this.hurtPlayer(32 * (1 + (this.power - 1) * 0.05), Math.sign(dx || 1) * 340);
+      }
+      for (const d of this.deployables) {
+        const wx = slotToWorldX(d.lane, d.slot, centerX);
+        if (Math.abs(wx - b.x) < radius) d.hp = Math.max(0, d.hp - d.maxHp * 0.6);
+      }
+      this.deployables = this.deployables.filter((d) => d.hp > 0);
+      for (let i = 0; i < 26; i++)
+        this.particles.push({
+          x: b.x + R(-radius, radius), y: GROUND, vx: R(-100, 100), vy: R(-160, -20),
+          life: R(0.3, 0.6), max: 0.6, size: R(2, 5), color: "#7a6a52", grav: 900, add: false,
+        });
+    } else if (b.attack === "mortar") {
+      const radius = 95;
+      this.sfx.hurt();
+      const dx = b.targetX - p.x, dy = b.targetY - p.y;
+      if (dx * dx + dy * dy < radius * radius) {
+        this.hurtPlayer(27 * (1 + (this.power - 1) * 0.05), Math.sign(-dx || 1) * 260);
+      }
+      for (const d of this.deployables) {
+        const wx = slotToWorldX(d.lane, d.slot, centerX);
+        if (Math.abs(wx - b.targetX) < radius) d.hp = Math.max(0, d.hp - d.maxHp * 0.6);
+      }
+      this.deployables = this.deployables.filter((d) => d.hp > 0);
+      for (let i = 0; i < 20; i++)
+        this.particles.push({
+          x: b.targetX + R(-30, 30), y: GROUND, vx: R(-140, 140), vy: R(-220, -40),
+          life: R(0.3, 0.65), max: 0.65, size: R(2, 5), color: "#65a30d", grav: 900, add: true,
+        });
+    } else {
+      // Screaming Call — reuses the existing runner-ambush system rather than
+      // rebuilding add-spawning; "one active ambush max" falls out for free
+      this.sfx.bossRoar();
+      if (this.ambushT <= 0) this.triggerAmbush(2);
+    }
+  }
+
+  private hitBoss(b: Boss, bullet: Bullet) {
+    b.hp -= bullet.dmg;
+    b.flash = 0.09;
+    b.hurtT = 0.3;
+    const dir = Math.sign(bullet.vx);
+    for (let i = 0; i < (bullet.crit ? 8 : 5); i++)
+      this.particles.push({ x: bullet.x, y: bullet.y, vx: dir * R(30, 190) + R(-60, 60), vy: R(-130, 40), life: R(0.25, 0.5), max: 0.5, size: R(2, 4.5), color: BLOOD[RI(0, BLOOD.length - 1)], grav: 1100, add: false });
+    this.texts.push({ x: b.x + R(-8, 8), y: b.y - 100 * b.scale, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(bullet.dmg)), color: bullet.crit ? "#fbbf24" : "rgba(255,255,255,.8)", size: bullet.crit ? 17 : 12 });
+    if (this.st.lifesteal > 0) this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + bullet.dmg * this.st.lifesteal);
+    this.sfx.zhit();
+    if (b.hp <= 0) this.killBoss(b);
+  }
+
+  private killBoss(b: Boss) {
+    b.dead = true;
+    b.hp = 0;
+    this.kills++;
+    this.score += Math.round(600 * (1 + this.power * 0.06));
+    this.shake(12);
+    this.sfx.zdie();
+    this.gainXp(40);
+    for (let i = 0; i < 40; i++)
+      this.particles.push({ x: b.x + R(-10, 10), y: b.y - 60 * b.scale + R(-16, 16), vx: R(-160, 160), vy: R(-220, 60), life: R(0.3, 0.75), max: 0.75, size: R(2.5, 6), color: BLOOD[RI(0, BLOOD.length - 1)], grav: 1200, add: false });
+    this.decals.push({ x: b.x, s: b.scale * 1.6, a: 0.6 });
+    this.announce("THE JUGGERNAUT FALLS", "it's not getting back up", 2.6);
+  }
+
   /** Rouses one sleeper. A loud wake (gunfire, high threat) spreads to nearby sleepers too. */
   private wakeZombie(z: Zombie, spread = false) {
     if (!z.dormant) return;
@@ -1199,6 +1369,18 @@ export class Engine {
           }
           if (b.pierce > 0) b.pierce--;
           else { b.life = 0; break; }
+        }
+      }
+      if (b.life > 0 && this.boss && !this.boss.dead && !b.hitBoss) {
+        const boss = this.boss;
+        const cy = boss.y - 60 * boss.scale;
+        const rr = boss.r + 7;
+        const dx = b.x - boss.x, dy = b.y - cy;
+        if (dx * dx + dy * dy < rr * rr * 1.25) {
+          b.hitBoss = true;
+          this.hitBoss(boss, b);
+          if (b.pierce > 0) b.pierce--;
+          else b.life = 0;
         }
       }
     }
@@ -1782,10 +1964,14 @@ export class Engine {
       [items[i], items[j]] = [items[j], items[i]];
     }
     if (boss) {
-      // final wave of the stage = double boss (stage finale)
       const finalWave = inStage === this.stageDef.wavesPerStage;
-      const bosses = finalWave ? 1 + Math.min(2, Math.floor(this.stage / 2)) : 1;
-      for (let i = 0; i < bosses; i++) items.unshift({ type: "brute", boss: true });
+      if (finalWave) {
+        // final wave of the stage = a swarm finale, stacking brute-bosses among the fodder
+        const bosses = 1 + Math.min(2, Math.floor(this.stage / 2));
+        for (let i = 0; i < bosses; i++) items.unshift({ type: "brute", boss: true });
+      }
+      // the mid-stage boss wave instead gets the Juggernaut Alpha — spawned
+      // separately by startWave(), never through the fodder queue
     }
     return items;
   }
@@ -1903,16 +2089,37 @@ export class Engine {
     this.waveTotal = this.queue.length;
     this.phase = "active";
     this.spawnT = 0.6;
+    this.boss = null;
+    this.bossForceTarget = false;
     const finalWave = inStage === this.stageDef.wavesPerStage;
-    if (this.stageDef.bossWaves.includes(inStage)) {
+    const bossWave = this.stageDef.bossWaves.includes(inStage);
+    if (bossWave && !finalWave) this.spawnBoss();
+    if (bossWave) {
       this.announce(
-        finalWave ? "FINAL WAVE" : "BOSS WAVE",
-        finalWave ? "clear it to escape this place" : "something enormous approaches"
+        finalWave ? "FINAL WAVE" : "◤ THE JUGGERNAUT ALPHA ◢",
+        finalWave ? "clear it to escape this place" : "it doesn't flinch"
       );
     } else {
       this.announce(`WAVE ${inStage} / ${this.stageDef.wavesPerStage}`, WAVE_SUBS[this.waveIndex % WAVE_SUBS.length]);
     }
     this.sfx.wave();
+  }
+
+  /** Spawns the Juggernaut Alpha for the stage's mid-stage boss wave. */
+  private spawnBoss() {
+    const hpMul = 1 + (this.power - 1) * 0.22;
+    const maxHp = Math.round(150 * hpMul * 4.4 * 1.3);
+    const side: 1 | -1 = chance(0.5) ? -1 : 1;
+    const x = clamp(side < 0 ? this.cam - 200 : this.cam + W + 200, 40, this.worldW - 40);
+    this.boss = {
+      x, y: GROUND, r: 40, scale: 2.1, dead: false,
+      vx: 0, face: -side as 1 | -1, flash: 0, hurtT: 0,
+      hp: maxHp, maxHp, phase: 0,
+      state: "seek", attack: null, timer: R(1, 1.8), atk: 0,
+      targetX: this.pl.x, targetY: this.pl.y,
+      tint: Math.random(), wob: R(0, TAU), t: 0,
+    };
+    this.shake(9);
   }
 
   /** Called once the stage's last wave is cleared — walk to the safe house. */
@@ -2236,6 +2443,15 @@ export class Engine {
       scrap: this.scrap,
       repairWindowT: Math.max(0, this.repairWindowT),
       repairWindowMax: 12,
+      bossActive: !!this.boss && !this.boss.dead,
+      bossHp: this.boss?.hp ?? 0,
+      bossHpMax: this.boss?.maxHp ?? 0,
+      bossPhase: this.boss?.phase ?? 0,
+      bossAttack: this.boss?.state === "windup" ? this.boss.attack : null,
+      bossWindupPct: this.boss?.state === "windup" && this.boss.attack
+        ? 1 - clamp(this.boss.timer / windupFor(this.boss.attack, this.boss.phase), 0, 1)
+        : 0,
+      bossForceTarget: this.bossForceTarget,
     };
   }
 
@@ -2463,6 +2679,7 @@ export class Engine {
     c.restore();
 
     for (const z of this.zombies) this.drawZombie(z, cam, camY, t);
+    if (this.boss && !this.boss.dead) this.drawBoss(this.boss, cam, camY, t);
     if (this.mode === "play" && !this.over) this.drawPlayer(cam, camY, t);
 
     c.save();
@@ -3240,6 +3457,119 @@ export class Engine {
         c.fillText("z", px + 6 * z.scale + i * 3, py - 86 * z.scale - ph * 10);
       }
       c.restore();
+    }
+  }
+
+  private static readonly BOSS_TELL_COLOR: Record<BossAttack, string> = {
+    slam: "#f97316", mortar: "#84cc16", call: "#c084fc",
+  };
+
+  /** Ground telegraphs for the boss's windups — drawn under the boss so the tell reads clearly. */
+  private drawBossTelegraphs(b: Boss, cam: number, camY: number) {
+    if (b.state !== "windup" || !b.attack) return;
+    const c = this.ctx;
+    const pct = 1 - clamp(b.timer / windupFor(b.attack, b.phase), 0, 1);
+    const color = Engine.BOSS_TELL_COLOR[b.attack];
+    const cx = b.attack === "mortar" ? b.targetX - cam : b.x - cam;
+    const radius = (b.attack === "slam" ? 150 : b.attack === "mortar" ? 95 : 0) * (0.35 + 0.65 * pct);
+    if (radius > 0) {
+      c.save();
+      c.globalAlpha = 0.35 + 0.25 * Math.sin(pct * 18);
+      c.strokeStyle = color;
+      c.lineWidth = 3;
+      c.beginPath();
+      c.ellipse(cx, GROUND + camY + 4, radius, radius * 0.32, 0, 0, TAU);
+      c.stroke();
+      c.restore();
+    }
+  }
+
+  private drawBoss(b: Boss, cam: number, camY: number, t: number) {
+    const c = this.ctx;
+    const px = b.x - cam;
+    if (px < -140 || px > W + 140) return;
+    const py = b.y + camY;
+    this.drawBossTelegraphs(b, cam, camY);
+
+    c.fillStyle = "rgba(0,0,0,0.5)";
+    c.beginPath();
+    c.ellipse(px, GROUND + 8 + camY, 30 * b.scale, 7, 0, 0, TAU);
+    c.fill();
+
+    const walk = b.state === "windup" ? 0 : b.t * 2.1;
+    const shamble = Math.sin(walk);
+    const windupPct = b.state === "windup" && b.attack ? 1 - clamp(b.timer / windupFor(b.attack, b.phase), 0, 1) : 0;
+    const coreColor = b.attack ? Engine.BOSS_TELL_COLOR[b.attack] : "#ef4444";
+
+    c.save();
+    c.translate(px, py);
+    c.scale(b.face * b.scale, b.scale);
+
+    // legs
+    const l1 = shamble * 6;
+    this.limb(-6, -34, -7 + l1 * 0.5, -18, -8 + l1, -2, 8, 6, "#2a2018");
+    this.limb(6, -34, 7 - l1 * 0.5, -18, 8 - l1, -2, 8, 6, "#241d16");
+
+    // torso — hulking slab
+    c.fillStyle = "#3a2c1e";
+    this.rr(-17, -70, 34, 42, 8);
+    c.fill();
+    c.fillStyle = "rgba(0,0,0,0.3)";
+    this.rr(-17, -70, 34, 14, 8);
+    c.fill();
+    // cracked-plate texture
+    c.strokeStyle = "rgba(0,0,0,0.35)";
+    c.lineWidth = 1.4;
+    for (let i = -1; i <= 1; i++) {
+      c.beginPath(); c.moveTo(i * 9, -68); c.lineTo(i * 9 + 4, -30); c.stroke();
+    }
+
+    // arms
+    const armSwing = Math.sin(walk * 0.8) * 4;
+    this.limb(-14, -58, -24 + armSwing, -38, -28 + armSwing, -14, 8, 6.4, "#332616");
+    this.limb(14, -58, 24 - armSwing, -38, 28 - armSwing, -14, 8, 6.4, "#3a2c1e");
+
+    // head, small relative to the frame
+    c.fillStyle = "#2c2118";
+    c.beginPath(); c.ellipse(0, -78, 10, 9.4, 0, 0, TAU); c.fill();
+    c.fillStyle = coreColor;
+    c.globalAlpha = 0.35 + 0.4 * windupPct;
+    c.beginPath(); c.arc(3, -80, 3, 0, TAU); c.fill();
+    c.globalAlpha = 1;
+    c.fillStyle = coreColor;
+    c.beginPath(); c.arc(3.2, -80, 1.4, 0, TAU); c.fill();
+
+    // chest core — glows brighter and faster the deeper into the windup
+    const coreR = 7 + windupPct * 5 + Math.sin(t * (6 + windupPct * 14)) * 1.2;
+    c.globalCompositeOperation = "lighter";
+    const gr = c.createRadialGradient(0, -50, 1, 0, -50, coreR);
+    gr.addColorStop(0, coreColor);
+    gr.addColorStop(1, "rgba(0,0,0,0)");
+    c.fillStyle = gr;
+    c.globalAlpha = 0.5 + 0.4 * windupPct;
+    c.beginPath(); c.arc(0, -50, coreR, 0, TAU); c.fill();
+    c.globalAlpha = 1;
+    c.globalCompositeOperation = "source-over";
+
+    if (b.flash > 0) {
+      c.globalAlpha = clamp(b.flash * 9, 0, 0.8);
+      c.fillStyle = "#ffffff";
+      c.beginPath(); c.ellipse(0, -46, 20, 34, 0, 0, TAU); c.fill();
+      c.globalAlpha = 1;
+    }
+    c.restore();
+
+    // boss hp bar — 3 segments, one per enrage phase
+    const barW = 70 * b.scale, barX = px - barW / 2, barY = py - 128 * b.scale;
+    c.fillStyle = "rgba(0,0,0,0.6)";
+    c.fillRect(barX, barY, barW, 5);
+    const pct = clamp(b.hp / b.maxHp, 0, 1);
+    c.fillStyle = b.phase === 0 ? "#f87171" : b.phase === 1 ? "#fb923c" : "#facc15";
+    c.fillRect(barX, barY, barW * pct, 5);
+    c.strokeStyle = "rgba(0,0,0,0.7)";
+    c.lineWidth = 1;
+    for (const seg of [1 / 3, 2 / 3]) {
+      c.beginPath(); c.moveTo(barX + barW * seg, barY); c.lineTo(barX + barW * seg, barY + 5); c.stroke();
     }
   }
 
