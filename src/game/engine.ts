@@ -63,12 +63,12 @@ const ZCONF: Record<ZType, ZConf> = {
 };
 
 const WAVE_SUBS = [
-  "they smell your blood",
+  "they see your light",
   "hold the line",
   "the horde thickens",
   "no mercy",
   "they just keep coming",
-  "stay in the light",
+  "stay quiet, stay dark",
 ];
 
 const SKIN = ["#7a8f66", "#6d8560", "#87976b", "#5f7a55"];

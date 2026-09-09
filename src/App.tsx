@@ -4,6 +4,7 @@ import type {
   EngineEvent, GameStats, HudState, InventorySnapshot, MissionStats, UpgradeChoice,
 } from "./game/types";
 import type { Deployable, DeployableKind } from "./game/arena";
+import type { RunMode } from "./game/stages";
 import Hud from "./components/Hud";
 import { Menu, LevelUpModal, PauseMenu, GameOver, StageClear, MissionWin } from "./components/Overlays";
 import InventoryOverlay from "./components/InventoryOverlay";
@@ -95,10 +96,9 @@ export default function App() {
     };
   }, []);
 
-  const start = useCallback(() => {
-    // TEMP dev hook until Phase 2 wires a real Mission/Endless menu selector:
-    // ?mode=mission plays the finite 4-stage build, everything else stays endless.
-    const mode = new URLSearchParams(window.location.search).get("mode") === "mission" ? "mission" : "endless";
+  const lastModeRef = useRef<RunMode>("endless");
+  const start = useCallback((mode: RunMode) => {
+    lastModeRef.current = mode;
     engineRef.current?.startGame(mode);
     setScreen("game");
     setOver(null);
@@ -109,6 +109,8 @@ export default function App() {
     setShowInventory(false);
     setPaused(false);
   }, []);
+  // Restart (from pause/game-over/mission-win) replays whichever mode was last started.
+  const restart = useCallback(() => start(lastModeRef.current), [start]);
 
   const quit = useCallback(() => {
     engineRef.current?.toMenu();
@@ -272,16 +274,16 @@ export default function App() {
         {paused && screen === "game" && !over && !choices && !missionWin && (
           <PauseMenu
             onResume={resume}
-            onRestart={start}
+            onRestart={restart}
             onQuit={quit}
             muted={hud?.muted ?? false}
             onMute={toggleMute}
           />
         )}
 
-        {over && <GameOver stats={over} onRestart={start} onQuit={quit} />}
+        {over && <GameOver stats={over} onRestart={restart} onQuit={quit} />}
 
-        {missionWin && <MissionWin stats={missionWin} onRestart={start} onQuit={quit} />}
+        {missionWin && <MissionWin stats={missionWin} onRestart={restart} onQuit={quit} />}
       </div>
     </div>
   );

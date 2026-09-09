@@ -160,7 +160,7 @@ export const WEAPONS: Record<string, WeaponDef> = {
     speed: 1400, pierce: 0, knock: 52, recoil: 24, shake: 1.4,
     mag: 30, reserve: 120, reload: 1.9, moveMul: 1.02, swap: 0.17, critBonus: 0.1,
     range: RANGE.carbine * 1.05, noise: NOISE.carbine, supp: 22,
-    desc: "Manageable recoil — lands on the head hitbox consistently.",
+    desc: "Manageable recoil — the highest crit chance of any carbine.",
   },
   asval: {
     id: "asval", name: "AS Val", short: "AS VAL", cls: "carbine",

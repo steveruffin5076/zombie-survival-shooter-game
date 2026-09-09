@@ -2,11 +2,11 @@
 
 **Source of truth for "what's next".** Update this before ending a session.
 
-- **Current plan (Phases 8–12):** `~/.claude/plans/logical-moseying-reddy.md` — the Act I vertical slice of `enhancement-1.md`
+- **Completed plan (Phases 8–12):** `~/.claude/plans/logical-moseying-reddy.md` — the Act I vertical slice of `enhancement-1.md`
 - **Completed plan (Phases 0–7):** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
 - **Design doc driving Phases 8+:** `enhancement-1.md` (repo root, on `main`)
-- **Last updated:** 2026-09-09 (Phases 8-11 done; Phase 12 planned, not started)
+- **Last updated:** 2026-09-09 (Phases 8-12 done — the Act I vertical slice is complete)
 
 ---
 
@@ -16,7 +16,7 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 
 **Phases 8–12 are a new plan**, driven by `enhancement-1.md`: a narrative/campaign overhaul that replaces the 4-stage mission with **6 Acts × (3 exploration stages + 1 Terminal Defense stage)** under the Aetheris Dynamics / "Redshift" fiction. Scope decision: build the **Act I vertical slice** — the act framework sized to hold all six acts, with Act I fully authored and Acts II–VI present as thin data rows.
 
-**Immediate next action:** Phase 12 (lore reskin + Act I polish + act select) — the last phase of the Act I vertical slice. Phases 8-11 are done: the mission is winnable at all 24 stages, Act I fights The Neighborhood Watch (Juggernaut Alpha moved to Act IV, unchanged tuning), spawns the Screamer, and awards 3 real intel documents readable on a Hideout board.
+**Immediate next action:** none from this plan — Phases 8-12 are all DONE. The Act I vertical slice of `enhancement-1.md` is complete: 24-stage campaign framework, Act I fighting The Neighborhood Watch and the Screamer with 3 readable intel documents, a real Menu with mode selection and an act-select grid, and Acts II-VI present as honest stub data. Building out any of Acts II-VI is a new phase/plan — see "Risks carried into Phases 8–12" for what it needs first (per-act boss art, wider `decorWeights`, and the three doc-described mechanics flagged unbudgeted).
 
 ### Branch state
 
@@ -200,12 +200,23 @@ Wave size (`:1975`) and the spawn cap (`:843`) saturate at their own `Math.min` 
 - **Verified:** `npx tsc --noEmit` clean · `npm test` **80/80** (74 + 5 `intel.test.ts` + net +1 `save.test.ts` after replacing its now-invalid "always forces hideout to null" case with a v1→v2 migration case and a malformed-array-filtering case) · `npm run build` succeeds (426.7kB) · **in-browser** via `?debug=1`/`window.__engine`: `startTravel()` on stage 1 seeds a crate with `docId: "act1_doc0"` positioned between player and safe house; stage 4 (Terminal Defense) seeds none; `openCrate()` on a doc crate awards `docsFound`/`intel` and leaves the backpack untouched, and is idempotent against a second open; a checkpoint round-trip (`writeCheckpoint` → `localStorage` → `retryStage`) preserves `docsFound` exactly; **then a real end-to-end pass** — actual `keyboard.down("KeyE")` held for real time opened the crate for real, `StageClear → Continue` opened `SafeHouseOverlay` showing "HIDEOUT BOARD", clicking the now-lit first slot opened `IntelDocOverlay` rendering the real masthead/headline/body text, and the other two still-undiscovered slots were confirmed disabled; a full 24-stage fast-forward that opens every crate along the way finished with all 3 of Act I's documents found and the mission completing cleanly
 - **Rule honored:** reuses the crate spawn/hold-to-open/HUD-prompt interaction outright (only `updateCrates`'s phase guard needed a narrow, documented exception); `docsFound` mirrors `deposit`'s exact persistence idiom rather than inventing a new one; `intel.ts` is pure data, `IntelDocOverlay`/the Hideout board pull copy from it directly rather than routing prose through the engine
 
-### Phase 12 — Lore reskin + Act I polish + act select
-- [ ] **Already done, no work needed:** the SIG P365 reskin — `weapons.ts:69-78` defines `p365`, `STARTER = "p365"` (`:188`), `save.ts:58` defaults to it
-- [ ] Display strings safe to change: `index.html:10`; `Overlays.tsx:22, 35-37, 173, 283`; `engine.ts` banner copy at `:330, 968, 984, 1339, 1614, 1690, 2127-2132, 2186, 2334, 2370` and `WAVE_SUBS` (`:53-60`); `stages.ts` `name`/`sub`; `weapons.ts` descriptions — note `:163` claims a "head hitbox" that does not exist and should be reworded
-- [ ] **Must NOT rename (internal identifiers):** `ZType` values (`:39`, keys into `ZCONF`, branched on in `drawZombie` — *add* `"screamer"`, don't rename); `themeId` strings (they key `THEMES`; `"arena"`'s behavioral role is neutralized in Phase 8); `WEAPONS` keys and `STARTER` (persisted by `save.ts` as `kind`/`owned`/`equipped`); `localStorage` keys `graveyard-shift-save-${mode}` (`save.ts:34`) and `graveyard-shift-best-time` (`:2307`); `BossAttack` literals (asserted in `boss.test.ts:15-16, 40`)
-- [ ] Themes: `ThemeDef`'s 7 fixed `decorWeights` (`themes.ts:13-14`) suffice for Act I — it needs only a foliage bump to `suburbs` (`:28`) plus an arena-palette entry. They genuinely break at Act III (conveyors, containers) and Act V (neon signage); widening to `Partial<Record<DecorKind, number>>` is a clean isolated `genDecor` change — **defer it**
-- [ ] Replace the `?mode=mission` dev hook (`App.tsx:98-102`) with a real Menu selector plus an act-select grid — the natural home for "Acts II–VI coming soon"
+### Phase 12 — Lore reskin + Act I polish + act select — DONE (2026-09-09)
+- [x] Confirmed the SIG P365 reskin needed no work — already shipped in Phase 0
+- [x] Fixed one real factual error found while auditing display strings: the M4A1's description claimed it "lands on the head hitbox consistently" — no headshot mechanic exists anywhere in the game (confirmed independently in Phase 10 too). Reworded to `"Manageable recoil — the highest crit chance of any carbine"`, which is true (`critBonus: 0.1`, the highest of the 3 carbines)
+- [x] Fixed a real **lore contradiction**, not just a stale string: `WAVE_SUBS` included `"they smell your blood"` and `"stay in the light"` — but `enhancement-1.md` establishes Phantoms as blind in the dark and drawn to light/sound, not scent, so "stay in the light" told the player to do the exact opposite of what keeps them safe. Replaced with `"they see your light"` and `"stay quiet, stay dark"`
+- [x] Reskinned the Menu screen's blurb to state the doc's core hook directly — "Day 90 After Redshift. The infected see nothing in the dark — only your laser sight, and the instant it crosses one, its tracking locks to you." — the in-fiction justification for the existing auto-aim/auto-fire, stated once, prominently, where every player reads it before their first run
+- [x] `themes.ts`: bumped `suburbs`'s `tree` decor weight 2 → 4 for Act I's "foliage-heavy neighborhood streets." The plan's "plus an arena-palette entry" turned out to be unnecessary — Act I's Terminal Defense stage already has its own complete, tuned `arena` palette from Phase 5; nothing new was needed for Act I specifically
+- [x] Replaced the `?mode=mission` dev hook with a real Menu: `Menu`'s `onStart` now takes a `RunMode` argument instead of reading the URL. Primary "START SHIFT" CTA launches mission mode; a new secondary "ENDLESS MODE" button launches endless. A "THE CAMPAIGN" act-select strip below it renders all 6 `ACTS` — Act I's tile is a numeral, clickable, and also launches mission mode (a shortcut to the same thing); Acts II–VI render as a lock icon, disabled, titled `"<name> — coming soon"`
+- [x] **Fixed 3 call sites that broke from the `onStart` signature change:** `PauseMenu`/`GameOver`/`MissionWin`'s `onRestart` handlers all expected a zero-arg callback. Rather than hardcoding "restart always means mission," added a `lastModeRef` in `App.tsx` that records whichever mode `start()` was last called with, and a `restart = () => start(lastModeRef.current)` wrapper — so RETRY after an endless-mode death restarts endless, and RETRY after a mission-mode death restarts mission
+- [x] Confirmed no internal identifiers were touched: no diffs to any `themeId`/`ZType`/`WEAPONS` key/`localStorage` key/`BossAttack` literal — verified with a targeted `git diff` grep, not just by intent
+- **Verified:** `npx tsc --noEmit` clean · `npm test` **80/80** unchanged (a pure UI/copy phase, no new logic to unit test) · `npm run build` succeeds (428.4kB) · **in-browser** via Playwright: the menu shows the new blurb, both mode buttons, and the 6-tile act strip; exactly one tile (Act I, numeral "I") is enabled, the other 5 are disabled with `"— coming soon"` titles; clicking either "START SHIFT" or the Act I tile launches `runMode: "mission"` at stage 1; "ENDLESS MODE" launches `runMode: "endless"`; forcing a game-over in each mode and clicking RETRY confirmed it restarts the *same* mode both times (not always mission); a full 24-stage mission fast-forward through the real "START SHIFT" button completed cleanly
+- **Deferred, as planned:** `ThemeDef`'s 7 fixed `decorWeights` still break at Act III (conveyors/containers) and Act V (neon signage) — that widening is real work for those acts' own future phases, not Act I's
+
+---
+
+## Act I vertical slice: complete
+
+Phases 8–12 are all DONE. The 6-Act campaign framework exists for all 24 stages; Act I is fully realized — The Neighborhood Watch, the Screamer, 3 readable intel documents, reskinned lore, and a real menu with an act-select — while Acts II–VI exist as honest, clearly-labeled stub data ("coming soon") that the mission can still run through end-to-end without crashing. See "Risks carried into Phases 8–12" below for what's still unbudgeted before any of Acts II–VI gets its own phase.
 
 ---
 
