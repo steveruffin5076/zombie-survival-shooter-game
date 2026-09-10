@@ -2,7 +2,7 @@ import type { PlacedItem } from "./grid";
 import type { RunMode } from "./stages";
 import type { WeaponClass } from "./weapons";
 
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 
 export interface SaveData {
   version: number;
@@ -23,12 +23,10 @@ export interface SaveData {
   deposit: string[];
   backpack: PlacedItem[];
   intel: number;
-  /**
-   * Stubbed hideout data. The save format models a slot for it so a future
-   * hideout doesn't need a migration of its own — nothing in this codebase
-   * reads this field yet, and it should stay that way until Hideout ships.
-   */
-  hideout: null;
+  /** Hideout board — ids of intel documents found so far. */
+  hideout: { docs: string[] } | null;
+  /** banked toward building/repairing Stage 4 deployables — survives death like score/kills */
+  scrap: number;
 }
 
 const keyFor = (mode: RunMode) => `graveyard-shift-save-${mode}`;
@@ -38,7 +36,10 @@ export function migrate(raw: unknown): SaveData | null {
   if (!raw || typeof raw !== "object") return null;
   const d = raw as Partial<SaveData>;
   if (typeof d.version !== "number" || d.version > SAVE_VERSION) return null;
-  // v1 is the only version so far — future bumps add their own `if (d.version < N)` steps here.
+  // v1 saves always wrote `hideout: null` (the field was stubbed, never read) —
+  // v2 gives it real shape. Anything else malformed just resets to empty.
+  const hideoutDocs = (d.hideout as { docs?: unknown } | null)?.docs;
+  const hideout = { docs: Array.isArray(hideoutDocs) ? hideoutDocs.filter((x) => typeof x === "string") : [] };
   if (
     typeof d.stage !== "number" || typeof d.level !== "number" ||
     !Array.isArray(d.owned) || !Array.isArray(d.deposit) || !Array.isArray(d.backpack)
@@ -60,7 +61,8 @@ export function migrate(raw: unknown): SaveData | null {
     deposit: d.deposit,
     backpack: d.backpack,
     intel: d.intel ?? 0,
-    hideout: null,
+    hideout,
+    scrap: d.scrap ?? 0,
   };
 }
 

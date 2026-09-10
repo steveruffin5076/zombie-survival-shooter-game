@@ -1,13 +1,15 @@
 import type { GameStats, MissionStats, UpgradeChoice } from "../game/types";
 import {
   Play, RotateCcw, Home, Trophy, Timer, Skull, TrendingUp, Volume2, VolumeX,
-  Crosshair, Gauge, ChevronsRight, HeartPulse,
+  Crosshair, Gauge, ChevronsRight, HeartPulse, Infinity as InfinityIcon,
 } from "lucide-react";
 import { ICONS, RARITY_STYLE, MenuButton, StatBox } from "./ui";
 
 /* ------------------------------------------------------------------ */
 
-export function Menu({ onStart, high, muted, onMute }: { onStart: () => void; high: number; muted: boolean; onMute: () => void }) {
+export function Menu({
+  onEnterHideout, onEndless, high, muted, onMute,
+}: { onEnterHideout: () => void; onEndless: () => void; high: number; muted: boolean; onMute: () => void }) {
   return (
     <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-gradient-to-b from-black/60 via-transparent to-black/85">
       <button
@@ -34,17 +36,27 @@ export function Menu({ onStart, high, muted, onMute }: { onStart: () => void; hi
       </h1>
 
       <p className="anim-rise mt-5 max-w-md text-center text-sm leading-relaxed text-zinc-400" style={{ animationDelay: "120ms" }}>
-        Two lanes. One survivor. Your laser locks the lane you face — but every
-        shot you fire tells them exactly where you are.
+        Day 90 After Redshift. The infected see nothing in the dark — only your
+        laser sight, and the instant it crosses one, its tracking locks to you.
+        Two lanes. One survivor. Every shot you fire tells them exactly where you are.
       </p>
 
       <button
-        onClick={onStart}
+        onClick={onEnterHideout}
         className="anim-rise group relative mt-9 flex items-center gap-3 overflow-hidden rounded-xl bg-gradient-to-b from-amber-400 to-amber-600 px-12 py-4 text-lg font-bold tracking-[0.25em] text-amber-950 shadow-[0_0_50px_rgba(245,158,11,0.35)] transition-all duration-200 hover:scale-[1.04] hover:shadow-[0_0_70px_rgba(245,158,11,0.5)] active:scale-[0.98]"
         style={{ animationDelay: "180ms" }}
       >
         <Play className="h-5 w-5 transition-transform group-hover:translate-x-0.5" fill="currentColor" />
-        START SHIFT
+        ENTER HIDEOUT
+      </button>
+
+      <button
+        onClick={onEndless}
+        className="anim-rise mt-3 flex items-center gap-2 text-[11px] font-bold tracking-[0.2em] text-zinc-500 transition hover:text-zinc-300"
+        style={{ animationDelay: "200ms" }}
+      >
+        <InfinityIcon className="h-3.5 w-3.5" />
+        ENDLESS MODE
       </button>
 
       {high > 0 && (
@@ -54,9 +66,9 @@ export function Menu({ onStart, high, muted, onMute }: { onStart: () => void; hi
         </div>
       )}
 
-      <div className="anim-rise mt-10 flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-[10px] font-semibold tracking-wider text-white/40" style={{ animationDelay: "260ms" }}>
+      <div className="anim-rise mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-[10px] font-semibold tracking-wider text-white/40" style={{ animationDelay: "260ms" }}>
         <span className="flex items-center gap-1.5"><span className="kbd">A</span><span className="kbd">D</span> MOVE · PIVOT LANE</span>
-        <span className="flex items-center gap-1.5"><span className="kbd">W</span> DOUBLE JUMP</span>
+        <span className="flex items-center gap-1.5"><span className="kbd">W</span> JUMP</span>
         <span className="flex items-center gap-1.5"><span className="kbd">SHIFT</span> DASH</span>
         <span className="flex items-center gap-1.5"><span className="kbd">1</span>-<span className="kbd">4</span> WEAPON CLASS</span>
         <span className="flex items-center gap-1.5"><span className="kbd">R</span> RELOAD</span>

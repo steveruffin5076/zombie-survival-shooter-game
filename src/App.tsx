@@ -4,19 +4,23 @@ import type {
   EngineEvent, GameStats, HudState, InventorySnapshot, MissionStats, UpgradeChoice,
 } from "./game/types";
 import type { Deployable, DeployableKind } from "./game/arena";
+import type { RunMode } from "./game/stages";
 import Hud from "./components/Hud";
 import { Menu, LevelUpModal, PauseMenu, GameOver, StageClear, MissionWin } from "./components/Overlays";
 import InventoryOverlay from "./components/InventoryOverlay";
 import SafeHouseOverlay from "./components/SafeHouseOverlay";
 import RepairPanel from "./components/RepairPanel";
 import TouchControls from "./components/TouchControls";
+import HideoutTerminal from "./components/HideoutTerminal";
+import Prologue from "./components/Prologue";
 import { isTouchCapable } from "./game/input";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Engine | null>(null);
 
-  const [screen, setScreen] = useState<"menu" | "game">("menu");
+  const [screen, setScreen] = useState<"menu" | "prologue" | "hideout" | "game">("menu");
+  const [showTerminal, setShowTerminal] = useState(false);
   const [hud, setHud] = useState<HudState | null>(null);
   const [choices, setChoices] = useState<UpgradeChoice[] | null>(null);
   const [over, setOver] = useState<GameStats | null>(null);
@@ -95,10 +99,9 @@ export default function App() {
     };
   }, []);
 
-  const start = useCallback(() => {
-    // TEMP dev hook until Phase 2 wires a real Mission/Endless menu selector:
-    // ?mode=mission plays the finite 4-stage build, everything else stays endless.
-    const mode = new URLSearchParams(window.location.search).get("mode") === "mission" ? "mission" : "endless";
+  const lastModeRef = useRef<RunMode>("endless");
+  const start = useCallback((mode: RunMode) => {
+    lastModeRef.current = mode;
     engineRef.current?.startGame(mode);
     setScreen("game");
     setOver(null);
@@ -109,10 +112,43 @@ export default function App() {
     setShowInventory(false);
     setPaused(false);
   }, []);
+  // Restart (from pause/game-over/mission-win) replays whichever mode was last started.
+  const restart = useCallback(() => start(lastModeRef.current), [start]);
+
+  // Menu's "ENTER HIDEOUT" shows the story prologue first — the actual room
+  // (and the engine's enterHideout() call) only happens once that's dismissed.
+  const goToPrologue = useCallback(() => setScreen("prologue"), []);
+
+  // Campaign's real entry point — a walkable room, not a menu overlay.
+  const enterHideout = useCallback(() => {
+    engineRef.current?.enterHideout();
+    setScreen("hideout");
+    setShowTerminal(false);
+    setOver(null);
+    setChoices(null);
+    setStageClear(null);
+    setSafeHouse(false);
+    setMissionWin(null);
+    setShowInventory(false);
+    setPaused(false);
+  }, []);
+  const openTerminal = useCallback(() => {
+    engineRef.current?.setPaused(true);
+    setShowTerminal(true);
+  }, []);
+  const closeTerminal = useCallback(() => {
+    engineRef.current?.setPaused(false);
+    setShowTerminal(false);
+  }, []);
+  const startMissionFromHideout = useCallback(() => {
+    setShowTerminal(false);
+    start("mission");
+  }, [start]);
 
   const quit = useCallback(() => {
     engineRef.current?.toMenu();
     setScreen("menu");
+    setShowTerminal(false);
     setOver(null);
     setChoices(null);
     setStageClear(null);
@@ -164,12 +200,14 @@ export default function App() {
   }, []);
   const triggerJump = useCallback(() => engineRef.current?.triggerJump(), []);
   const triggerDash = useCallback(() => engineRef.current?.triggerDash(), []);
-  const aimStart = useCallback((x: number, y: number) => {
-    engineRef.current?.setAimFromClient(x, y);
-    engineRef.current?.setFiring(true);
+  const tap = useCallback((x: number, y: number) => engineRef.current?.triggerTap(x, y), []);
+  const fireStart = useCallback(() => engineRef.current?.setFiring(true), []);
+  const fireEnd = useCallback(() => engineRef.current?.setFiring(false), []);
+  const interactStart = useCallback(() => {
+    engineRef.current?.pressKey("KeyE");
+    engineRef.current?.toggleBossForceTarget();
   }, []);
-  const aimMove = useCallback((x: number, y: number) => engineRef.current?.setAimFromClient(x, y), []);
-  const aimEnd = useCallback(() => engineRef.current?.setFiring(false), []);
+  const interactEnd = useCallback(() => engineRef.current?.releaseKey("KeyE"), []);
 
   // keyboard shortcuts for upgrade choices
   useEffect(() => {
@@ -191,6 +229,16 @@ export default function App() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [screen]);
+
+  // E opens the Hideout terminal when standing near it
+  useEffect(() => {
+    if (screen !== "hideout" || showTerminal) return;
+    const handler = (ev: KeyboardEvent) => {
+      if (ev.code === "KeyE" && hud?.terminalNear) openTerminal();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [screen, showTerminal, hud?.terminalNear, openTerminal]);
 
   return (
     <div className="fixed inset-0 grid place-items-center overflow-hidden bg-black select-none">
@@ -228,14 +276,34 @@ export default function App() {
             onMoveEnd={moveEnd}
             onJump={triggerJump}
             onDash={triggerDash}
-            onAimStart={aimStart}
-            onAimMove={aimMove}
-            onAimEnd={aimEnd}
+            onTap={tap}
+            onFireStart={fireStart}
+            onFireEnd={fireEnd}
+            showInteract={!!(hud?.crateNear || hud?.gateBypassNear)}
+            onInteractStart={interactStart}
+            onInteractEnd={interactEnd}
           />
         )}
 
         {screen === "menu" && (
-          <Menu onStart={start} high={hud?.high ?? 0} muted={hud?.muted ?? false} onMute={toggleMute} />
+          <Menu
+            onEnterHideout={goToPrologue}
+            onEndless={() => start("endless")}
+            high={hud?.high ?? 0}
+            muted={hud?.muted ?? false}
+            onMute={toggleMute}
+          />
+        )}
+
+        {screen === "prologue" && <Prologue onContinue={enterHideout} />}
+
+        {showTerminal && inv && (
+          <HideoutTerminal
+            inv={inv}
+            onClose={closeTerminal}
+            onStartMission={startMissionFromHideout}
+            onSelectLoadout={(id) => engineRef.current?.setLoadout(id)}
+          />
         )}
 
         {choices && <LevelUpModal choices={choices} level={hud?.level ?? 1} onPick={choose} />}
@@ -249,10 +317,12 @@ export default function App() {
           />
         )}
 
-        {stageClear && safeHouse && !choices && !over && inv && (
+        {stageClear && safeHouse && !choices && !over && inv && hud && (
           <SafeHouseOverlay
             next={stageClear.next}
+            actId={hud.actId}
             inv={inv}
+            campaignMode={hud.campaignMode}
             onMove={moveBackpackItem}
             onDepositAll={depositAll}
             onContinue={confirmSafeHouse}
@@ -266,16 +336,16 @@ export default function App() {
         {paused && screen === "game" && !over && !choices && !missionWin && (
           <PauseMenu
             onResume={resume}
-            onRestart={start}
+            onRestart={restart}
             onQuit={quit}
             muted={hud?.muted ?? false}
             onMute={toggleMute}
           />
         )}
 
-        {over && <GameOver stats={over} onRestart={start} onQuit={quit} />}
+        {over && <GameOver stats={over} onRestart={restart} onQuit={quit} />}
 
-        {missionWin && <MissionWin stats={missionWin} onRestart={start} onQuit={quit} />}
+        {missionWin && <MissionWin stats={missionWin} onRestart={restart} onQuit={quit} />}
       </div>
     </div>
   );

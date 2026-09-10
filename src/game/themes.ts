@@ -25,7 +25,9 @@ export const THEMES: Record<string, ThemeDef> = {
     id: "suburbs", accent: "#8a6d3a",
     skyTop: "#0a0705", skyMid: "#1a130d", skyHorizon: "#332015", skyBottom: "#0d0906",
     groundTop: "#1a150f", groundMid: "#120e0a", groundDeep: "#060402",
-    decorWeights: [1, 1, 2, 1, 3, 0, 2],
+    // Act I's "foliage-heavy neighborhood streets" per enhancement-1.md —
+    // tree weight bumped from 2 to 4, everything else unchanged
+    decorWeights: [1, 1, 4, 1, 3, 0, 2],
   },
   highway: {
     id: "highway", accent: "#6b7280",

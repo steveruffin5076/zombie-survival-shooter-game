@@ -1,4 +1,5 @@
 import type { DeployableKind } from "./arena";
+import type { BossAttack } from "./boss";
 
 export interface WeaponSlot {
   /** weapon class this slot represents */
@@ -23,6 +24,8 @@ export interface HudState {
   level: number;
   stage: number;
   stageName: string;
+  /** which act this stage belongs to — used to pick the Hideout board's document set */
+  actId: number;
   waveInStage: number;
   wavesPerStage: number;
   /** in-stage wave numbers (1-based) that spawn a boss */
@@ -66,6 +69,10 @@ export interface HudState {
   paused: boolean;
   muted: boolean;
   playing: boolean;
+  /** in the Hideout, close enough to the terminal to interact */
+  terminalNear: boolean;
+  /** campaign run — no XP/leveling, so the HUD hides that bar entirely */
+  campaignMode: boolean;
   /** simple scalar crate feedback — bulk grid contents go through getInventory(), not here */
   crateNear: boolean;
   crateTier: 0 | 1 | 2 | 3;
@@ -90,6 +97,19 @@ export interface HudState {
   /** seconds left in the per-prep repair window — RepairPanel shows while > 0 */
   repairWindowT: number;
   repairWindowMax: number;
+  /** a Terminal Defense boss is alive — gates the 3-segment boss bar */
+  bossActive: boolean;
+  /** display name for the boss bar — data-driven per BOSS_DEFS, null when no boss is active */
+  bossName: string | null;
+  bossHp: number;
+  bossHpMax: number;
+  bossPhase: 0 | 1 | 2;
+  /** the attack currently telegraphing, if the boss is mid-windup */
+  bossAttack: BossAttack | null;
+  /** 0..1 windup progress toward that attack landing */
+  bossWindupPct: number;
+  /** KeyE toggle — forces auto-aim onto the boss over a close add */
+  bossForceTarget: boolean;
 }
 
 export type Rarity = "common" | "rare" | "epic" | "weapon";
@@ -141,6 +161,8 @@ export interface InventorySnapshot {
   backpack: InventoryItem[];
   deposit: string[];
   intel: number;
+  /** ids of intel documents found so far — the Hideout board looks these up in INTEL_DOCS */
+  docs: string[];
   backpackSize: { w: number; h: number };
 }
 

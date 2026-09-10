@@ -142,4 +142,17 @@ export class Sfx {
     if (this.throttle("spit", 100)) return;
     this.tone(235, { d: 0.1, type: "square", g: 0.035, slide: 120 });
   }
+  /** Boss windup tell — pitch differs per attack so you can tell which one's coming with your eyes closed. */
+  bossWindup(pitch: number) {
+    this.tone(pitch, { d: 0.5, type: "sawtooth", g: 0.13, slide: pitch * 0.55 });
+    this.noise(0.45, { g: 0.05, f: pitch * 3, q: 0.7 });
+  }
+  bossSlam() {
+    this.tone(58, { d: 0.4, type: "sawtooth", g: 0.22, slide: 20 });
+    this.noise(0.3, { g: 0.16, f: 140, q: 0.6 });
+  }
+  bossRoar() {
+    this.tone(120, { d: 0.6, type: "sawtooth", g: 0.16, slide: 60 });
+    this.noise(0.5, { g: 0.1, f: 700, q: 0.5 });
+  }
 }

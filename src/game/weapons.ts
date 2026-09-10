@@ -158,9 +158,9 @@ export const WEAPONS: Record<string, WeaponDef> = {
     id: "m4a1", name: "Colt M4A1", short: "M4A1", cls: "carbine",
     rpm: 800, damage: 15, fireRate: rps(800), projectiles: 1, spread: 0, jitter: 0.008,
     speed: 1400, pierce: 0, knock: 52, recoil: 24, shake: 1.4,
-    mag: 30, reserve: 120, reload: 1.9, moveMul: 1.02, swap: 0.17, critBonus: 0.1,
+    mag: 45, reserve: 135, reload: 1.9, moveMul: 1.02, swap: 0.17, critBonus: 0.1,
     range: RANGE.carbine * 1.05, noise: NOISE.carbine, supp: 22,
-    desc: "Manageable recoil — lands on the head hitbox consistently.",
+    desc: "Manageable recoil, a 45-round extended mag, and the highest crit chance of any carbine.",
   },
   asval: {
     id: "asval", name: "AS Val", short: "AS VAL", cls: "carbine",
@@ -186,3 +186,9 @@ export const CLASS_ROLE: Record<WeaponClass, string> = {
 export const WEAPON_IDS = Object.keys(WEAPONS);
 export const byClass = (cls: WeaponClass) => WEAPON_IDS.filter((id) => WEAPONS[id].cls === cls);
 export const STARTER = "p365";
+
+/**
+ * Campaign's fixed starter arsenal, chosen at the Hideout before a mission.
+ * No in-game way to earn more yet; growing this set is future meta-progression work.
+ */
+export const CAMPAIGN_ARSENAL = ["p365", "bizon", "origin12", "m4a1"];

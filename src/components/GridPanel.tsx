@@ -30,7 +30,13 @@ export default function GridPanel({ items, size, onMove, cell = 56 }: Props) {
   };
 
   const onItemPointerDown = (e: React.PointerEvent, id: string) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
+    // Capture is best-effort: if it throws (seen on some touch/WebView edge
+    // cases) we still want the drag to start, not wedge before setDragId runs.
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* pointer already gone — keep dragging anyway */
+    }
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     dragOffset.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     setDragId(id);
@@ -56,7 +62,7 @@ export default function GridPanel({ items, size, onMove, cell = 56 }: Props) {
     <div
       ref={gridRef}
       data-testid="grid-panel"
-      className="relative select-none"
+      className="relative touch-none select-none"
       style={{ width: size.w * cell, height: size.h * cell }}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
