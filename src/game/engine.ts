@@ -969,6 +969,12 @@ export class Engine {
           // it opens a short walk back out, mirroring the walk in
           if (this.runMode === "mission") {
             this.campaignArenaCleared = true;
+            // the fight can end anywhere in the arena, including already past
+            // where startCampaignTravel() would put the checkpoint (worldW-140)
+            // — reset to a known start, same as walking into the arena, so the
+            // exit walk is a real distance every time, not an instant skip
+            this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
+            this.pl.vx = 0;
             this.startCampaignTravel();
           } else {
             this.startTravel();
@@ -2891,13 +2897,14 @@ export class Engine {
     c.fill();
     c.globalCompositeOperation = "lighter";
     const glow = c.createRadialGradient(tx, GROUND - 70, 4, tx, GROUND - 70, 110);
-    const glowA = this.terminalNear ? 0.5 : 0.3;
-    glow.addColorStop(0, `rgba(239,68,68,${glowA})`);
+    // usable from anywhere in the room (see updateHideout()), so this always
+    // renders in its "near" state — no proximity to react to anymore
+    glow.addColorStop(0, "rgba(239,68,68,0.5)");
     glow.addColorStop(1, "rgba(239,68,68,0)");
     c.fillStyle = glow;
     c.fillRect(tx - 110, GROUND - 180, 220, 180);
     c.globalCompositeOperation = "source-over";
-    c.fillStyle = this.terminalNear ? "#fca5a5" : "#7f1d1d";
+    c.fillStyle = "#fca5a5";
     this.rr(tx - 24, GROUND - 78, 48, 30, 2);
     c.fill();
     c.strokeStyle = "rgba(0,0,0,0.4)";
@@ -2908,16 +2915,15 @@ export class Engine {
 
     this.drawPlayer(cam, 0, t);
 
-    if (this.terminalNear) {
-      c.save();
-      c.textAlign = "center";
-      c.font = '700 13px "Space Grotesk", sans-serif';
-      c.fillStyle = "#fca5a5";
-      c.globalAlpha = 0.75 + 0.25 * Math.sin(t * 5);
-      c.fillText("[E] ACCESS TERMINAL", tx - cam, GROUND - 100);
-      c.globalAlpha = 1;
-      c.restore();
-    }
+    // usable from anywhere in the room, so this prompt is always up
+    c.save();
+    c.textAlign = "center";
+    c.font = '700 13px "Space Grotesk", sans-serif';
+    c.fillStyle = "#fca5a5";
+    c.globalAlpha = 0.75 + 0.25 * Math.sin(t * 5);
+    c.fillText("[E] ACCESS TERMINAL", tx - cam, GROUND - 100);
+    c.globalAlpha = 1;
+    c.restore();
   }
 
   private render() {
