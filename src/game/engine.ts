@@ -32,6 +32,9 @@ const W = 1280;
 const H = 720;
 const GROUND = 584;
 const GRAV = 2400;
+// Top-down camera: world bounds for player movement
+// GROUND is kept for compatibility but ignored in top-down mode
+const WORLD_H = 1440; // vertical play area height
 const TAU = Math.PI * 2;
 
 const R = (a: number, b: number) => a + Math.random() * (b - a);
@@ -179,6 +182,7 @@ export class Engine {
 
   // world state
   private cam = 0;
+  private camY = 0; // top-down camera Y position
   private shakeMag = 0;
   private shakeX = 0;
   private shakeY = 0;
@@ -398,11 +402,11 @@ export class Engine {
 
   private freshPlayer() {
     return {
-      x: this.worldW / 2, y: GROUND, vx: 0, vy: 0,
+      x: this.worldW / 2, y: WORLD_H / 2, vx: 0, vy: 0,
       hp: 100, level: 1, xp: 0, xpNext: 12,
       face: 1, aim: 0, cd: 0, ifr: 0, flash: 0, hurtT: 0,
       dashT: 0, dashCd: 0, dashDir: 1,
-      jumps: 0, grounded: true, walk: 0,
+      walk: 0,
       /** blocks fire() while > 0 — consumable "use" animation lockout */
       useT: 0,
     };
@@ -730,20 +734,20 @@ export class Engine {
   }
 
   private inputDir() {
+    // Returns normalized direction in 2D for top-down movement
     const r = this.keys.has("KeyD") || this.keys.has("ArrowRight") ? 1 : 0;
     const l = this.keys.has("KeyA") || this.keys.has("ArrowLeft") ? 1 : 0;
-    return r - l;
+    const d = this.keys.has("KeyS") || this.keys.has("ArrowDown") ? 1 : 0;
+    const u = this.keys.has("KeyW") || this.keys.has("ArrowUp") ? 1 : 0;
+    const dx = r - l;
+    const dy = d - u;
+    // Return both X and Y components
+    return { x: dx, y: dy };
   }
 
   private jump() {
-    const p = this.pl;
-    if (p.jumps >= 1) return;
-    p.vy = -870;
-    p.jumps++;
-    p.grounded = false;
-    this.sfx.jump();
-    for (let i = 0; i < 5; i++)
-      this.particles.push({ x: p.x + R(-8, 8), y: GROUND + 2, vx: R(-50, 50), vy: R(-40, -10), life: 0.4, max: 0.4, size: R(2, 4), color: "#3a4552", grav: 300, add: false });
+    // Jump removed in top-down mode
+    // Kept as no-op for compatibility
   }
 
   private dash() {
@@ -752,8 +756,13 @@ export class Engine {
     const stDash = this.stacks["dash"] || 0;
     p.dashCd = this.st.dashMax;
     p.dashT = 0.16 + 0.06 * stDash;
-    p.dashDir = this.inputDir() || p.face;
-    p.vy = Math.min(p.vy, 30);
+    const mov = this.inputDir();
+    // In top-down, dash in direction of input or facing direction
+    if (mov.x !== 0 || mov.y !== 0) {
+      p.dashDir = Math.atan2(mov.y, mov.x);
+    } else {
+      p.dashDir = p.aim; // dash toward where player is aiming
+    }
     this.sfx.dash();
   }
 
@@ -804,40 +813,42 @@ export class Engine {
     p.cd -= dt; p.ifr -= dt; p.hurtT -= dt; p.flash -= dt; p.dashCd -= dt; p.useT -= dt;
     if (this.stimT > 0) this.stimT -= dt;
 
-    // horizontal
+    // 2D movement (top-down)
     const mov = this.inputDir();
     if (p.dashT > 0) {
       p.dashT -= dt;
-      p.vx = p.dashDir * 1350;
-      this.particles.push({ x: p.x - p.dashDir * 10, y: p.y - 34, vx: -p.dashDir * R(30, 90), vy: R(-30, 30), life: 0.3, max: 0.3, size: R(4, 10), color: "#67e8f9", grav: 0, add: true });
+      const speed = 1350;
+      p.vx = Math.cos(p.dashDir) * speed;
+      p.vy = Math.sin(p.dashDir) * speed;
+      const pdx = Math.cos(p.dashDir) * 10;
+      const pdy = Math.sin(p.dashDir) * 10;
+      this.particles.push({ x: p.x - pdx, y: p.y - pdy, vx: -pdx * R(3, 9), vy: -pdy * R(3, 9), life: 0.3, max: 0.3, size: R(4, 10), color: "#67e8f9", grav: 0, add: true });
     } else {
       // Tactical Stim: temporary speed rush
-      const target = mov * this.st.speed * (this.stimT > 0 ? 1.35 : 1);
-      const rate = p.grounded ? 14 : 7;
-      p.vx = lerp(p.vx, target, Math.min(1, rate * dt));
-    }
-
-    // vertical
-    p.vy += GRAV * dt;
-    p.y += p.vy * dt;
-    if (p.y >= GROUND) {
-      if (!p.grounded && p.vy > 300) {
-        for (let i = 0; i < 6; i++)
-          this.particles.push({ x: p.x + R(-10, 10), y: GROUND + 2, vx: R(-70, 70), vy: R(-50, -12), life: 0.35, max: 0.35, size: R(2, 4), color: "#3a4552", grav: 320, add: false });
+      const speed = this.st.speed * (this.stimT > 0 ? 1.35 : 1);
+      const mag = Math.hypot(mov.x, mov.y);
+      if (mag > 0) {
+        const speedMul = speed / mag;
+        p.vx = lerp(p.vx, mov.x * speedMul, Math.min(1, 14 * dt));
+        p.vy = lerp(p.vy, mov.y * speedMul, Math.min(1, 14 * dt));
+      } else {
+        p.vx = lerp(p.vx, 0, Math.min(1, 14 * dt));
+        p.vy = lerp(p.vy, 0, Math.min(1, 14 * dt));
       }
-      p.y = GROUND; p.vy = 0; p.grounded = true; p.jumps = 0;
     }
-    // travel only clamps the right edge for real — the left bound is the
-    // last opened gate, so backtracking past a cleared checkpoint is out
-    const leftBound = this.phase === "travel" ? this.travelMinX : 26;
-    p.x = clamp(p.x + p.vx * dt, leftBound, this.worldW - 26);
 
-    const run = Math.abs(p.vx) > 26 && p.grounded;
-    p.walk += dt * (run ? 10 + Math.abs(p.vx) * 0.014 : 3);
+    // Update position (no gravity in top-down)
+    p.x = clamp(p.x + p.vx * dt, 26, this.worldW - 26);
+    p.y = clamp(p.y + p.vy * dt, 26, WORLD_H - 26);
 
-    // ---- DIRECTIONAL LOCK: movement input pivots the lane ----
-    if (mov !== 0 && Math.sign(mov) !== this.facing) this.pivotTo(mov > 0 ? 1 : -1);
-    p.face = this.facing;
+    // Animation: walk cycle based on velocity magnitude
+    const vel = Math.hypot(p.vx, p.vy);
+    p.walk += dt * (vel > 26 ? 10 + vel * 0.014 : 3);
+
+    // Face direction based on movement or aim
+    if (vel > 26) {
+      p.face = Math.cos(Math.atan2(p.vy, p.vx)) > 0 ? 1 : -1;
+    }
     this.acquireTarget();
     p.aim = this.aimAngle();
     if (this.laserFlash > 0) this.laserFlash -= dt;
@@ -916,13 +927,15 @@ export class Engine {
     for (const d of this.decals) d.a -= dt * 0.02;
     this.decals = this.decals.filter((d) => d.a > 0.05);
 
-    // camera — the arena's prep/active phases hold a fixed frame; travel still
-    // follows the player like any other stage
+    // camera — top-down follows player position in 2D
     if (this.stageDef.fixedCamera && this.phase !== "travel") {
       this.cam = this.camOrigin();
+      this.camY = 0;
     } else {
-      const target = clamp(p.x - W / 2 + Math.cos(p.aim) * 60, 0, this.worldW - W);
-      this.cam = lerp(this.cam, target, Math.min(1, 5 * dt));
+      const targetX = clamp(p.x - W / 2, 0, this.worldW - W);
+      const targetY = clamp(p.y - H / 2, 0, WORLD_H - H);
+      this.cam = lerp(this.cam, targetX, Math.min(1, 5 * dt));
+      this.camY = lerp(this.camY, targetY, Math.min(1, 5 * dt));
     }
     this.shakeMag = Math.max(0, this.shakeMag - dt * 26);
     this.shakeX = R(-this.shakeMag, this.shakeMag);
@@ -1645,7 +1658,9 @@ export class Engine {
     this.recompute();
     this.pl.hp = this.st.maxHp;
     this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
+    this.pl.y = WORLD_H / 2;
     this.cam = this.stageDef.fixedCamera ? this.camOrigin() : clamp(this.pl.x - W / 2, 0, this.worldW - W);
+    this.camY = clamp(this.pl.y - H / 2, 0, WORLD_H - H);
     this.mode = "play";
     this.beginRest(2.4);
     this.announce("YOU DIED", `back at the safe house — ${this.stageDef.name}`, 2.8);
@@ -2308,8 +2323,11 @@ export class Engine {
     // walk out of the safe house back onto the left side of the new stage —
     // also what keeps startTravel()'s safeHouseX comfortably in-bounds
     this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
+    this.pl.y = WORLD_H / 2;
     this.pl.vx = 0;
+    this.pl.vy = 0;
     this.cam = this.stageDef.fixedCamera ? this.camOrigin() : clamp(this.pl.x - W / 2, 0, this.worldW - W);
+    this.camY = clamp(this.pl.y - H / 2, 0, WORLD_H - H);
     this.waveInStage = 0;
     this.stageIntermission = false;
     this.modals.delete("stageclear");
@@ -3654,10 +3672,12 @@ export class Engine {
     if (p.ifr > 0) c.globalAlpha = 0.55 + 0.45 * Math.sin(t * 42);
     if (p.dashT > 0) c.globalAlpha = 0.82;
 
-    const run = Math.abs(p.vx) > 26 && p.grounded;
-    const bob = run ? Math.abs(Math.sin(p.walk)) * 2.4 : p.grounded ? Math.sin(t * 2.1) * 1.0 : -2.2;
+    // Top-down: run is based on velocity magnitude
+    const vel = Math.hypot(p.vx, p.vy);
+    const run = vel > 26;
+    const bob = run ? Math.abs(Math.sin(p.walk)) * 2.4 : Math.sin(t * 2.1) * 1.0;
     const swing = run ? Math.sin(p.walk) : 0;
-    const airLegs = !p.grounded;
+    const airLegs = false; // No jumping in top-down mode
 
     // ---- legs (flip x in screen space by dir) ----
     const l1 = airLegs ? 6 : swing * 8;
