@@ -5,7 +5,7 @@ const valid: SaveData = {
   version: SAVE_VERSION, runMode: "mission", stage: 2, level: 3, xp: 5, xpNext: 40,
   score: 1200, kills: 30, playTime: 210, owned: ["p365"], equipped: { pistol: "p365" },
   kind: "p365", stacks: { dmg: 2 }, deposit: [], backpack: [{ id: "a", itemId: "bandage", x: 0, y: 0 }],
-  intel: 4, hideout: { docs: ["act1_doc0"] },
+  intel: 4, hideout: { docs: ["act1_doc0"] }, scrap: 7,
 };
 
 describe("migrate", () => {

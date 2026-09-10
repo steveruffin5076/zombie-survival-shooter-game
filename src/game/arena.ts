@@ -7,21 +7,24 @@ export interface DeployableDef {
   name: string;
   short: string;
   hp: number;
+  /** scrap cost to place a fresh one */
+  buildCost: number;
+  /** scrap cost to fully repair a damaged one */
   repairCost: number;
   desc: string;
 }
 
 export const DEPLOYABLE_DEFS: Record<DeployableKind, DeployableDef> = {
   barricade: {
-    kind: "barricade", name: "Barricade", short: "WALL", hp: 220, repairCost: 2,
+    kind: "barricade", name: "Barricade", short: "WALL", hp: 220, buildCost: 4, repairCost: 2,
     desc: "Blocks the lane — zombies stop and tear it down instead of reaching you. Spitters arc over it.",
   },
   wire: {
-    kind: "wire", name: "Razor Wire", short: "WIRE", hp: 90, repairCost: 1,
+    kind: "wire", name: "Razor Wire", short: "WIRE", hp: 90, buildCost: 2, repairCost: 1,
     desc: "Doesn't stop them, just slows anything that crosses it.",
   },
   claymore: {
-    kind: "claymore", name: "Claymore", short: "MINE", hp: 40, repairCost: 1,
+    kind: "claymore", name: "Claymore", short: "MINE", hp: 40, buildCost: 3, repairCost: 1,
     desc: "One proximity blast. Holds its trigger through an active ambush instead of wasting it on the first zombie.",
   },
 };

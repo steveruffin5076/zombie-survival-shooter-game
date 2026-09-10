@@ -107,18 +107,22 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
               {TOOL_KEYS.map(({ kind, key }) => {
                 const def = DEPLOYABLE_DEFS[kind];
                 const active = hud.placingKind === kind;
+                const affordable = hud.scrap >= def.buildCost;
                 return (
                   <button
                     key={kind}
                     onClick={() => onSelectTool(kind)}
-                    title={def.desc}
+                    title={`${def.desc} — ${def.buildCost} scrap`}
                     className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[10px] font-bold tracking-wide backdrop-blur-sm transition ${
                       active
                         ? "border-emerald-400/70 bg-emerald-400/15 text-emerald-200 shadow-[0_0_14px_rgba(52,211,153,0.35)]"
-                        : "border-white/12 bg-black/50 text-white/60 hover:border-white/30"
+                        : affordable
+                          ? "border-white/12 bg-black/50 text-white/60 hover:border-white/30"
+                          : "border-white/5 bg-black/40 text-white/25"
                     }`}
                   >
                     <span className="kbd">{key}</span> {def.short}
+                    <span className={affordable ? "text-slate-400" : "text-red-400/70"}>{def.buildCost}</span>
                   </button>
                 );
               })}

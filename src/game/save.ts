@@ -25,6 +25,8 @@ export interface SaveData {
   intel: number;
   /** Hideout board — ids of intel documents found so far. */
   hideout: { docs: string[] } | null;
+  /** banked toward building/repairing Stage 4 deployables — survives death like score/kills */
+  scrap: number;
 }
 
 const keyFor = (mode: RunMode) => `graveyard-shift-save-${mode}`;
@@ -60,6 +62,7 @@ export function migrate(raw: unknown): SaveData | null {
     backpack: d.backpack,
     intel: d.intel ?? 0,
     hideout,
+    scrap: d.scrap ?? 0,
   };
 }
 

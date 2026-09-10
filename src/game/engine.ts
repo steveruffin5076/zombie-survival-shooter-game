@@ -1703,8 +1703,11 @@ export class Engine {
       for (let i = 0; i < n; i++)
         this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: total / n, t: R(0, 9), rest: false, kind: "xp" });
     }
-    // scrap — arena only, feeds RepairPanel
-    if (this.stageDef.fixedCamera && chance(0.22)) {
+    // scrap — feeds building/repairing deployables. Endless only ever sees it
+    // in the arena; campaign also drops it on the walk in, so there's already
+    // something banked by the time the Terminal Defense prep phase opens
+    const scrapChance = this.stageDef.fixedCamera ? 0.22 : this.runMode === "mission" ? 0.2 : 0;
+    if (chance(scrapChance)) {
       this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: 1, t: R(0, 9), rest: false, kind: "scrap" });
     }
   }
@@ -1783,6 +1786,7 @@ export class Engine {
     this.deposit = checkpoint.deposit;
     this.intel = checkpoint.intel;
     this.docsFound = checkpoint.hideout?.docs ?? [];
+    this.scrap = checkpoint.scrap ?? 0;
     // backpack is deliberately dropped — that's the whole point of the penalty
     this.backpack = [];
     this.invVer++;
@@ -1807,7 +1811,7 @@ export class Engine {
       score: this.score, kills: this.kills, playTime: this.playTime,
       owned: [...this.owned], equipped: { ...this.equipped }, kind: this.kind,
       stacks: { ...this.stacks }, deposit: this.deposit, backpack: this.backpack,
-      intel: this.intel, hideout: { docs: this.docsFound },
+      intel: this.intel, hideout: { docs: this.docsFound }, scrap: this.scrap,
     };
     saveRun(data);
   }
@@ -2262,6 +2266,8 @@ export class Engine {
     const { lane, slot } = this.ghostSlot();
     if (!canPlaceAt(this.deployables, lane, slot)) return;
     const def = DEPLOYABLE_DEFS[this.placingKind];
+    if (this.scrap < def.buildCost) return;
+    this.scrap -= def.buildCost;
     this.deployables.push({
       id: `dep-${this.nextDeployableSeq++}`,
       kind: this.placingKind, lane, slot, hp: def.hp, maxHp: def.hp, armed: true,
