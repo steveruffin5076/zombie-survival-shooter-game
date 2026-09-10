@@ -4,6 +4,7 @@ import type {
   EngineEvent, GameStats, HudState, InventorySnapshot, ProfileSnapshot, UpgradeChoice,
 } from "./game/types";
 import type { Deployable, DeployableKind } from "./game/arena";
+import type { ConsumableKey } from "./game/items";
 import Hud from "./components/Hud";
 import { Menu, LevelUpModal, PauseMenu, GameOver, StageClear } from "./components/Overlays";
 import InventoryOverlay from "./components/InventoryOverlay";
@@ -149,6 +150,7 @@ export default function App() {
     []
   );
   const toggleFireMode = useCallback(() => engineRef.current?.toggleFireMode(), []);
+  const useItem = useCallback((key: ConsumableKey) => engineRef.current?.useConsumable(key), []);
   const choose = useCallback((id: string) => engineRef.current?.applyUpgrade(id), []);
   const resume = useCallback(() => engineRef.current?.setPaused(false), []);
   const togglePause = useCallback(() => engineRef.current?.togglePause(), []);
@@ -203,14 +205,16 @@ export default function App() {
         <div className="grain pointer-events-none absolute inset-0 z-10" />
         <div className="scanlines pointer-events-none absolute inset-0 z-10 opacity-60" />
 
-        {screen === "game" && hud && (
+        {screen === "game" && hud && inv && (
           <Hud
             hud={hud}
+            inv={inv}
             onMute={toggleMute}
             onPause={togglePause}
             onSwitch={switchWeapon}
             onFireMode={toggleFireMode}
             onSelectTool={selectTool}
+            onUseItem={useItem}
             touch={touch}
           />
         )}

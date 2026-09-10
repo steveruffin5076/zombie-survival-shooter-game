@@ -1869,7 +1869,7 @@ export class Engine {
       });
   }
 
-  private useConsumable(key: ConsumableKey) {
+  useConsumable(key: ConsumableKey) {
     if (this.mode !== "play" || this.over || this.paused || this.modalOpen) return;
     if (this.pl.useT > 0) return;
     const def = itemForHotkey(key);

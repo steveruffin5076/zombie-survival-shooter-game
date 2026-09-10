@@ -1,6 +1,8 @@
-import type { HudState } from "../game/types";
+import type { HudState, InventorySnapshot } from "../game/types";
 import { DEPLOYABLE_DEFS, type DeployableKind } from "../game/arena";
 import { ATTACK_LABELS } from "../game/boss";
+import { CONSUMABLE_ITEMS, ITEMS, type ConsumableKey } from "../game/items";
+import { ICONS } from "./ui";
 import {
   Heart, Skull, Pause, Volume2, VolumeX, Crosshair, Zap, Trophy, Lock,
   Bot, Hand, DoorOpen, Gem,
@@ -16,15 +18,17 @@ const TOOL_KEYS: { kind: DeployableKind; key: string }[] = [
 
 interface Props {
   hud: HudState;
+  inv: InventorySnapshot;
   onMute: () => void;
   onPause: () => void;
   onSwitch: (id: string) => void;
   onFireMode: () => void;
   onSelectTool: (kind: DeployableKind) => void;
+  onUseItem: (key: ConsumableKey) => void;
   touch?: boolean;
 }
 
-export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSelectTool, touch = false }: Props) {
+export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, onSelectTool, onUseItem, touch = false }: Props) {
   const hpPct = Math.max(0, Math.min(1, hud.hp / hud.maxHp));
   const xpPct = Math.max(0, Math.min(1, hud.xp / hud.xpNext));
   const dashPct = hud.dashMax > 0 ? 1 - Math.max(0, hud.dashT) / hud.dashMax : 1;
@@ -374,8 +378,35 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
         </div>
       </div>
 
-      {/* right column: fire mode */}
+      {/* right column: consumable slots + fire mode */}
       <div className="absolute bottom-28 right-6 flex flex-col items-end gap-3">
+        {/* CONSUMABLE SLOTS */}
+        <div className="pointer-events-auto flex w-44 justify-end gap-2">
+          {CONSUMABLE_ITEMS.map((id) => {
+            const def = ITEMS[id];
+            const count = inv.backpack.filter((it) => it.itemId === id).length;
+            const Icon = ICONS[def.icon] ?? ICONS.Crosshair;
+            const has = count > 0;
+            return (
+              <button
+                key={id}
+                onClick={() => has && onUseItem(def.hotkey!)}
+                disabled={!has}
+                title={def.desc}
+                className={`relative flex h-12 w-12 flex-col items-center justify-center gap-0.5 rounded-lg border backdrop-blur-sm transition ${
+                  has
+                    ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-200 hover:border-cyan-400/70"
+                    : "border-white/10 bg-black/40 text-white/25"
+                }`}
+              >
+                <span className="absolute left-1 top-0.5 text-[8px] font-bold text-white/40">{def.hotkey}</span>
+                <Icon className="h-4 w-4" />
+                <span className="text-[9px] font-bold tabular-nums">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+
         {/* FIRE MODE TOGGLE */}
         <button
           onClick={onFireMode}
