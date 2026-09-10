@@ -133,13 +133,11 @@ interface Particle {
 
 interface Gem { x: number; y: number; vx: number; vy: number; val: number; t: number; rest: boolean; kind: "xp" | "scrap" }
 interface FloatText { x: number; y: number; vy: number; life: number; max: number; text: string; color: string; size: number }
-interface Decal { x: number; s: number; a: number }
+interface Decal { x: number; y: number; s: number; a: number }
 interface SpawnItem { type: ZType; boss?: boolean }
 interface Banner { text: string; sub: string; t: number; dur: number }
-interface Building { x: number; w: number; h: number; win: number }
 // kind 0 stone-a 1 stone-b 2 tree 3 lamp 4 wrecked car 5 barrier 6 rubble pile
-interface Decor { x: number; kind: number; s: number; ph: number }
-interface Star { x: number; y: number; r: number; ph: number; tw: number }
+interface Decor { x: number; y: number; kind: number; s: number; ph: number }
 interface Gate { x: number; opened: boolean }
 interface Crate { x: number; y: number; tier: CrateTier; opened: boolean }
 interface GrenadeProj { x: number; y: number; vx: number; vy: number; fuse: number }
@@ -285,11 +283,8 @@ export class Engine {
   private high = 0;
 
   // decor
-  private stars: Star[] = [];
-  private skyFar: Building[] = [];
-  private skyNear: Building[] = [];
   private decor: Decor[] = [];
-  private tufts: { x: number; h: number; s: number }[] = [];
+  private tufts: { x: number; y: number; h: number; s: number }[] = [];
 
   constructor(canvas: HTMLCanvasElement, onEvent: (e: EngineEvent) => void) {
     this.canvas = canvas;
@@ -511,48 +506,31 @@ export class Engine {
 
   private genDecor(theme: ThemeDef, worldW: number) {
     // stage transitions call this again — never accumulate across runs
-    this.stars = [];
-    this.skyFar = [];
-    this.skyNear = [];
     this.decor = [];
     this.tufts = [];
     this.theme = theme;
-    // stars
-    for (let i = 0; i < 110; i++)
-      this.stars.push({ x: R(-40, W + 120), y: R(0, 420), r: R(0.6, 1.8), ph: R(0, TAU), tw: R(0.5, 2.4) });
-    // skylines
-    const gen = (p: number, minH: number, maxH: number, minW: number, maxW: number) => {
-      const arr: Building[] = [];
-      const span = W + (worldW - W) * p + 400;
-      let x = -120;
-      while (x < span) {
-        const w = R(minW, maxW);
-        arr.push({ x, w, h: R(minH, maxH), win: R(0, 1) });
-        x += w + R(6, 40);
-      }
-      return arr;
-    };
-    this.skyFar = gen(0.18, 60, 200, 46, 110);
-    this.skyNear = gen(0.38, 40, 150, 30, 80);
-    // roadside/graveyard decor at parallax .68 — kind weights vary per theme
+    // decor scattered across the full top-down play area (x AND y) — kind
+    // weights vary per theme. Density is area-based so wide/tall stages
+    // don't feel sparser or denser than the tuned reference stage.
     const weights = theme.decorWeights;
     const wTotal = weights.reduce((a, b) => a + b, 0) || 1;
-    const span = W + (worldW - W) * 0.68 + 500;
-    let dx = -160;
-    while (dx < span) {
+    const area = worldW * WORLD_H;
+    const decorCount = Math.round(area / 42000);
+    for (let i = 0; i < decorCount; i++) {
       let roll = Math.random() * wTotal;
       let kind = 0;
-      for (let i = 0; i < weights.length; i++) {
-        if ((roll -= weights[i]) < 0) { kind = i; break; }
+      for (let k = 0; k < weights.length; k++) {
+        if ((roll -= weights[k]) < 0) { kind = k; break; }
       }
-      this.decor.push({ x: dx, kind, s: R(0.7, 1.25), ph: R(0, TAU) });
-      dx += R(120, 300);
+      this.decor.push({
+        x: R(40, worldW - 40), y: R(40, WORLD_H - 40),
+        kind, s: R(0.7, 1.25), ph: R(0, TAU),
+      });
     }
-    // ground tufts (world coords, parallax 1)
-    let tx = -60;
-    while (tx < worldW + 120) {
-      this.tufts.push({ x: tx, h: R(5, 14), s: R(0.6, 1.3) });
-      tx += R(40, 120);
+    // ground tufts, scattered the same way (world coords, no parallax)
+    const tuftCount = Math.round(area / 9000);
+    for (let i = 0; i < tuftCount; i++) {
+      this.tufts.push({ x: R(0, worldW), y: R(0, WORLD_H), h: R(5, 14), s: R(0.6, 1.3) });
     }
   }
 
@@ -967,9 +945,13 @@ export class Engine {
       const ty = this.target.y - 36 * this.target.scale;
       return Math.atan2(ty - p.y, tx - p.x);
     }
-    // Aim toward mouse position relative to player
-    const mx = this.mouse.x + this.cam - W / 2;
-    const my = this.mouse.y + this.camY - H / 2;
+    // Aim toward mouse position relative to player — mouse.x/y are canvas
+    // (screen-space) pixels, so add the camera's world-space top-left corner
+    // to convert to world coordinates. No extra -W/2/-H/2: that would only
+    // be correct if cam/camY always sat exactly at worldW/2-ish, which they
+    // don't (they clamp at world edges).
+    const mx = this.mouse.x + this.cam;
+    const my = this.mouse.y + this.camY;
     return Math.atan2(my - p.y, mx - p.x);
   }
 
@@ -1373,7 +1355,7 @@ export class Engine {
     this.gainXp(40);
     for (let i = 0; i < 40; i++)
       this.particles.push({ x: b.x + R(-10, 10), y: b.y - 60 * b.scale + R(-16, 16), vx: R(-160, 160), vy: R(-220, 60), life: R(0.3, 0.75), max: 0.75, size: R(2.5, 6), color: BLOOD[RI(0, BLOOD.length - 1)], grav: 1200, add: false });
-    this.decals.push({ x: b.x, s: b.scale * 1.6, a: 0.6 });
+    this.decals.push({ x: b.x, y: b.y, s: b.scale * 1.6, a: 0.6 });
     this.announce(def.deathBanner, def.deathSub, 2.6);
   }
 
@@ -1552,7 +1534,7 @@ export class Engine {
     const cx = z.x, cy = z.y - 34 * z.scale;
     for (let i = 0; i < (z.boss ? 30 : 16); i++)
       this.particles.push({ x: cx + R(-8, 8), y: cy + R(-14, 14), vx: dir * R(20, 160) + R(-110, 110), vy: R(-200, 60), life: R(0.3, 0.7), max: 0.7, size: R(2, 5.5), color: BLOOD[RI(0, BLOOD.length - 1)], grav: 1200, add: false });
-    this.decals.push({ x: z.x, s: z.scale, a: 0.55 });
+    this.decals.push({ x: z.x, y: z.y, s: z.scale, a: 0.55 });
     if (this.decals.length > 70) this.decals.shift();
     // xp gems
     const total = z.xp;
@@ -2599,108 +2581,90 @@ export class Engine {
     const c = this.ctx;
     const t = this.tGlobal;
     const cam = this.cam + this.shakeX;
-    const camY = this.shakeY;
+    // draw code uses the "py = worldY + camY" convention (see drawPlayer/
+    // drawZombie/drawBoss), so this needs to be the negated vertical scroll,
+    // not just the shake jitter — this was the bug keeping the camera from
+    // ever panning vertically, the main reason the game still read as a
+    // side view despite the player being able to move in full 2D
+    const camY = -this.camY + this.shakeY;
 
     c.clearRect(0, 0, W, H);
 
-    /* --- sky (per-stage theme) --- */
+    /* --- top-down ground (per-stage theme, no sky/horizon) --- */
     const theme = this.theme;
-    const sky = c.createLinearGradient(0, 0, 0, H);
-    sky.addColorStop(0, theme.skyTop);
-    sky.addColorStop(0.5, theme.skyMid);
-    sky.addColorStop(0.78, theme.skyHorizon);
-    sky.addColorStop(1, theme.skyBottom);
-    c.fillStyle = sky;
+    c.fillStyle = theme.groundDeep;
     c.fillRect(0, 0, W, H);
 
-    /* --- stars --- */
-    c.save();
-    for (const s of this.stars) {
-      const a = 0.25 + 0.55 * (0.5 + 0.5 * Math.sin(t * s.tw + s.ph));
-      c.globalAlpha = a;
-      c.fillStyle = "#dbeafe";
-      c.fillRect(s.x - this.cam * 0.04, s.y, s.r, s.r);
-    }
-    c.restore();
+    // soft pool of light around the player — camera keeps them screen-centered,
+    // so an anchored screen-space gradient reads as "visibility around you"
+    // without needing to track world position
+    const pool = c.createRadialGradient(W / 2, H / 2, 40, W / 2, H / 2, H * 0.62);
+    pool.addColorStop(0, theme.groundTop);
+    pool.addColorStop(1, theme.groundMid);
+    c.fillStyle = pool;
+    c.fillRect(0, 0, W, H);
 
-    /* --- moon --- */
-    const mx = 1010 - this.cam * 0.055;
-    const my = 128 + camY * 0.2;
-    const glow = c.createRadialGradient(mx, my, 10, mx, my, 190);
-    glow.addColorStop(0, "rgba(245,238,205,0.28)");
-    glow.addColorStop(0.35, "rgba(200,190,210,0.10)");
-    glow.addColorStop(1, "rgba(200,190,210,0)");
-    c.fillStyle = glow;
-    c.fillRect(mx - 200, my - 200, 400, 400);
-    c.fillStyle = "#efe9d2";
-    c.beginPath();
-    c.arc(mx, my, 52, 0, TAU);
-    c.fill();
-    c.fillStyle = "rgba(120,110,90,0.18)";
-    c.beginPath(); c.arc(mx - 14, my - 10, 11, 0, TAU); c.fill();
-    c.beginPath(); c.arc(mx + 16, my + 14, 8, 0, TAU); c.fill();
-    c.beginPath(); c.arc(mx + 4, my - 22, 6, 0, TAU); c.fill();
-
-    /* --- skylines --- */
-    this.drawSkyline(this.skyFar, 0.18, "#0d1526", cam, false);
-    this.drawSkyline(this.skyNear, 0.38, "#080d1a", cam, true);
-
-    /* --- drifting fog band --- */
-    for (let i = 0; i < 3; i++) {
-      const fx = ((t * (6 + i * 3) + i * 480) % (W + 500)) - 250;
-      const fogGrad = c.createRadialGradient(fx, 480 + i * 26, 0, fx, 480 + i * 26, 240);
-      fogGrad.addColorStop(0, "rgba(148,163,184,0.05)");
-      fogGrad.addColorStop(1, "rgba(148,163,184,0)");
-      c.fillStyle = fogGrad;
-      c.fillRect(fx - 240, 380, 480, 200);
-    }
-
-    /* --- mid decor (graveyard) --- */
-    c.save();
-    c.translate(-this.cam * 0.68, camY * 0.5);
-    for (const d of this.decor) this.drawDecor(d, t);
-    c.restore();
-
-    /* --- ground --- */
     c.save();
     c.translate(-cam, camY);
-    const gg = c.createLinearGradient(0, GROUND, 0, H);
-    gg.addColorStop(0, theme.groundTop);
-    gg.addColorStop(0.12, theme.groundMid);
-    gg.addColorStop(1, theme.groundDeep);
-    c.fillStyle = gg;
-    c.fillRect(cam - 60, GROUND, W + 120, H - GROUND);
-    c.strokeStyle = "rgba(74,124,82,0.5)";
-    c.lineWidth = 2;
+    // visible world-space bounds, inverse of the translate above
+    const wx0 = cam - 80, wx1 = cam + W + 80;
+    const wy0 = -camY - 80, wy1 = H - camY + 80;
+
+    // fine scan grid — sells top-down motion without a horizon line
+    c.strokeStyle = "rgba(255,255,255,0.035)";
+    c.lineWidth = 1;
+    const grid = 64;
     c.beginPath();
-    c.moveTo(cam - 60, GROUND + 0.5);
-    c.lineTo(cam + W + 60, GROUND + 0.5);
+    for (let gx = Math.floor(wx0 / grid) * grid; gx < wx1; gx += grid) {
+      c.moveTo(gx, wy0);
+      c.lineTo(gx, wy1);
+    }
+    for (let gy = Math.floor(wy0 / grid) * grid; gy < wy1; gy += grid) {
+      c.moveTo(wx0, gy);
+      c.lineTo(wx1, gy);
+    }
     c.stroke();
-    // tufts
+
+    // ground tufts (world-space, no parallax — the ground is directly beneath you)
     c.strokeStyle = "rgba(52,84,56,0.7)";
     c.lineWidth = 1.4;
     for (const tu of this.tufts) {
-      if (tu.x < cam - 40 || tu.x > cam + W + 40) continue;
+      if (tu.x < wx0 || tu.x > wx1 || tu.y < wy0 || tu.y > wy1) continue;
       const sway = Math.sin(t * 1.4 + tu.x) * 1.4;
       c.beginPath();
-      c.moveTo(tu.x, GROUND + 1);
-      c.quadraticCurveTo(tu.x + sway, GROUND - tu.h * 0.6, tu.x - 3 * tu.s + sway, GROUND - tu.h);
-      c.moveTo(tu.x + 4, GROUND + 1);
-      c.quadraticCurveTo(tu.x + 4 + sway, GROUND - tu.h * 0.5, tu.x + 7 * tu.s + sway, GROUND - tu.h * 0.8);
+      c.moveTo(tu.x, tu.y + 1);
+      c.quadraticCurveTo(tu.x + sway, tu.y - tu.h * 0.6, tu.x - 3 * tu.s + sway, tu.y - tu.h);
+      c.moveTo(tu.x + 4, tu.y + 1);
+      c.quadraticCurveTo(tu.x + 4 + sway, tu.y - tu.h * 0.5, tu.x + 7 * tu.s + sway, tu.y - tu.h * 0.8);
       c.stroke();
     }
-    // blood decals
+
+    // blood decals, flat pools at their actual world position
     for (const d of this.decals) {
+      if (d.x < wx0 || d.x > wx1 || d.y < wy0 || d.y > wy1) continue;
       c.fillStyle = `rgba(80,14,18,${d.a})`;
       c.beginPath();
-      c.ellipse(d.x, GROUND + 7, 20 * d.s, 4.5 * d.s, 0, 0, TAU);
+      c.ellipse(d.x, d.y, 14 * d.s, 10 * d.s, 0, 0, TAU);
       c.fill();
       c.fillStyle = `rgba(60,10,12,${d.a * 0.8})`;
       c.beginPath();
-      c.ellipse(d.x + 14 * d.s, GROUND + 10, 8 * d.s, 2.5 * d.s, 0, 0, TAU);
+      c.ellipse(d.x + 9 * d.s, d.y + 6 * d.s, 6 * d.s, 4 * d.s, 0, 0, TAU);
       c.fill();
     }
+
+    // decor, scattered across the full 2D play area as top-down footprints
+    for (const d of this.decor) {
+      if (d.x < wx0 || d.x > wx1 || d.y < wy0 || d.y > wy1) continue;
+      this.drawDecor(d, t);
+    }
     c.restore();
+
+    /* --- vignette (darkness beyond the player's light) --- */
+    const vg = c.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.74);
+    vg.addColorStop(0, "rgba(0,0,0,0)");
+    vg.addColorStop(1, "rgba(0,0,0,0.55)");
+    c.fillStyle = vg;
+    c.fillRect(0, 0, W, H);
 
     /* --- travel: gates + safe house door --- */
     if (this.phase === "travel") {
@@ -3026,154 +2990,122 @@ export class Engine {
     c.restore();
   }
 
-  private drawSkyline(bld: Building[], p: number, color: string, cam: number, windows: boolean) {
-    const c = this.ctx;
-    c.save();
-    c.translate(-cam * p, 0);
-    c.fillStyle = color;
-    for (const b of bld) {
-      const top = GROUND - b.h * 0.9 - 60;
-      c.fillRect(b.x, top, b.w, GROUND - top + 60);
-      if (b.w > 60) {
-        c.fillRect(b.x + b.w * 0.5 - 1.5, top - 14, 3, 14); // antenna
-      }
-      if (windows && b.win > 0.35) {
-        c.fillStyle = "rgba(245,158,11,0.07)";
-        const cols = Math.floor(b.w / 14);
-        for (let i = 0; i < cols; i++) {
-          for (let j = 0; j < 4; j++) {
-            if ((i * 7 + j * 3 + Math.floor(b.x)) % 5 < 2)
-              c.fillRect(b.x + 5 + i * 14, top + 10 + j * 18, 4, 6);
-          }
-        }
-        c.fillStyle = color;
-      }
-    }
-    c.restore();
-  }
-
+  /** Top-down footprint for each decor kind — drawn flat, as seen from directly above. */
   private drawDecor(d: Decor, t: number) {
     const c = this.ctx;
-    const base = GROUND + 4;
     c.save();
-    c.translate(d.x, base);
+    c.translate(d.x, d.y);
     c.scale(d.s, d.s);
+    // contact shadow every kind shares, drawn first so accessories sit on top
+    c.fillStyle = "rgba(0,0,0,0.35)";
+    c.beginPath();
+    c.ellipse(1.5, 2, 15, 12, 0, 0, TAU);
+    c.fill();
     if (d.kind === 0 || d.kind === 1) {
-      // tombstones
+      // tombstone slab, seen from above
       c.fillStyle = "#141b29";
-      c.strokeStyle = "rgba(148,163,184,0.12)";
+      c.strokeStyle = "rgba(148,163,184,0.18)";
       c.lineWidth = 1;
       if (d.kind === 0) {
-        this.rr(-11, -34, 22, 34, 8);
+        this.rr(-9, -13, 18, 26, 6);
         c.fill();
         c.stroke();
-        c.strokeStyle = "rgba(148,163,184,0.2)";
+        c.strokeStyle = "rgba(148,163,184,0.28)";
         c.beginPath();
-        c.moveTo(0, -28); c.lineTo(0, -18);
-        c.moveTo(-5, -24); c.lineTo(5, -24);
+        c.moveTo(-5, 0); c.lineTo(5, 0);
+        c.moveTo(0, -5); c.lineTo(0, 5);
         c.stroke();
       } else {
-        this.rr(-13, -26, 26, 26, 4);
+        this.rr(-12, -12, 24, 24, 4);
         c.fill();
         c.stroke();
       }
     } else if (d.kind === 2) {
-      // dead tree
-      c.strokeStyle = "#060a12";
-      c.lineWidth = 6;
-      c.lineCap = "round";
-      const sway = Math.sin(t * 0.7 + d.ph) * 2;
+      // dead tree canopy, viewed from above — irregular blob + radiating cracks
+      const sway = Math.sin(t * 0.7 + d.ph) * 1.5;
+      c.fillStyle = "#0c1119";
       c.beginPath();
-      c.moveTo(0, 0);
-      c.quadraticCurveTo(4 + sway, -48, sway, -92);
-      c.stroke();
-      c.lineWidth = 3.4;
+      c.moveTo(20 + sway, 0);
+      for (let i = 1; i <= 8; i++) {
+        const a = (i / 8) * TAU;
+        const rr = 15 + Math.sin(a * 3 + d.ph) * 5;
+        c.lineTo(Math.cos(a) * rr + sway * 0.3, Math.sin(a) * rr);
+      }
+      c.closePath();
+      c.fill();
+      c.strokeStyle = "#1c2634";
+      c.lineWidth = 1.4;
       c.beginPath();
-      c.moveTo(sway, -58);
-      c.quadraticCurveTo(-16 + sway, -72, -30, -88);
-      c.moveTo(2 + sway, -70);
-      c.quadraticCurveTo(18 + sway, -84, 26, -104);
-      c.moveTo(sway, -84);
-      c.quadraticCurveTo(-8 + sway, -98, -12, -116);
+      c.moveTo(0, 0); c.lineTo(12, -10);
+      c.moveTo(0, 0); c.lineTo(-14, -4);
+      c.moveTo(0, 0); c.lineTo(4, 14);
       c.stroke();
     } else if (d.kind === 3) {
-      // crooked lamp post
-      c.strokeStyle = "#0b0f18";
-      c.lineWidth = 4;
-      c.beginPath();
-      c.moveTo(0, 0);
-      c.lineTo(-8, -96);
-      c.lineTo(10, -102);
-      c.stroke();
+      // lamp post — a small pole cross-section with a pool of light beneath it
       const flick = 0.75 + 0.25 * Math.sin(t * 9 + d.ph) * Math.sin(t * 3.7 + d.ph);
-      c.fillStyle = `rgba(253,186,116,${0.75 * flick})`;
-      c.beginPath();
-      c.arc(12, -100, 4, 0, TAU);
-      c.fill();
-      const lg = c.createRadialGradient(12, -100, 2, 12, -100, 52);
-      lg.addColorStop(0, `rgba(251,146,60,${0.16 * flick})`);
+      const lg = c.createRadialGradient(0, 0, 2, 0, 0, 60);
+      lg.addColorStop(0, `rgba(251,146,60,${0.22 * flick})`);
       lg.addColorStop(1, "rgba(251,146,60,0)");
       c.fillStyle = lg;
-      c.fillRect(-44, -156, 116, 116);
+      c.fillRect(-60, -60, 120, 120);
+      c.fillStyle = "#0b0f18";
+      c.beginPath(); c.arc(0, 0, 4, 0, TAU); c.fill();
+      c.fillStyle = `rgba(253,186,116,${0.85 * flick})`;
+      c.beginPath(); c.arc(0, 0, 2.4, 0, TAU); c.fill();
     } else if (d.kind === 4) {
-      // burnt-out wrecked car
+      // burnt-out car, roof/hood/trunk seen from above
       c.fillStyle = "#12161c";
-      this.rr(-32, -22, 64, 22, 5);
+      this.rr(-15, -28, 30, 56, 6);
       c.fill();
       c.fillStyle = "#1c222b";
-      this.rr(-20, -34, 34, 14, 4);
+      this.rr(-11, -16, 22, 30, 4);
       c.fill();
       c.fillStyle = "rgba(0,0,0,0.6)";
-      c.fillRect(-16, -32, 12, 10);
-      c.fillRect(0, -32, 10, 10);
+      c.fillRect(-9, -13, 18, 10);
+      c.fillRect(-9, 5, 18, 8);
       c.fillStyle = "#05070a";
-      c.beginPath(); c.arc(-20, 0, 7, 0, TAU); c.fill();
-      c.beginPath(); c.arc(18, 0, 7, 0, TAU); c.fill();
-      c.fillStyle = "rgba(0,0,0,0.35)";
-      c.beginPath(); c.ellipse(-4, -14, 18, 10, 0.1, 0, TAU); c.fill();
-      // rising smoke wisp
-      const wob = Math.sin(t * 0.8 + d.ph) * 3;
-      c.strokeStyle = "rgba(148,163,184,0.15)";
-      c.lineWidth = 3;
-      c.lineCap = "round";
+      c.beginPath(); c.arc(-15, -18, 5, 0, TAU); c.fill();
+      c.beginPath(); c.arc(15, -18, 5, 0, TAU); c.fill();
+      c.beginPath(); c.arc(-15, 18, 5, 0, TAU); c.fill();
+      c.beginPath(); c.arc(15, 18, 5, 0, TAU); c.fill();
+      // drifting smoke, blooming outward from the wreck
+      const wob = Math.sin(t * 0.8 + d.ph) * 4;
+      c.fillStyle = "rgba(148,163,184,0.12)";
       c.beginPath();
-      c.moveTo(-6, -34);
-      c.quadraticCurveTo(-6 + wob, -60, -2, -84);
-      c.stroke();
-    } else if (d.kind === 5) {
-      // concrete road barrier
-      c.fillStyle = "#1a1d22";
-      c.beginPath();
-      c.moveTo(-20, 0); c.lineTo(-14, -28); c.lineTo(14, -28); c.lineTo(20, 0);
-      c.closePath();
+      c.ellipse(wob, -4, 20, 20, 0, 0, TAU);
       c.fill();
-      c.strokeStyle = "rgba(148,163,184,0.15)";
+    } else if (d.kind === 5) {
+      // concrete jersey barrier, a long slab with hazard stripes
+      c.fillStyle = "#1a1d22";
+      this.rr(-8, -22, 16, 44, 3);
+      c.fill();
+      c.strokeStyle = "rgba(148,163,184,0.18)";
       c.lineWidth = 1;
       c.stroke();
-      // reflective hazard stripes
       c.fillStyle = `rgba(251,191,36,${0.35 + 0.15 * Math.sin(t * 2 + d.ph)})`;
-      c.fillRect(-10, -20, 20, 3);
-      c.fillRect(-8, -10, 16, 3);
+      c.fillRect(-6, -3, 12, 3);
+      c.fillRect(-6, 6, 12, 3);
     } else {
-      // collapsed rubble pile with exposed rebar
+      // collapsed rubble pile, exposed rebar lying flat
       c.fillStyle = "#15181c";
       c.beginPath();
-      c.moveTo(-24, 0);
-      c.lineTo(-14, -20);
-      c.lineTo(0, -12);
-      c.lineTo(12, -24);
-      c.lineTo(24, 0);
+      c.moveTo(-18, -10);
+      c.lineTo(-4, -20);
+      c.lineTo(10, -8);
+      c.lineTo(18, 6);
+      c.lineTo(2, 18);
+      c.lineTo(-14, 10);
       c.closePath();
       c.fill();
-      c.strokeStyle = "rgba(148,163,184,0.1)";
+      c.strokeStyle = "rgba(148,163,184,0.12)";
       c.lineWidth = 1;
       c.stroke();
       c.strokeStyle = "#3f2a18";
       c.lineWidth = 2;
       c.lineCap = "round";
       c.beginPath();
-      c.moveTo(6, -20); c.lineTo(2, -44);
-      c.moveTo(-10, -16); c.lineTo(-16, -38);
+      c.moveTo(-8, -4); c.lineTo(10, -10);
+      c.moveTo(-4, 8); c.lineTo(8, 4);
       c.stroke();
     }
     c.restore();
@@ -3329,10 +3261,11 @@ export class Engine {
     const px = z.x - cam;
     if (px < -100 || px > W + 100) return;
     const py = z.y + camY;
-    // soft shadow
+    // soft shadow, directly beneath — top-down, so it tracks the zombie's
+    // own position rather than a fixed horizon line
     c.fillStyle = "rgba(0,0,0,0.45)";
     c.beginPath();
-    c.ellipse(px, GROUND + 6 + camY, 16 * z.scale, 4.5, 0, 0, TAU);
+    c.ellipse(px, py + 6, 16 * z.scale, 8 * z.scale, 0, 0, TAU);
     c.fill();
 
     const skinIdx = Math.floor(z.tint * SKIN.length) % SKIN.length;
@@ -3533,16 +3466,19 @@ export class Engine {
     const def = BOSS_DEFS[b.defId];
     const pct = 1 - clamp(b.timer / windupFor(b.attack, b.phase, def), 0, 1);
     const color = Engine.BOSS_TELL_COLOR[b.attack];
-    const cx = b.attack === "mortar" ? b.targetX - cam : b.x - cam;
+    const isMortar = b.attack === "mortar";
+    const cx = isMortar ? b.targetX - cam : b.x - cam;
+    const cy = isMortar ? b.targetY + camY : b.y + camY;
     const meleeRadius = b.attack === "slam" ? 150 : b.attack === "shieldcharge" ? 110 : 0;
-    const radius = (b.attack === "mortar" ? 95 : meleeRadius) * (0.35 + 0.65 * pct);
+    const radius = (isMortar ? 95 : meleeRadius) * (0.35 + 0.65 * pct);
     if (radius > 0) {
       c.save();
       c.globalAlpha = 0.35 + 0.25 * Math.sin(pct * 18);
       c.strokeStyle = color;
       c.lineWidth = 3;
       c.beginPath();
-      c.ellipse(cx, GROUND + camY + 4, radius, radius * 0.32, 0, 0, TAU);
+      // full circle, seen from above — not the squashed side-view ellipse
+      c.arc(cx, cy, radius, 0, TAU);
       c.stroke();
       c.restore();
     }
@@ -3566,7 +3502,7 @@ export class Engine {
 
     c.fillStyle = "rgba(0,0,0,0.5)";
     c.beginPath();
-    c.ellipse(px, GROUND + 8 + camY, 30 * b.scale, 7, 0, 0, TAU);
+    c.ellipse(px, py + 8, 30 * b.scale, 15 * b.scale, 0, 0, TAU);
     c.fill();
 
     const walk = b.state === "windup" ? 0 : b.t * 2.1;
@@ -3658,17 +3594,20 @@ export class Engine {
     }
   }
 
+  /** Player, drawn as seen from directly above: a round body, a head that
+   * peeks toward the aim direction, feet that scissor along the heading
+   * you're actually moving in, and a gun that rotates a full 360° with the
+   * mouse instead of only flipping left/right. */
   private drawPlayer(cam: number, camY: number, t: number) {
     const c = this.ctx;
     const p = this.pl;
     const px = p.x - cam;
     const py = p.y + camY;
-    const dir = p.face >= 0 ? 1 : -1;
 
-    // soft contact shadow (stays under feet)
-    c.fillStyle = "rgba(0,0,0,0.5)";
+    // soft contact shadow, directly beneath — no side-view foot offset needed
+    c.fillStyle = "rgba(0,0,0,0.45)";
     c.beginPath();
-    c.ellipse(px, GROUND + 5 + camY, 19, 4.5, 0, 0, TAU);
+    c.ellipse(px, py + 3, 14, 12, 0, 0, TAU);
     c.fill();
 
     c.save();
@@ -3676,213 +3615,169 @@ export class Engine {
     if (p.ifr > 0) c.globalAlpha = 0.55 + 0.45 * Math.sin(t * 42);
     if (p.dashT > 0) c.globalAlpha = 0.82;
 
-    // Top-down: run is based on velocity magnitude
     const vel = Math.hypot(p.vx, p.vy);
     const run = vel > 26;
-    const bob = run ? Math.abs(Math.sin(p.walk)) * 2.4 : Math.sin(t * 2.1) * 1.0;
-    const swing = run ? Math.sin(p.walk) : 0;
-    const airLegs = false; // No jumping in top-down mode
+    const heading = run ? Math.atan2(p.vy, p.vx) : p.aim;
+    const bob = run ? Math.abs(Math.sin(p.walk)) * 1.4 : Math.sin(t * 2.1) * 0.5;
+    const stride = run ? Math.sin(p.walk) * 6 : 0;
 
-    // ---- legs (flip x in screen space by dir) ----
-    const l1 = airLegs ? 6 : swing * 8;
-    const l2 = airLegs ? -7 : -swing * 8;
-    this.limb(-1, -28 + bob, dir * (-2 + l1 * 0.55), -14 + bob * 0.5, dir * (-3 + l1), airLegs ? -9 : 0, 7, 4.4, "#1b2536");
-    this.limb(1, -28 + bob, dir * (2 + l2 * 0.55), -13 + bob * 0.5, dir * (3 + l2), airLegs ? -5 : 0, 7, 4.4, "#243349");
-    // boots
+    // ---- feet, scissoring beneath the body along the movement heading ----
+    c.save();
+    c.rotate(heading);
     c.fillStyle = "#080c13";
-    c.beginPath();
-    c.ellipse(dir * (-3 + l1) + dir * 3, airLegs ? -9.5 : -1.4, 5.6, 3.2, 0, 0, TAU);
-    c.fill();
-    c.beginPath();
-    c.ellipse(dir * (3 + l2) + dir * 3, airLegs ? -5.4 : -1.4, 5.6, 3.2, 0, 0, TAU);
-    c.fill();
-
-    // ---- torso (olive tactical jacket) with lean ----
-    c.save();
-    const lean = clamp(p.vx * 0.0009, -0.12, 0.12);
-    c.translate(0, bob);
-    c.rotate(lean * dir);
-    // back strap / pack
-    c.fillStyle = "#0b3a47";
-    this.rr(-11 * dir, -56, 19 * dir, 29, 6);
-    c.fill();
-    c.fillStyle = "#0e7490";
-    this.rr(-11 * dir, -56, 19 * dir, 10, 6);
-    c.fill();
-    // chest rig + ammo pouch
-    c.fillStyle = "#0c4a5e";
-    this.rr(-9 * dir, -50, 15 * dir, 9, 3);
-    c.fill();
-    c.fillStyle = "#0a3542";
-    this.rr(-2 * dir, -40, 8 * dir, 7, 2);
-    c.fill();
-    // zipper + highlight
-    c.strokeStyle = "rgba(255,255,255,0.28)";
-    c.lineWidth = 1.2;
-    c.beginPath();
-    c.moveTo(0 * dir, -46);
-    c.lineTo(0 * dir, -28);
-    c.stroke();
-    c.strokeStyle = "rgba(255,255,255,0.14)";
-    c.lineWidth = 1.4;
-    c.beginPath();
-    c.moveTo(-9 * dir, -50); c.lineTo(-9 * dir, -30);
-    c.stroke();
-
-    // ---- head + beanie ----
-    c.save();
-    c.translate(2 * dir, -64);
-    c.rotate(clamp(lean * 0.6 * dir, -0.1, 0.1));
-    // neck
-    c.fillStyle = "#a9764f";
-    this.rr(-2.4 * dir, 5, 5 * dir, 6, 2);
-    c.fill();
-    // skull
-    c.fillStyle = "#e8b892";
-    c.beginPath();
-    c.ellipse(0, 0, 8.4, 8.8, 0, 0, TAU);
-    c.fill();
-    // jaw shade
-    c.fillStyle = "rgba(160,110,70,0.5)";
-    c.beginPath();
-    c.ellipse(-2 * dir, 3, 6, 5, 0, 0, TAU);
-    c.fill();
-    // beanie
-    c.fillStyle = "#7f1d1d";
-    c.beginPath();
-    c.ellipse(0, -1.6, 8.8, 8.4, 0, Math.PI, TAU);
-    c.fill();
-    c.fillRect(-8.8, -3, 17.6, 4);
-    c.fillStyle = "#5b1414";
-    c.fillRect(-8.8, -0.2, 17.6, 1.6);
-    // eye
-    c.fillStyle = "#1c1917";
-    c.beginPath();
-    c.ellipse(4.4 * dir, 0.4, 1.7, 1.9, 0, 0, TAU);
-    c.fill();
-    c.fillStyle = "rgba(255,255,255,0.5)";
-    c.beginPath();
-    c.ellipse(4.9 * dir, -0.2, 0.6, 0.7, 0, 0, TAU);
-    c.fill();
+    c.beginPath(); c.ellipse(-7 + Math.abs(stride) * 0.3, 6 + stride, 4.4, 3, 0, 0, TAU); c.fill();
+    c.beginPath(); c.ellipse(-7 + Math.abs(stride) * 0.3, -6 - stride, 4.4, 3, 0, 0, TAU); c.fill();
     c.restore();
 
-    // ---- arm + weapon (rotates in screen space — no mirroring) ----
+    // ---- torso, a rounded tactical-vest body seen from above ----
+    c.save();
+    c.translate(0, bob);
+    const torsoGrad = c.createRadialGradient(-3, -3, 2, 0, 0, 13);
+    torsoGrad.addColorStop(0, "#0e7490");
+    torsoGrad.addColorStop(1, "#0a3542");
+    c.fillStyle = torsoGrad;
+    c.beginPath();
+    c.ellipse(0, 0, 12, 12, 0, 0, TAU);
+    c.fill();
+    c.strokeStyle = "rgba(255,255,255,0.15)";
+    c.lineWidth = 1;
+    c.stroke();
+    // backpack, trailing opposite the aim direction
+    c.fillStyle = "#0b3a47";
+    c.beginPath();
+    c.ellipse(Math.cos(p.aim + Math.PI) * 8, Math.sin(p.aim + Math.PI) * 8, 7, 8, p.aim, 0, TAU);
+    c.fill();
+    // chest rig pouch
+    c.fillStyle = "#0c4a5e";
+    c.beginPath();
+    c.ellipse(Math.cos(p.aim) * 5, Math.sin(p.aim) * 5, 4.5, 4.5, 0, 0, TAU);
+    c.fill();
+
+    // ---- head + beanie, peeking slightly toward the aim direction ----
+    const headX = Math.cos(p.aim) * 5, headY = Math.sin(p.aim) * 5;
+    c.fillStyle = "#7f1d1d";
+    c.beginPath();
+    c.ellipse(headX, headY, 7, 7, 0, 0, TAU);
+    c.fill();
+    c.fillStyle = "#5b1414";
+    c.beginPath();
+    c.arc(headX, headY, 7, p.aim - 0.5, p.aim + 0.5);
+    c.arc(headX, headY, 4.5, p.aim + 0.5, p.aim - 0.5, true);
+    c.fill();
+    c.fillStyle = "#e8b892"; // face sliver facing the aim direction
+    c.beginPath();
+    c.ellipse(headX + Math.cos(p.aim) * 3.2, headY + Math.sin(p.aim) * 3.2, 3.6, 3.6, 0, 0, TAU);
+    c.fill();
+    c.fillStyle = "#1c1917"; // eyes, a hint of direction
+    c.beginPath();
+    c.ellipse(headX + Math.cos(p.aim) * 4.6, headY + Math.sin(p.aim) * 4.6, 1.3, 1.3, 0, 0, TAU);
+    c.fill();
+    c.restore(); // torso translate
+
+    // ---- arm + weapon, rotating a full 360° with the aim angle ----
     const kick = clamp(p.flash * 12, 0, 1);
-    const recoil = kick * 5;
-    const shoulderX = 1 * dir, shoulderY = -49 + bob;
+    const recoil = kick * 4;
     const wcls = WDEF[this.kind].cls;
     const gunLen =
-      this.kind === "deagle" ? 38
-      : wcls === "carbine" ? 42
-      : wcls === "smg" ? 36
-      : wcls === "shotgun" ? 40
-      : 32;
+      this.kind === "deagle" ? 32
+      : wcls === "carbine" ? 38
+      : wcls === "smg" ? 32
+      : wcls === "shotgun" ? 36
+      : 26;
     c.save();
-    c.translate(shoulderX, shoulderY);
-    // arm points along aim (screen space, so left/right both work)
+    c.translate(0, bob);
     c.rotate(p.aim);
-    // sleeve
-    c.strokeStyle = "#0b5a6e";
-    c.lineWidth = 6.4;
-    c.lineCap = "round";
-    c.beginPath();
-    c.moveTo(0, 0);
-    c.lineTo(gunLen * 0.42, recoil * 0.4);
-    c.stroke();
-    // hand
-    c.fillStyle = "#e8b892";
-    c.beginPath();
-    c.arc(gunLen * 0.46, recoil * 0.4, 2.6, 0, TAU);
-    c.fill();
     // weapon body
-    const bx = gunLen * 0.4 + recoil;
+    const bx = 7 + recoil;
     c.fillStyle = "#111a26";
-    this.rr(bx, -5, gunLen - gunLen * 0.4, 9, 2);
+    this.rr(bx, -4.5, gunLen - bx, 8, 2);
     c.fill();
     c.fillStyle = "#28323f";
-    // silhouette by weapon class / notable model
-    const tail = bx + (gunLen - gunLen * 0.4);
+    const tail = gunLen;
     if (wcls === "shotgun") {
-      c.fillRect(tail, -3.6, gunLen * 0.6, 4);
-      c.fillRect(tail, 1.2, gunLen * 0.5, 3);
+      c.fillRect(tail - gunLen * 0.5, -3.2, gunLen * 0.5, 3.6);
       if (this.kind === "benelli") {
         c.fillStyle = "#3f2a18";
-        c.fillRect(bx - 4, 1.5, 8, 6); // classic stock, tube fed
+        c.fillRect(bx - 3.5, 1, 7, 5.5); // classic stock, tube fed
       } else {
         c.fillStyle = "#1c2634";
         c.beginPath();
-        c.arc(bx + 8, 6.5, 5.4, 0, TAU); // big drum magazine
+        c.arc(bx + 6, 5, 4.6, 0, TAU); // big drum magazine
         c.fill();
       }
     } else if (wcls === "carbine") {
-      c.fillRect(tail, -3, gunLen * 0.62, 3.6);
+      c.fillRect(tail - gunLen * 0.5, -2.6, gunLen * 0.5, 3.2);
       c.fillStyle = "#1c2634";
-      this.rr(bx - 4, -4.4, 8, 6, 2);
+      this.rr(bx - 3, -3.8, 6.5, 5, 2);
       c.fill(); // optic
-      c.fillRect(bx + 7, 3, 4, 9); // straight mag
+      c.fillRect(bx + 6, 2.6, 3.4, 8); // straight mag
       if (this.kind === "asval") {
         c.fillStyle = "#0d141d";
-        c.fillRect(tail + gunLen * 0.2, -4.2, gunLen * 0.42, 6); // suppressor shroud
+        c.fillRect(tail - gunLen * 0.36, -3.4, gunLen * 0.34, 5); // suppressor shroud
       }
     } else if (wcls === "smg") {
-      c.fillRect(tail, -3.2, gunLen * 0.5, 3.2);
+      c.fillRect(tail - gunLen * 0.42, -2.8, gunLen * 0.42, 2.8);
       c.fillStyle = "#1c2634";
       if (this.kind === "bizon") {
-        this.rr(bx + 3, 3, 17, 5, 2.5); // helical mag under barrel
+        this.rr(bx + 3, 2.6, 14, 4.4, 2); // helical mag under barrel
         c.fill();
       } else if (this.kind === "p90") {
-        this.rr(bx - 2, -8, 20, 4, 2); // top-mounted horizontal mag
+        this.rr(bx - 2, -7, 16, 3.4, 2); // top-mounted horizontal mag
         c.fill();
       } else {
-        c.fillRect(bx + 6, 3, 4, 10); // vector box mag
+        c.fillRect(bx + 5, 2.6, 3.4, 8.5); // vector box mag
       }
     } else {
       // pistols
-      c.fillRect(tail, -3.4, gunLen * 0.46, 3.4);
+      c.fillRect(tail - gunLen * 0.4, -2.9, gunLen * 0.4, 2.9);
       c.fillStyle = "#3f2a18";
-      c.fillRect(bx - 3, 1, 6, 8); // grip
+      c.fillRect(bx - 2.5, 0.8, 5, 7); // grip
       if (this.kind === "deagle") {
         c.fillStyle = "#4b5563";
-        c.fillRect(tail, -5, gunLen * 0.46, 1.8); // heavy slab slide rib
+        c.fillRect(tail - gunLen * 0.4, -4, gunLen * 0.4, 1.6); // heavy slab slide rib
       } else if (this.kind === "tec9") {
         c.fillStyle = "#1c2634";
-        c.fillRect(bx + 4, 2, 3.4, 11); // long stick mag
+        c.fillRect(bx + 3.2, 1.8, 3, 9); // long stick mag
       }
     }
+    // hand
+    c.fillStyle = "#e8b892";
+    c.beginPath();
+    c.arc(bx - 1, 0, 2.4, 0, TAU);
+    c.fill();
     // muzzle flash
     if (p.flash > 0) {
       const fa = clamp(p.flash * 16, 0, 1);
       const mx = gunLen + recoil;
       c.globalCompositeOperation = "lighter";
-      const fg = c.createRadialGradient(mx, 0, 0, mx, 0, 26);
+      const fg = c.createRadialGradient(mx, 0, 0, mx, 0, 24);
       fg.addColorStop(0, `rgba(254,240,138,${0.95 * fa})`);
       fg.addColorStop(0.4, `rgba(251,146,60,${0.55 * fa})`);
       fg.addColorStop(1, "rgba(251,146,60,0)");
       c.fillStyle = fg;
-      c.fillRect(mx - 26, -26, 52, 52);
+      c.fillRect(mx - 24, -24, 48, 48);
       c.strokeStyle = `rgba(254,240,138,${0.85 * fa})`;
-      c.lineWidth = 2.2;
+      c.lineWidth = 2;
       c.beginPath();
-      c.moveTo(mx, 0); c.lineTo(mx + 16 * fa, -7 * fa);
-      c.moveTo(mx, 0); c.lineTo(mx + 18 * fa, 5 * fa);
-      c.moveTo(mx, 0); c.lineTo(mx + 12 * fa, 0);
+      c.moveTo(mx, 0); c.lineTo(mx + 14 * fa, -6 * fa);
+      c.moveTo(mx, 0); c.lineTo(mx + 16 * fa, 5 * fa);
+      c.moveTo(mx, 0); c.lineTo(mx + 10 * fa, 0);
       c.stroke();
       c.globalCompositeOperation = "source-over";
     }
     c.restore();
-    c.restore(); // torso lean
     c.restore(); // root
 
     // muzzle world light
     if (p.flash > 0) {
-      const mzx = p.x + Math.cos(p.aim) * (gunLen + 6) - cam;
-      const mzy = p.y - 49 + bob + Math.sin(p.aim) * (gunLen + 6) + camY;
+      const mzx = p.x + Math.cos(p.aim) * (gunLen + 4) - cam;
+      const mzy = p.y + bob + Math.sin(p.aim) * (gunLen + 4) + camY;
       this.ctx.globalCompositeOperation = "lighter";
-      const lg = this.ctx.createRadialGradient(mzx, mzy, 4, mzx, mzy, 130);
+      const lg = this.ctx.createRadialGradient(mzx, mzy, 4, mzx, mzy, 120);
       lg.addColorStop(0, `rgba(251,191,36,${0.16 * clamp(p.flash * 16, 0, 1)})`);
       lg.addColorStop(1, "rgba(251,191,36,0)");
       this.ctx.fillStyle = lg;
-      this.ctx.fillRect(mzx - 130, mzy - 130, 260, 260);
+      this.ctx.fillRect(mzx - 120, mzy - 120, 240, 240);
       this.ctx.globalCompositeOperation = "source-over";
     }
   }
