@@ -60,22 +60,25 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-violet-400/25 bg-black/50 text-[10px] font-bold text-violet-300 backdrop-blur-sm">
-            {hud.level}
-          </div>
-          <div>
-            <div className="h-2 w-56 overflow-hidden rounded-full border border-white/10 bg-black/60">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-400 transition-[width] duration-200"
-                style={{ width: `${xpPct * 100}%` }}
-              />
+        {/* campaign has no leveling — power comes from the Hideout loadout + found gear */}
+        {!hud.campaignMode && (
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-violet-400/25 bg-black/50 text-[10px] font-bold text-violet-300 backdrop-blur-sm">
+              {hud.level}
             </div>
-            <div className="mt-1 text-[10px] font-semibold tracking-widest text-white/50">
-              LEVEL {hud.level}
+            <div>
+              <div className="h-2 w-56 overflow-hidden rounded-full border border-white/10 bg-black/60">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-400 transition-[width] duration-200"
+                  style={{ width: `${xpPct * 100}%` }}
+                />
+              </div>
+              <div className="mt-1 text-[10px] font-semibold tracking-widest text-white/50">
+                LEVEL {hud.level}
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* top-center: stage + wave, or travel progress */}

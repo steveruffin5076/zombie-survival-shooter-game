@@ -291,7 +291,12 @@ export default function App() {
         )}
 
         {showTerminal && inv && (
-          <HideoutTerminal inv={inv} onClose={closeTerminal} onStartMission={startMissionFromHideout} />
+          <HideoutTerminal
+            inv={inv}
+            onClose={closeTerminal}
+            onStartMission={startMissionFromHideout}
+            onSelectLoadout={(id) => engineRef.current?.setLoadout(id)}
+          />
         )}
 
         {choices && <LevelUpModal choices={choices} level={hud?.level ?? 1} onPick={choose} />}

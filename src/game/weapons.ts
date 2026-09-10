@@ -186,3 +186,10 @@ export const CLASS_ROLE: Record<WeaponClass, string> = {
 export const WEAPON_IDS = Object.keys(WEAPONS);
 export const byClass = (cls: WeaponClass) => WEAPON_IDS.filter((id) => WEAPONS[id].cls === cls);
 export const STARTER = "p365";
+
+/**
+ * Campaign's fixed starter arsenal, chosen at the Hideout before a mission —
+ * civilian/scavenged tier, not the military-grade carbines. No in-game way to
+ * earn more yet; growing this set is future meta-progression work.
+ */
+export const CAMPAIGN_ARSENAL = ["p365", "bizon", "origin12"];

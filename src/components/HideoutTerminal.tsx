@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { InventorySnapshot } from "../game/types";
 import { ACTS } from "../game/acts";
 import { docsForAct, type DocDef } from "../game/intel";
+import { CAMPAIGN_ARSENAL, WEAPONS, CLASS_LABEL } from "../game/weapons";
 import IntelDocOverlay from "./IntelDocOverlay";
 import { X, Newspaper, Crosshair, Lock } from "lucide-react";
 
@@ -16,13 +17,20 @@ interface Props {
   inv: InventorySnapshot;
   onClose: () => void;
   onStartMission: () => void;
+  onSelectLoadout: (weaponId: string) => void;
 }
 
 /** Opened by interacting with the Hideout's terminal — the campaign's actual hub screen. */
-export default function HideoutTerminal({ inv, onClose, onStartMission }: Props) {
+export default function HideoutTerminal({ inv, onClose, onStartMission, onSelectLoadout }: Props) {
   const [tab, setTab] = useState<Tab>("missions");
   const [openDoc, setOpenDoc] = useState<DocDef | null>(null);
+  const [loadout, setLoadout] = useState(CAMPAIGN_ARSENAL[0]);
   const docActs = ACTS.filter((a) => docsForAct(a.id).length > 0);
+
+  const pickLoadout = (wid: string) => {
+    setLoadout(wid);
+    onSelectLoadout(wid);
+  };
 
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-[6px]">
@@ -80,11 +88,31 @@ export default function HideoutTerminal({ inv, onClose, onStartMission }: Props)
           )}
 
           {tab === "loadout" && (
-            <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-zinc-500">
-              <Crosshair className="h-8 w-8 text-zinc-700" />
-              <div className="text-sm font-bold tracking-wide text-zinc-300">SIG SAUER P365</div>
-              <div className="max-w-xs text-xs leading-relaxed">
-                Your only issued sidearm for now — a wider arsenal to choose from arrives with the campaign loadout system.
+            <div className="flex flex-col items-center gap-5">
+              <div className="text-[10px] font-bold tracking-[0.3em] text-zinc-500">CHOOSE YOUR SIDEARM</div>
+              <div className="flex gap-3">
+                {CAMPAIGN_ARSENAL.map((wid) => {
+                  const w = WEAPONS[wid];
+                  const active = loadout === wid;
+                  return (
+                    <button
+                      key={wid}
+                      onClick={() => pickLoadout(wid)}
+                      className={`flex w-36 flex-col items-center gap-1.5 rounded-lg border p-4 text-center transition ${
+                        active
+                          ? "border-amber-400/50 bg-amber-400/10 text-amber-300"
+                          : "border-white/10 bg-white/[0.02] text-zinc-400 hover:border-white/25 hover:text-zinc-200"
+                      }`}
+                    >
+                      <Crosshair className="h-5 w-5" />
+                      <span className="text-xs font-bold leading-tight">{w.name}</span>
+                      <span className="text-[9px] tracking-wide text-zinc-500">{CLASS_LABEL[w.cls]}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="max-w-sm text-center text-xs leading-relaxed text-zinc-600">
+                {WEAPONS[loadout].desc}
               </div>
             </div>
           )}

@@ -1,6 +1,6 @@
 import { UPGRADES, type UpgradeDef } from "./upgrades";
 import {
-  WEAPONS as WDEF, WEAPON_IDS, CLASS_ORDER, CLASS_LABEL, CLASS_ROLE, byClass, STARTER,
+  WEAPONS as WDEF, WEAPON_IDS, CLASS_ORDER, CLASS_LABEL, CLASS_ROLE, byClass, STARTER, CAMPAIGN_ARSENAL,
   type WeaponClass,
 } from "./weapons";
 import { Sfx } from "./audio";
@@ -30,6 +30,10 @@ const W = 1280;
 const H = 720;
 const GROUND = 584;
 const GRAV = 2400;
+// campaign has no mid-run leveling to grow survivability (see baseStats()/recompute()),
+// so it starts with more HP and passive regen than endless's leveled-from-100 baseline
+const CAMPAIGN_MAX_HP = 160;
+const CAMPAIGN_REGEN = 1.5;
 const TAU = Math.PI * 2;
 
 const R = (a: number, b: number) => a + Math.random() * (b - a);
@@ -170,6 +174,8 @@ export class Engine {
   private terminalX = 620;
   /** player is close enough to the terminal to interact */
   private terminalNear = false;
+  /** weapon picked in the Hideout's Loadout tab, applied by reset() on the next startGame("mission") */
+  private pendingKind: string | null = null;
   private over = false;
   private paused = false;
   private modals = new Set<ModalKind>();
@@ -352,6 +358,7 @@ export class Engine {
     this.sfx.ensure();
     this.reset();
     this.recompute();
+    this.pl.hp = this.st.maxHp;
     this.mode = "play";
     this.phase = "break";
     this.breakT = 2.2;
@@ -377,6 +384,11 @@ export class Engine {
     // the attract screen's ambient walkers must not carry into the hideout
     this.zombies = [];
     this.particles = [];
+  }
+
+  /** Picks which of CAMPAIGN_ARSENAL's weapons the next campaign run starts equipped with. */
+  setLoadout(weaponId: string) {
+    if (CAMPAIGN_ARSENAL.includes(weaponId)) this.pendingKind = weaponId;
   }
 
   togglePause() {
@@ -413,11 +425,22 @@ export class Engine {
   }
 
   private baseStats() {
+    // Campaign has no mid-run leveling to grow survivability, but the enemy
+    // hp/dmg curve (difficultyFor) still climbs across all 4 of Act I's
+    // stages exactly as it always did. Boss DPS was already tuned against
+    // the unleveled pistol baseline (see docs/progress.md's Phase 6 note),
+    // so damage stays untouched — but a full uncheated Act I playthrough
+    // with the flat starter loadout needed 58 HP-critical saves in barely
+    // 1.5 stages without this. Campaign gets more HP and passive regen to
+    // compensate for the survivability growth leveling used to provide;
+    // endless is completely unaffected.
+    const campaign = this.runMode === "mission";
     return {
       damage: 13, fireRate: 3.1, bulletSpeed: 800, jitter: 0.02,
       projectiles: 1, projSpread: 0, projJitter: 1,
       pierce: 0, crit: 0.05,
-      speed: 275, maxHp: 100, magnet: 1, lifesteal: 0, regen: 0, dashMax: 2.3,
+      speed: 275, maxHp: campaign ? CAMPAIGN_MAX_HP : 100, magnet: 1, lifesteal: 0,
+      regen: campaign ? CAMPAIGN_REGEN : 0, dashMax: 2.3,
     };
   }
 
@@ -431,6 +454,16 @@ export class Engine {
     this.owned = new Set<string>([STARTER]);
     this.equipped = { pistol: STARTER };
     this.kind = STARTER;
+    // campaign: no mid-run weapon unlocks (leveling is off, see gainXp), so the
+    // full curated arsenal is owned from the start and the player picks which
+    // one to carry at the Hideout's Loadout tab before the run begins
+    if (this.runMode === "mission") {
+      for (const wid of CAMPAIGN_ARSENAL) {
+        this.owned.add(wid);
+        this.equipped[WDEF[wid].cls] = wid;
+      }
+      if (this.pendingKind && this.owned.has(this.pendingKind)) this.kind = this.pendingKind;
+    }
     this.ammo = {};
     this.reserve = {};
     this.supp = {};
@@ -1710,6 +1743,7 @@ export class Engine {
     this.backpack = [];
     this.invVer++;
     this.recompute();
+    this.pl.hp = this.st.maxHp;
     this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
     this.cam = this.stageDef.fixedCamera ? this.camOrigin() : clamp(this.pl.x - W / 2, 0, this.worldW - W);
     this.mode = "play";
@@ -1736,6 +1770,9 @@ export class Engine {
   }
 
   private gainXp(v: number) {
+    // campaign: no mid-run leveling — power comes from the Hideout loadout and
+    // whatever's found in the field, per enhancement-1.md's tactical-survivor framing
+    if (this.runMode === "mission") return;
     const p = this.pl;
     p.xp += v;
     while (p.xp >= p.xpNext) {
@@ -1862,6 +1899,8 @@ export class Engine {
   private recompute() {
     const s = (id: string) => this.stacks[id] || 0;
     const w = WDEF[this.kind] ?? WDEF.pistol;
+    // campaign has no mid-run leveling to grow survivability — see baseStats()
+    const campaign = this.runMode === "mission";
     // multishot adds pellets to shotgun, extra rounds to everything else
     const extra = s("multi");
     const projectiles = w.projectiles + extra * (w.cls === "shotgun" ? 2 : 1);
@@ -1878,10 +1917,10 @@ export class Engine {
       crit: 0.05 + w.critBonus + 0.12 * s("crit"),
       // weapon class governs mobility (shotgun/BR are heavy, SMG/pistol are light)
       speed: 275 * (1 + 0.16 * s("speed")) * w.moveMul,
-      maxHp: 100 + 30 * s("hp"),
+      maxHp: (campaign ? CAMPAIGN_MAX_HP : 100) + 30 * s("hp"),
       magnet: 1 + 0.7 * s("magnet"),
       lifesteal: 0.03 * s("vamp"),
-      regen: 0.9 * s("regen"),
+      regen: (campaign ? CAMPAIGN_REGEN : 0) + 0.9 * s("regen"),
       dashMax: 2.3 * Math.pow(0.68, s("dash")),
     };
   }
@@ -2598,6 +2637,7 @@ export class Engine {
       muted: this.sfx.muted,
       playing: this.mode === "play" && !this.over,
       terminalNear: this.terminalNear,
+      campaignMode: this.runMode === "mission",
       crateNear: nearCrate !== null,
       crateTier: nearCrate?.tier ?? 0,
       crateOpenPct: clamp(this.crateOpenT / 1.2, 0, 1),
