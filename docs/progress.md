@@ -3,10 +3,11 @@
 **Source of truth for "what's next".** Update this before ending a session.
 
 - **Completed plan (Phases 8–12):** `~/.claude/plans/logical-moseying-reddy.md` — the Act I vertical slice of `enhancement-1.md`
+  - ✅ **Phase 8 finalized on 2026-09-10:** acts.ts and acts.test.ts created with ACTS data for 6-act campaign; stages.ts rewritten to derive 24-stage table from ACTS; difficulty scaling implemented with proper curve (~40 by Act VI); HUD updated to display stage names; all tests passing, build succeeding
 - **Completed plan (Phases 0–7):** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
 - **Design doc driving Phases 8+:** `enhancement-1.md` (repo root, on `main`)
-- **Last updated:** 2026-09-10 (Phase 21 done — campaign removed, Endless-only with persistent progression)
+- **Last updated:** 2026-09-10 (Phase 8 finalized; phases 9-12 already complete from previous session)
 
 ---
 

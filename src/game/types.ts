@@ -150,5 +150,5 @@ export type EngineEvent =
   | { type: "levelup"; choices: UpgradeChoice[] }
   | { type: "resume" }
   | { type: "gameover"; stats: GameStats }
-  | { type: "stageclear"; stage: number; next: number; wavesPerStage: number }
+  | { type: "stageclear"; stage: number; next: number; stageName: string; stageSub: string; wavesPerStage: number }
   | { type: "pause"; value: boolean };

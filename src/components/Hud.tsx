@@ -87,6 +87,7 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
         <div className="text-[10px] font-bold tracking-[0.42em] text-white/45">
           STAGE {hud.stage}
         </div>
+        <div className="text-sm font-semibold text-white">{hud.stageName}</div>
         {hud.phase === "prep" ? (
           <>
             <div className="font-display text-2xl tracking-[0.18em] text-emerald-300 drop-shadow-[0_0_14px_rgba(52,211,153,0.45)]">

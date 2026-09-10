@@ -28,7 +28,7 @@ export default function App() {
   const [touch] = useState(() =>
     isTouchCapable(navigator.maxTouchPoints, window.matchMedia("(pointer: coarse)").matches)
   );
-  const [stageClear, setStageClear] = useState<{ stage: number; next: number; wavesPerStage: number } | null>(null);
+  const [stageClear, setStageClear] = useState<{ stage: number; next: number; stageName: string; wavesPerStage: number } | null>(null);
   const [safeHouse, setSafeHouse] = useState(false);
   const [inv, setInv] = useState<InventorySnapshot | null>(null);
   const [showInventory, setShowInventory] = useState(false);
@@ -53,7 +53,7 @@ export default function App() {
           setPaused(false);
           break;
         case "stageclear":
-          setStageClear({ stage: e.stage, next: e.next, wavesPerStage: e.wavesPerStage });
+          setStageClear({ stage: e.stage, next: e.next, stageName: e.stageName, wavesPerStage: e.wavesPerStage });
           setSafeHouse(false);
           break;
         case "pause":
@@ -266,6 +266,7 @@ export default function App() {
           <StageClear
             stage={stageClear.stage}
             next={stageClear.next}
+            stageName={stageClear.stageName}
             wavesPerStage={stageClear.wavesPerStage}
             onContinue={openSafeHouse}
           />
