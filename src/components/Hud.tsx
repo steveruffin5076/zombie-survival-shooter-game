@@ -229,14 +229,14 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
       )}
 
       {/* top-right: score + controls */}
-      <div className="absolute right-3 top-3 flex items-start gap-2 md:right-6 md:top-6 md:gap-4">
+      <div className="absolute right-3 top-3 flex items-start gap-1 md:right-6 md:top-6 md:gap-4">
         <div className="text-right">
-          <div className="font-display text-2xl leading-none tracking-wider text-zinc-100 tabular-nums md:text-3xl">
+          <div className="font-display text-xl leading-none tracking-wider text-zinc-100 tabular-nums md:text-3xl">
             {hud.score.toLocaleString()}
           </div>
-          <div className="mt-0.5 flex items-center justify-end gap-1.5 text-[8px] font-semibold tracking-widest text-white/50 md:mt-1.5 md:gap-3 md:text-[11px]">
+          <div className="mt-0.5 flex items-center justify-end gap-1 text-[7px] font-semibold tracking-widest text-white/50 md:mt-1.5 md:gap-3 md:text-[11px]">
             <span className="flex items-center gap-0.5 md:gap-1">
-              <Skull className="h-2.5 w-2.5 md:h-3.5 md:w-3.5" /> {hud.kills}
+              <Skull className="h-2 w-2 md:h-3.5 md:w-3.5" /> {hud.kills}
             </span>
             <span className="hidden gap-0.5 md:flex md:gap-1">
               <Trophy className="h-2.5 w-2.5 text-amber-400/80 md:h-3.5 md:w-3.5" /> {hud.high.toLocaleString()}
@@ -379,7 +379,7 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
       </div>
 
       {/* right column: consumable slots + fire mode */}
-      <div className="absolute bottom-16 right-3 flex flex-col items-end gap-1.5 md:bottom-28 md:right-6 md:gap-3">
+      <div className="absolute bottom-32 right-3 flex flex-col items-end gap-1.5 md:bottom-28 md:right-6 md:gap-3">
         {/* CONSUMABLE SLOTS — hidden on mobile, visible on desktop */}
         <div className="pointer-events-auto hidden gap-2 md:flex w-44 justify-end">
           {CONSUMABLE_ITEMS.map((id) => {
