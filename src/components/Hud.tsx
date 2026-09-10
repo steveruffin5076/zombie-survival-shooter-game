@@ -380,8 +380,8 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
 
       {/* right column: consumable slots + fire mode */}
       <div className="absolute bottom-28 right-6 flex flex-col items-end gap-3">
-        {/* CONSUMABLE SLOTS */}
-        <div className="pointer-events-auto flex w-44 justify-end gap-2">
+        {/* CONSUMABLE SLOTS — hidden on mobile, visible on desktop */}
+        <div className="pointer-events-auto hidden gap-2 md:flex w-44 justify-end">
           {CONSUMABLE_ITEMS.map((id) => {
             const def = ITEMS[id];
             const count = inv.backpack.filter((it) => it.itemId === id).length;
