@@ -1,27 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Engine } from "./game/engine";
 import type {
-  EngineEvent, GameStats, HudState, InventorySnapshot, MissionStats, UpgradeChoice,
+  EngineEvent, GameStats, HudState, InventorySnapshot, ProfileSnapshot, UpgradeChoice,
 } from "./game/types";
 import type { Deployable, DeployableKind } from "./game/arena";
-import type { RunMode } from "./game/stages";
 import Hud from "./components/Hud";
-import { Menu, LevelUpModal, PauseMenu, GameOver, StageClear, MissionWin } from "./components/Overlays";
+import { Menu, LevelUpModal, PauseMenu, GameOver, StageClear } from "./components/Overlays";
 import InventoryOverlay from "./components/InventoryOverlay";
 import SafeHouseOverlay from "./components/SafeHouseOverlay";
 import RepairPanel from "./components/RepairPanel";
 import TouchControls from "./components/TouchControls";
-import HideoutTerminal from "./components/HideoutTerminal";
-import Prologue from "./components/Prologue";
+import LoadoutProfile from "./components/LoadoutProfile";
 import { isTouchCapable } from "./game/input";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Engine | null>(null);
 
-  const [screen, setScreen] = useState<"menu" | "prologue" | "hideout" | "game">("menu");
-  const [showTerminal, setShowTerminal] = useState(false);
+  const [screen, setScreen] = useState<"menu" | "game">("menu");
+  const [showLoadout, setShowLoadout] = useState(false);
   const [hud, setHud] = useState<HudState | null>(null);
+  const [profile, setProfile] = useState<ProfileSnapshot | null>(null);
   const [choices, setChoices] = useState<UpgradeChoice[] | null>(null);
   const [over, setOver] = useState<GameStats | null>(null);
   const [paused, setPaused] = useState(false);
@@ -30,7 +29,6 @@ export default function App() {
   );
   const [stageClear, setStageClear] = useState<{ stage: number; next: number; wavesPerStage: number } | null>(null);
   const [safeHouse, setSafeHouse] = useState(false);
-  const [missionWin, setMissionWin] = useState<MissionStats | null>(null);
   const [inv, setInv] = useState<InventorySnapshot | null>(null);
   const [showInventory, setShowInventory] = useState(false);
   const [deployables, setDeployables] = useState<Deployable[]>([]);
@@ -51,19 +49,11 @@ export default function App() {
           setChoices(null);
           setStageClear(null);
           setSafeHouse(false);
-          setMissionWin(null);
           setPaused(false);
           break;
         case "stageclear":
           setStageClear({ stage: e.stage, next: e.next, wavesPerStage: e.wavesPerStage });
           setSafeHouse(false);
-          break;
-        case "missionwin":
-          setMissionWin(e.stats);
-          setChoices(null);
-          setStageClear(null);
-          setSafeHouse(false);
-          setPaused(false);
           break;
         case "pause":
           setPaused(e.value);
@@ -84,6 +74,7 @@ export default function App() {
       if (!eng) return;
       const h = eng.getHud();
       setHud(h);
+      setProfile(eng.getProfile());
       // bulk backpack/deposit state is polled on the same tick but gated on
       // invVer so it doesn't force a re-render of grid UI every 66ms for no reason
       const snap = eng.getInventory();
@@ -99,61 +90,33 @@ export default function App() {
     };
   }, []);
 
-  const lastModeRef = useRef<RunMode>("endless");
-  const start = useCallback((mode: RunMode) => {
-    lastModeRef.current = mode;
-    engineRef.current?.startGame(mode);
+  const start = useCallback(() => {
+    engineRef.current?.startGame();
     setScreen("game");
+    setShowLoadout(false);
     setOver(null);
     setChoices(null);
     setStageClear(null);
     setSafeHouse(false);
-    setMissionWin(null);
     setShowInventory(false);
     setPaused(false);
   }, []);
-  // Restart (from pause/game-over/mission-win) replays whichever mode was last started.
-  const restart = useCallback(() => start(lastModeRef.current), [start]);
 
-  // Menu's "ENTER HIDEOUT" shows the story prologue first — the actual room
-  // (and the engine's enterHideout() call) only happens once that's dismissed.
-  const goToPrologue = useCallback(() => setScreen("prologue"), []);
-
-  // Campaign's real entry point — a walkable room, not a menu overlay.
-  const enterHideout = useCallback(() => {
-    engineRef.current?.enterHideout();
-    setScreen("hideout");
-    setShowTerminal(false);
-    setOver(null);
-    setChoices(null);
-    setStageClear(null);
-    setSafeHouse(false);
-    setMissionWin(null);
-    setShowInventory(false);
-    setPaused(false);
+  const openLoadout = useCallback(() => setShowLoadout(true), []);
+  const closeLoadout = useCallback(() => setShowLoadout(false), []);
+  const selectLoadout = useCallback((weaponId: string) => {
+    engineRef.current?.setLoadout(weaponId);
+    setProfile(engineRef.current?.getProfile() ?? null);
   }, []);
-  const openTerminal = useCallback(() => {
-    engineRef.current?.setPaused(true);
-    setShowTerminal(true);
-  }, []);
-  const closeTerminal = useCallback(() => {
-    engineRef.current?.setPaused(false);
-    setShowTerminal(false);
-  }, []);
-  const startMissionFromHideout = useCallback(() => {
-    setShowTerminal(false);
-    start("mission");
-  }, [start]);
 
   const quit = useCallback(() => {
     engineRef.current?.toMenu();
     setScreen("menu");
-    setShowTerminal(false);
+    setShowLoadout(false);
     setOver(null);
     setChoices(null);
     setStageClear(null);
     setSafeHouse(false);
-    setMissionWin(null);
     setShowInventory(false);
     setPaused(false);
   }, []);
@@ -230,16 +193,6 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, [screen]);
 
-  // E opens the Hideout terminal when standing near it
-  useEffect(() => {
-    if (screen !== "hideout" || showTerminal) return;
-    const handler = (ev: KeyboardEvent) => {
-      if (ev.code === "KeyE" && hud?.terminalNear) openTerminal();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [screen, showTerminal, hud?.terminalNear, openTerminal]);
-
   return (
     <div className="fixed inset-0 grid place-items-center overflow-hidden bg-black select-none">
       <div className="relative" style={{ width: "min(100vw, 177.78vh)", aspectRatio: "16 / 9" }}>
@@ -270,7 +223,7 @@ export default function App() {
             onRepair={repairDeployable}
           />
         )}
-        {screen === "game" && touch && !paused && !choices && !over && !missionWin && !stageClear && !showInventory && (
+        {screen === "game" && touch && !paused && !choices && !over && !stageClear && !showInventory && (
           <TouchControls
             onMoveStart={moveStart}
             onMoveEnd={moveEnd}
@@ -285,24 +238,21 @@ export default function App() {
           />
         )}
 
-        {screen === "menu" && (
+        {screen === "menu" && !showLoadout && (
           <Menu
-            onEnterHideout={goToPrologue}
-            onEndless={() => start("endless")}
+            onEndless={openLoadout}
             high={hud?.high ?? 0}
             muted={hud?.muted ?? false}
             onMute={toggleMute}
           />
         )}
 
-        {screen === "prologue" && <Prologue onContinue={enterHideout} />}
-
-        {showTerminal && inv && (
-          <HideoutTerminal
-            inv={inv}
-            onClose={closeTerminal}
-            onStartMission={startMissionFromHideout}
-            onSelectLoadout={(id) => engineRef.current?.setLoadout(id)}
+        {showLoadout && profile && (
+          <LoadoutProfile
+            profile={profile}
+            onClose={closeLoadout}
+            onStart={start}
+            onSelectLoadout={selectLoadout}
           />
         )}
 
@@ -317,35 +267,31 @@ export default function App() {
           />
         )}
 
-        {stageClear && safeHouse && !choices && !over && inv && hud && (
+        {stageClear && safeHouse && !choices && !over && inv && (
           <SafeHouseOverlay
             next={stageClear.next}
-            actId={hud.actId}
             inv={inv}
-            campaignMode={hud.campaignMode}
             onMove={moveBackpackItem}
             onDepositAll={depositAll}
             onContinue={confirmSafeHouse}
           />
         )}
 
-        {showInventory && screen === "game" && inv && !choices && !stageClear && !paused && !over && !missionWin && (
+        {showInventory && screen === "game" && inv && !choices && !stageClear && !paused && !over && (
           <InventoryOverlay inv={inv} onMove={moveBackpackItem} onClose={() => setShowInventory(false)} />
         )}
 
-        {paused && screen === "game" && !over && !choices && !missionWin && (
+        {paused && screen === "game" && !over && !choices && (
           <PauseMenu
             onResume={resume}
-            onRestart={restart}
+            onRestart={start}
             onQuit={quit}
             muted={hud?.muted ?? false}
             onMute={toggleMute}
           />
         )}
 
-        {over && <GameOver stats={over} onRestart={restart} onQuit={quit} />}
-
-        {missionWin && <MissionWin stats={missionWin} onRestart={restart} onQuit={quit} />}
+        {over && <GameOver stats={over} onRestart={start} onQuit={quit} />}
       </div>
     </div>
   );

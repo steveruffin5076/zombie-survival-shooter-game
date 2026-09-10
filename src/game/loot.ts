@@ -11,14 +11,13 @@ interface Pool {
   weights: Array<{ itemId: string; weight: number }>;
 }
 
-/** Tier 2/3 crates are worth the risk (and refuse to open above threat 0.5). */
+/** Higher tiers roll rarer, more valuable drops. */
 const POOLS: Record<CrateTier, Pool> = {
   1: {
     count: [1, 2],
     weights: [
       { itemId: "ammo_pistol", weight: 5 },
       { itemId: "bandage", weight: 4 },
-      { itemId: "decoy", weight: 3 },
       { itemId: "ammo_smg", weight: 2 },
     ],
   },
@@ -30,7 +29,6 @@ const POOLS: Record<CrateTier, Pool> = {
       { itemId: "ammo_carbine", weight: 3 },
       { itemId: "bandage", weight: 3 },
       { itemId: "grenade", weight: 3 },
-      { itemId: "decoy", weight: 2 },
     ],
   },
   3: {

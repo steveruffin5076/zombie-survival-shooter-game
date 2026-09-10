@@ -3,8 +3,8 @@ import type { WeaponClass } from "./weapons";
 import type { Rarity } from "./types";
 
 export type ItemKind = "ammo" | "consumable";
-/** The four consumable hotkeys — Grenade / Bandage / Noise decoy / Tactical stim. */
-export type ConsumableKey = "G" | "B" | "N" | "T";
+/** The three consumable hotkeys — Grenade / Bandage / Tactical stim. */
+export type ConsumableKey = "G" | "B" | "T";
 
 export interface ItemDef extends ItemShape {
   id: string;
@@ -52,11 +52,6 @@ export const ITEMS: Record<string, ItemDef> = {
     id: "grenade", name: "Frag Grenade", short: "GRENADE", kind: "consumable", rarity: "rare",
     icon: "Activity", w: 1, h: 1, hotkey: "G",
     desc: "Thrown explosive — heavy damage in a small radius.",
-  },
-  decoy: {
-    id: "decoy", name: "Noise Decoy", short: "DECOY", kind: "consumable", rarity: "common",
-    icon: "Ghost", w: 1, h: 1, hotkey: "N",
-    desc: "Clears the noise meter instantly — the horde loses your scent.",
   },
   stim: {
     id: "stim", name: "Tactical Stim", short: "STIM", kind: "consumable", rarity: "epic",

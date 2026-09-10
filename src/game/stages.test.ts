@@ -1,80 +1,72 @@
 import { describe, it, expect } from "vitest";
-import { STAGES, stageDefFor, cumulativeWaveIndex, difficultyFor } from "./stages";
+import { STAGES, stageDefFor, cumulativeWaveIndex, difficultyFor, rollEnemy } from "./stages";
 
 describe("STAGES table", () => {
-  it("has exactly 24 rows (6 acts x 4 stages), sequentially 1-based ids", () => {
-    expect(STAGES.length).toBe(24);
-    expect(STAGES.map((s) => s.id)).toEqual(Array.from({ length: 24 }, (_, i) => i + 1));
+  it("has exactly 4 rows, sequentially 1-based ids", () => {
+    expect(STAGES.length).toBe(4);
+    expect(STAGES.map((s) => s.id)).toEqual([1, 2, 3, 4]);
   });
 
-  it("every 4th stage (Terminal Defense) is fixedCamera with a bossId; the rest aren't", () => {
+  it("only the 4th stage (the arena) is fixedCamera with a bossId; the rest aren't", () => {
     STAGES.forEach((s, i) => {
-      const isDefense = i % 4 === 3;
-      expect(s.fixedCamera).toBe(isDefense);
-      expect(!!s.bossId).toBe(isDefense);
+      const isArena = i === 3;
+      expect(s.fixedCamera).toBe(isArena);
+      expect(!!s.bossId).toBe(isArena);
     });
-  });
-
-  it("actId/indexInAct partition the table correctly", () => {
-    for (let a = 0; a < 6; a++) {
-      const rows = STAGES.slice(a * 4, a * 4 + 4);
-      expect(rows.every((s) => s.actId === a + 1)).toBe(true);
-      expect(rows.map((s) => s.indexInAct)).toEqual([0, 1, 2, 3]);
-    }
   });
 });
 
 describe("stageDefFor", () => {
-  it("mission mode clamps at stage 24, never wraps", () => {
-    expect(stageDefFor(24, "mission").name).toBe(stageDefFor(30, "mission").name);
-    expect(stageDefFor(30, "mission").name).toBe("SECTOR VI-4");
+  it("wraps every 4 stages back to stage 1's theme", () => {
+    expect(stageDefFor(5).name).toBe("THE CEMETERY");
+    expect(stageDefFor(5).id).toBe(5);
   });
 
-  it("endless mode wraps every 24 stages back to Act I stage 1", () => {
-    expect(stageDefFor(25, "endless").name).toBe("THE CEMETERY");
-    expect(stageDefFor(25, "endless").actId).toBe(1);
-    expect(stageDefFor(25, "endless").id).toBe(25);
+  it("cycles the table forever, never clamping", () => {
+    expect(stageDefFor(41).name).toBe(stageDefFor(1).name);
   });
 });
 
 describe("cumulativeWaveIndex", () => {
-  it("totals 216 across the full 24-stage mission (24 stages x 9 waves)", () => {
-    expect(cumulativeWaveIndex(24, 9, "mission")).toBe(216);
+  it("totals 36 across the first 4-stage cycle (4 stages x 9 waves)", () => {
+    expect(cumulativeWaveIndex(4, 9)).toBe(36);
   });
 
-  it("still grows unbounded in endless mode past the mission's stage count", () => {
-    expect(cumulativeWaveIndex(30, 9, "endless")).toBeGreaterThan(216);
+  it("keeps growing unbounded past one cycle", () => {
+    expect(cumulativeWaveIndex(30, 9)).toBeGreaterThan(36);
   });
 });
 
 describe("difficultyFor", () => {
-  it("is monotonically non-decreasing across the whole mission", () => {
+  it("is monotonically non-decreasing", () => {
     let prev = 0;
-    for (let stage = 1; stage <= 24; stage++) {
+    for (let stage = 1; stage <= 8; stage++) {
       for (let wave = 1; wave <= 9; wave++) {
-        const d = difficultyFor(stage, wave, "mission");
+        const d = difficultyFor(stage, wave);
         expect(d).toBeGreaterThanOrEqual(prev);
         prev = d;
       }
     }
   });
 
-  it("is identical to cumulativeWaveIndex through Act I (today's tuned content, unchanged)", () => {
+  it("is identical to cumulativeWaveIndex (unbounded — endless has no ending to balance toward)", () => {
     for (let stage = 1; stage <= 4; stage++) {
       for (let wave = 1; wave <= 9; wave++) {
-        expect(difficultyFor(stage, wave, "mission")).toBe(cumulativeWaveIndex(stage, wave, "mission"));
+        expect(difficultyFor(stage, wave)).toBe(cumulativeWaveIndex(stage, wave));
       }
     }
-    // the exact number Phase 6's boss balance was tuned and verified against
-    expect(difficultyFor(1, 5, "mission")).toBe(5);
+    expect(difficultyFor(1, 5)).toBe(5);
+  });
+});
+
+describe("rollEnemy", () => {
+  it("is deterministic under an injected rng", () => {
+    const weights = { walker: 1, runner: 1 };
+    expect(rollEnemy(weights, () => 0)).toBe("walker");
+    expect(rollEnemy(weights, () => 0.99)).toBe("runner");
   });
 
-  it("caps well below the raw 216 by the end of the 24-stage mission", () => {
-    expect(difficultyFor(24, 9, "mission")).toBeLessThan(50);
-  });
-
-  it("endless mode climbs past the mission's difficulty cap", () => {
-    const missionCap = difficultyFor(24, 9, "mission");
-    expect(difficultyFor(40, 9, "endless")).toBeGreaterThan(missionCap);
+  it("ignores zero/negative-weight entries", () => {
+    expect(rollEnemy({ walker: 1, runner: 0 }, () => 0.99)).toBe("walker");
   });
 });

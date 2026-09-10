@@ -1,6 +1,6 @@
 import type { InventorySnapshot } from "../game/types";
 import { CONSUMABLE_ITEMS, ITEMS } from "../game/items";
-import { X, Gem } from "lucide-react";
+import { X } from "lucide-react";
 import GridPanel from "./GridPanel";
 import { ICONS } from "./ui";
 
@@ -32,10 +32,7 @@ export default function InventoryOverlay({ inv, onMove, onClose }: Props) {
         <GridPanel items={inv.backpack} size={inv.backpackSize} onMove={onMove} cell={52} />
       </div>
 
-      <div className="mt-3 flex items-center justify-between text-[10px] font-semibold text-zinc-500">
-        <span className="flex items-center gap-1">
-          <Gem className="h-3 w-3 text-violet-400" /> INTEL {inv.intel}
-        </span>
+      <div className="mt-3 flex items-center justify-end text-[10px] font-semibold text-zinc-500">
         <span>{inv.deposit.length} IN STASH</span>
       </div>
 
