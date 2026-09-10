@@ -83,7 +83,7 @@ const CLOTH = ["#2a3040", "#33272b", "#24303a", "#3a3230"];
 const BLOOD = ["#7f1d1d", "#991b1b", "#b91c1c", "#5f1118"];
 
 interface Zombie {
-  x: number; y: number; vx: number;
+  x: number; y: number; vx: number; vy: number;
   hp: number; maxHp: number; speed: number; dmg: number; r: number; scale: number;
   type: ZType; xp: number; score: number;
   t: number; atk: number; flash: number; face: number; dead: boolean; spit: number;
@@ -1135,8 +1135,13 @@ export class Engine {
       z.atk -= dt;
       if (z.slowT > 0) z.slowT -= dt;
       const dx = p.x - z.x;
+      const dy = p.y - z.y;
       const dir = dx > 0 ? 1 : -1;
       z.face = dir;
+      // 2D chase direction for the open top-down stages — the arena keeps
+      // its own x-only lane approach (fixedCamera below), so this is unused there
+      const dist2d = Math.hypot(dx, dy) || 1;
+      const ux = dx / dist2d, uy = dy / dist2d;
 
       // arena barricades: melee zombies stop at the nearest one still ahead of
       // them and tear it down instead of reaching the player; spitters ignore
@@ -1157,12 +1162,20 @@ export class Engine {
       z.blockedBy = wall ? wall.id : null;
 
       if (z.type === "spitter") {
-        const ad = Math.abs(dx);
-        if (ad > 400) z.vx = dir * z.speed;
-        else if (ad < 230) z.vx = -dir * z.speed * 0.6;
-        else z.vx *= 0.85;
+        if (arena) {
+          // unchanged: the arena is a fixed x-lane approach by design
+          const ad = Math.abs(dx);
+          if (ad > 400) z.vx = dir * z.speed;
+          else if (ad < 230) z.vx = -dir * z.speed * 0.6;
+          else z.vx *= 0.85;
+        } else {
+          // keep-away kiting, now in full 2D instead of x-only
+          if (dist2d > 400) { z.vx = ux * z.speed; z.vy = uy * z.speed; }
+          else if (dist2d < 230) { z.vx = -ux * z.speed * 0.6; z.vy = -uy * z.speed * 0.6; }
+          else { z.vx *= 0.85; z.vy *= 0.85; }
+        }
         z.spit -= dt;
-        if (z.spit <= 0 && ad < 640) {
+        if (z.spit <= 0 && (arena ? Math.abs(dx) : dist2d) < 640) {
           z.spit = R(2.1, 3.1);
           this.spitAt(z);
         }
@@ -1181,9 +1194,19 @@ export class Engine {
         }
       } else {
         const speedMul = z.slowT > 0 ? 0.4 : 1;
-        z.vx = lerp(z.vx, dir * z.speed * speedMul, Math.min(1, 6 * dt));
+        if (arena) {
+          // unchanged: the arena is a fixed x-lane approach by design
+          z.vx = lerp(z.vx, dir * z.speed * speedMul, Math.min(1, 6 * dt));
+        } else {
+          // open stages: chase the player in full 2D instead of x-only
+          z.vx = lerp(z.vx, ux * z.speed * speedMul, Math.min(1, 6 * dt));
+          z.vy = lerp(z.vy, uy * z.speed * speedMul, Math.min(1, 6 * dt));
+        }
       }
-      if (!wall) z.x = clamp(z.x + z.vx * dt, 10, this.worldW - 10);
+      if (!wall) {
+        z.x = clamp(z.x + z.vx * dt, 10, this.worldW - 10);
+        if (!arena) z.y = clamp(z.y + z.vy * dt, 22, WORLD_H - 22);
+      }
 
       // razor wire — no collision, just slows anything that crosses it
       if (arena) {
@@ -1200,17 +1223,22 @@ export class Engine {
         this.hurtPlayer(z.dmg * R(0.9, 1.1), dir * (z.type === "brute" ? 300 : 150));
       }
     }
-    // separation
+    // separation — full 2D outside the arena, where y now actually varies;
+    // in the arena, dy stays 0 so this reduces to the original x-only push
     const zs = this.zombies;
     for (let i = 0; i < zs.length; i++) {
       for (let j = i + 1; j < zs.length; j++) {
         const a = zs[i], b = zs[j];
-        const dx = b.x - a.x;
+        const sdx = b.x - a.x;
+        const sdy = arena ? 0 : b.y - a.y;
+        const sepDist = Math.hypot(sdx, sdy) || 1;
         const min = (a.r + b.r) * 0.72;
-        if (Math.abs(dx) < min) {
-          const push = (min - Math.abs(dx)) * 0.5 * Math.sign(dx || 1);
-          a.x -= push * 0.5;
-          b.x += push * 0.5;
+        if (sepDist < min) {
+          const push = (min - sepDist) * 0.5;
+          const sux = sdx / sepDist, suy = sdy / sepDist;
+          a.x -= sux * push;
+          b.x += sux * push;
+          if (!arena) { a.y -= suy * push; b.y += suy * push; }
         }
       }
     }
@@ -1378,22 +1406,38 @@ export class Engine {
 
   private spitAt(z: Zombie) {
     const p = this.pl;
+    const arena = this.stageDef.fixedCamera;
+    // arena keeps its lobbed side-view arc (aimed above the "chest" with an
+    // upward bias, then gravity brings it back down in updateEshots); the
+    // open top-down stages fire straight at the player's actual position —
+    // there's no "up" to lob into in a full 2D world
     const dx = p.x - z.x;
-    const dy = (p.y - 40) - (z.y - 44 * z.scale);
+    const dy = arena ? (p.y - 40) - (z.y - 44 * z.scale) : p.y - z.y;
     const d = Math.hypot(dx, dy) || 1;
     const sp = 330;
-    this.eshots.push({ x: z.x, y: z.y - 46 * z.scale, vx: (dx / d) * sp, vy: (dy / d) * sp - 60, dmg: z.dmg, life: 3 });
+    const originY = arena ? z.y - 46 * z.scale : z.y;
+    this.eshots.push({
+      x: z.x, y: originY,
+      vx: (dx / d) * sp, vy: (dy / d) * sp - (arena ? 60 : 0),
+      dmg: z.dmg, life: 3,
+    });
     this.sfx.spit();
     for (let i = 0; i < 4; i++)
-      this.particles.push({ x: z.x, y: z.y - 46 * z.scale, vx: R(-40, 40), vy: R(-40, 10), life: 0.3, max: 0.3, size: R(2, 4), color: "#a3e635", grav: 0, add: true });
+      this.particles.push({ x: z.x, y: originY, vx: R(-40, 40), vy: arena ? R(-40, 10) : R(-40, 40), life: 0.3, max: 0.3, size: R(2, 4), color: "#a3e635", grav: 0, add: true });
   }
 
   private updateBullets(dt: number) {
+    const arena = this.stageDef.fixedCamera;
     for (const b of this.bullets) {
       b.life -= dt;
       b.x += b.vx * dt;
       b.y += b.vy * dt;
-      if (b.y > GROUND + 4) {
+      // arena only: a real ground line to kick up dust against. In the open
+      // top-down stages the player can be anywhere in y, so despawning every
+      // bullet that crosses a fixed height (previously unconditional here)
+      // made shooting fail outright below that line — bullets now just expire
+      // by their life timer or the world-bounds filter below instead
+      if (arena && b.y > GROUND + 4) {
         b.life = 0;
         for (let i = 0; i < 3; i++)
           this.particles.push({ x: b.x, y: GROUND, vx: R(-60, 60), vy: R(-120, -40), life: 0.25, max: 0.25, size: 2, color: "#94a3b8", grav: 800, add: false });
@@ -1426,20 +1470,23 @@ export class Engine {
         }
       }
     }
-    this.bullets = this.bullets.filter((b) => b.life > 0 && b.x > -60 && b.x < this.worldW + 60);
+    this.bullets = this.bullets.filter(
+      (b) => b.life > 0 && b.x > -60 && b.x < this.worldW + 60 && b.y > -60 && b.y < WORLD_H + 60
+    );
   }
 
   private updateEshots(dt: number) {
     const p = this.pl;
+    const arena = this.stageDef.fixedCamera;
     for (const s of this.eshots) {
       s.life -= dt;
-      s.vy += 230 * dt;
+      if (arena) s.vy += 230 * dt; // unchanged: arena keeps its lobbed arc
       s.x += s.vx * dt;
       s.y += s.vy * dt;
       if (chance(0.5))
         this.particles.push({ x: s.x, y: s.y, vx: R(-12, 12), vy: R(-12, 12), life: 0.3, max: 0.3, size: 2.4, color: "#84cc16", grav: 0, add: true });
-      if (s.y > GROUND + 2) { s.life = 0; continue; }
-      const dx = s.x - p.x, dy = s.y - (p.y - 36);
+      if (arena && s.y > GROUND + 2) { s.life = 0; continue; }
+      const dx = s.x - p.x, dy = s.y - (arena ? p.y - 36 : p.y);
       if (dx * dx + dy * dy < 22 * 22) {
         s.life = 0;
         this.hurtPlayer(s.dmg, Math.sign(s.vx) * 110);
@@ -1450,20 +1497,31 @@ export class Engine {
 
   private updateGems(dt: number) {
     const p = this.pl;
+    const arena = this.stageDef.fixedCamera;
     const mr = 110 * this.st.magnet;
     for (const g of this.gems) {
       g.t += dt;
-      const dx = p.x - g.x, dy = (p.y - 34) - g.y;
+      // no more -34 head offset — p.y is the player's own top-down center now,
+      // not a feet position with the body drawn 34px above it
+      const dx = p.x - g.x, dy = p.y - g.y;
       const d = Math.hypot(dx, dy);
       if (d < mr) {
         const pull = 620 * (1.15 - d / mr);
         g.vx = (dx / (d || 1)) * pull;
         g.vy = (dy / (d || 1)) * pull;
         g.rest = false;
-      } else if (!g.rest) {
+      } else if (!g.rest && arena) {
+        // unchanged: the arena is a side-view lane shooter with a real ground line
         g.vy += 1300 * dt;
         g.vx = lerp(g.vx, 0, Math.min(1, 4 * dt));
         if (g.y >= GROUND - 5) { g.y = GROUND - 5; g.vy *= -0.35; if (Math.abs(g.vy) < 30) { g.rest = true; g.vy = 0; g.vx = 0; } }
+      } else if (!g.rest) {
+        // top-down: no gravity, no fixed floor — the gem scatters from the
+        // kill and settles wherever it lands instead of falling to a
+        // universal ground height unrelated to where it dropped
+        g.vx = lerp(g.vx, 0, Math.min(1, 4 * dt));
+        g.vy = lerp(g.vy, 0, Math.min(1, 4 * dt));
+        if (Math.hypot(g.vx, g.vy) < 8) { g.rest = true; g.vx = 0; g.vy = 0; }
       }
       g.x += g.vx * dt;
       g.y += g.vy * dt;
@@ -1485,12 +1543,18 @@ export class Engine {
   }
 
   private updateParticles(dt: number) {
+    // arena only: a real ground line for gravity-affected particles to land
+    // on. In the open top-down stages a kill can happen at any y, so bouncing
+    // everything toward one fixed height made blood/debris drift toward a
+    // line unrelated to where it actually happened — those now just arc
+    // under gravity and fade out on their own life timer instead
+    const arena = this.stageDef.fixedCamera;
     for (const q of this.particles) {
       q.life -= dt;
       q.vy += q.grav * dt;
       q.x += q.vx * dt;
       q.y += q.vy * dt;
-      if (q.y > GROUND + 2 && q.grav > 0) { q.y = GROUND + 2; q.vy *= -0.3; q.vx *= 0.7; }
+      if (arena && q.y > GROUND + 2 && q.grav > 0) { q.y = GROUND + 2; q.vy *= -0.3; q.vx *= 0.7; }
     }
     this.particles = this.particles.filter((q) => q.life > 0);
     if (this.particles.length > 500) this.particles.splice(0, this.particles.length - 500);
@@ -1517,7 +1581,8 @@ export class Engine {
     const dir = Math.sign(b.vx);
     for (let i = 0; i < (b.crit ? 8 : 5); i++)
       this.particles.push({ x: b.x, y: b.y, vx: dir * R(30, 190) + R(-60, 60), vy: R(-130, 40), life: R(0.25, 0.5), max: 0.5, size: R(2, 4.5), color: BLOOD[RI(0, BLOOD.length - 1)], grav: 1100, add: false });
-    this.texts.push({ x: z.x + R(-8, 8), y: z.y - 74 * z.scale, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(b.dmg)), color: b.crit ? "#fbbf24" : "rgba(255,255,255,.8)", size: b.crit ? 17 : 12 });
+    const dmgTextY = this.stageDef.fixedCamera ? z.y - 74 * z.scale : z.y - 18 * z.scale;
+    this.texts.push({ x: z.x + R(-8, 8), y: dmgTextY, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(b.dmg)), color: b.crit ? "#fbbf24" : "rgba(255,255,255,.8)", size: b.crit ? 17 : 12 });
     if (this.st.lifesteal > 0) this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + b.dmg * this.st.lifesteal);
     this.sfx.zhit();
     if (z.hp <= 0) this.killZombie(z, dir);
@@ -1531,16 +1596,26 @@ export class Engine {
     this.score += Math.round(z.score * (1 + this.power * 0.06));
     this.shake(z.type === "brute" ? 5 : 1.6);
     this.sfx.zdie();
-    const cx = z.x, cy = z.y - 34 * z.scale;
+    const arena = this.stageDef.fixedCamera;
+    // arena keeps the old "chest height above feet" origin; the top-down
+    // zombie body is flat, so its own y is already the right burst origin
+    const cx = z.x, cy = arena ? z.y - 34 * z.scale : z.y;
     for (let i = 0; i < (z.boss ? 30 : 16); i++)
-      this.particles.push({ x: cx + R(-8, 8), y: cy + R(-14, 14), vx: dir * R(20, 160) + R(-110, 110), vy: R(-200, 60), life: R(0.3, 0.7), max: 0.7, size: R(2, 5.5), color: BLOOD[RI(0, BLOOD.length - 1)], grav: 1200, add: false });
+      this.particles.push({ x: cx + R(-8, 8), y: cy + R(-14, 14), vx: dir * R(20, 160) + R(-110, 110), vy: arena ? R(-200, 60) : R(-110, 110), life: R(0.3, 0.7), max: 0.7, size: R(2, 5.5), color: BLOOD[RI(0, BLOOD.length - 1)], grav: arena ? 1200 : 0, add: false });
     this.decals.push({ x: z.x, y: z.y, s: z.scale, a: 0.55 });
     if (this.decals.length > 70) this.decals.shift();
     // xp gems
     const total = z.xp;
     const n = Math.min(8, Math.max(1, Math.round(total)));
-    for (let i = 0; i < n; i++)
-      this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: total / n, t: R(0, 9), rest: false, kind: "xp" });
+    for (let i = 0; i < n; i++) {
+      const ang = R(0, TAU);
+      this.gems.push({
+        x: cx + R(-10, 10), y: cy,
+        vx: arena ? R(-90, 90) : Math.cos(ang) * R(60, 150),
+        vy: arena ? R(-220, -80) : Math.sin(ang) * R(60, 150),
+        val: total / n, t: R(0, 9), rest: false, kind: "xp",
+      });
+    }
     // scrap — feeds building/repairing deployables in the arena; endless only ever sees it there
     if (this.stageDef.fixedCamera && chance(0.22)) {
       this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: 1, t: R(0, 9), rest: false, kind: "scrap" });
@@ -2319,7 +2394,7 @@ export class Engine {
     const scale = c.scale * R(0.94, 1.07);
     const hp = c.hp * hpMul;
     return {
-      x, y, vx: 0,
+      x, y, vx: 0, vy: 0,
       hp, maxHp: hp,
       speed: c.speed * speedMul * R(0.9, 1.1),
       dmg: c.dmg, r: c.r * scale, scale,
@@ -2803,8 +2878,8 @@ export class Engine {
       const p = this.pl;
       const w = WDEF[this.kind];
       const range = w.range * (1 + 0.12 * (this.stacks["velo"] || 0));
-      const ox = p.x - cam + Math.cos(p.aim) * 44;
-      const oy = p.y - 40 + camY + Math.sin(p.aim) * 44;
+      const ox = p.x - cam + Math.cos(p.aim) * 20;
+      const oy = p.y + camY + Math.sin(p.aim) * 20;
       const ex = ox + Math.cos(p.aim) * range;
       const ey = oy + Math.sin(p.aim) * range;
       const hot = this.onTarget;
@@ -2848,23 +2923,6 @@ export class Engine {
         c.arc(tx, ty, 11 + Math.sin(t * 12) * 1.6, 0, TAU);
         c.stroke();
       }
-      c.restore();
-    }
-
-    /* --- facing / lane arrow --- */
-    if (this.mode === "play" && !this.over) {
-      const p = this.pl;
-      const ax = p.x - cam + this.facing * 34;
-      const ay = p.y - 96 + camY;
-      c.save();
-      c.globalAlpha = 0.5;
-      c.fillStyle = this.onTarget ? "#f87171" : "#94a3b8";
-      c.beginPath();
-      c.moveTo(ax + this.facing * 9, ay);
-      c.lineTo(ax - this.facing * 4, ay - 6);
-      c.lineTo(ax - this.facing * 4, ay + 6);
-      c.closePath();
-      c.fill();
       c.restore();
     }
 
@@ -3256,6 +3314,9 @@ export class Engine {
     c.fill();
   }
 
+  /** Zombie, seen from above: the whole body rotates to face its actual
+   * heading (chase velocity, or the player when idle) instead of only
+   * flipping left/right, so it reads correctly approaching from any angle. */
   private drawZombie(z: Zombie, cam: number, camY: number, t: number) {
     const c = this.ctx;
     const px = z.x - cam;
@@ -3276,95 +3337,82 @@ export class Engine {
 
     // per-type proportions
     const bulk = z.type === "brute" ? 1.35 : z.type === "runner" ? 0.88 : 1;
-    const hunch = z.type === "runner" ? 0.3 : z.type === "spitter" ? 0.26 : 0.13;
+    const moving = Math.hypot(z.vx, z.vy) > 4;
+    const heading = moving ? Math.atan2(z.vy, z.vx) : z.face >= 0 ? 0 : Math.PI;
     const walk = z.dormant ? 0 : z.t * (2.4 + z.speed * 0.03);
     const shamble = Math.sin(walk);
     const shamble2 = Math.cos(walk * 0.6 + z.wob);
     const attacking = z.atk > (z.type === "brute" ? 0.75 : 0.42);
-    const reach = attacking ? 8 : 0;
+    const reach = attacking ? 4 : 0;
 
     c.save();
     c.translate(px, py);
-    c.scale(z.face * z.scale, z.scale);
+    c.scale(z.scale, z.scale);
+    c.rotate(heading);
+    // everything below is drawn as if facing +x ("forward")
 
-    // ---- legs (staggering gait) ----
-    const l1 = shamble * 8 * bulk;
-    const l2 = -shamble * 8 * bulk;
-    const kneeLift = Math.max(0, shamble) * 5;
-    this.limb(-3, -30, -4 + l1 * 0.5, -17 + kneeLift * 0.4, -5 + l1, -1, 4.6 * bulk, 3.4, skinDark);
-    this.limb(3, -30, 4 + l2 * 0.5, -16, 5 + l2, -1, 4.6 * bulk, 3.4, skinDark);
-    // tattered trouser bottoms
-    c.fillStyle = "rgba(0,0,0,0.28)";
-    c.beginPath(); c.ellipse(-5 + l1, -1, 3.4, 1.6, 0, 0, TAU); c.fill();
-    c.beginPath(); c.ellipse(5 + l2, -1, 3.4, 1.6, 0, 0, TAU); c.fill();
+    // ---- legs, scissoring behind the body along the heading ----
+    const l1 = shamble * 6 * bulk, l2 = -shamble * 6 * bulk;
+    c.fillStyle = skinDark;
+    c.beginPath(); c.ellipse(-8 + Math.abs(l1) * 0.2, 5 + l1, 4.2 * bulk, 3, 0, 0, TAU); c.fill();
+    c.beginPath(); c.ellipse(-8 + Math.abs(l2) * 0.2, -5 + l2, 4.2 * bulk, 3, 0, 0, TAU); c.fill();
 
-    // ---- torso ----
-    c.save();
-    c.translate(0, -30);
-    c.rotate(hunch + shamble2 * 0.04);
-    // torso mass — ragged shirt
-    c.fillStyle = cloth;
-    this.rr(-9 * bulk, -26 * bulk, 19 * bulk, 29, 6);
+    // ---- torso, a ragged oval seen from above ----
+    const torsoGrad = c.createRadialGradient(-2, -2, 1, 0, 0, 11 * bulk);
+    torsoGrad.addColorStop(0, cloth);
+    torsoGrad.addColorStop(1, clothDark);
+    c.fillStyle = torsoGrad;
+    c.beginPath();
+    c.ellipse(0, 0, 11 * bulk, 9 * bulk, 0, 0, TAU);
     c.fill();
-    // torn hem (ragged edges)
-    c.fillStyle = clothDark;
-    for (let i = 0; i < 5; i++) {
-      const rx = -9 * bulk + i * (19 * bulk / 5);
-      const rh = 3 + ((Math.floor(z.tint * 13) + i) % 3) * 2.4;
-      c.fillRect(rx, -1, 19 * bulk / 5, rh);
-    }
     // grime + torn rips
     c.fillStyle = "rgba(0,0,0,0.22)";
-    c.beginPath(); c.ellipse(-2, -16, 6 * bulk, 7, 0.2, 0, TAU); c.fill();
+    c.beginPath(); c.ellipse(-2, 1, 5 * bulk, 4, 0, 0, TAU); c.fill();
     c.fillStyle = "rgba(80,14,18,0.32)";
-    c.beginPath(); c.ellipse(4, -22, 3.4 * bulk, 4, -0.3, 0, TAU); c.fill();
-    // spine/ribs hint
-    c.strokeStyle = "rgba(0,0,0,0.25)";
-    c.lineWidth = 1;
-    c.beginPath(); c.moveTo(-3, -22); c.lineTo(-3, -8); c.stroke();
+    c.beginPath(); c.ellipse(3, -3, 3 * bulk, 2.6, -0.3, 0, TAU); c.fill();
 
-    // ---- arms (reaching, clawed) ----
+    // ---- arms, clawed, reaching forward when attacking ----
     c.lineCap = "round";
-    const armY = -20 + Math.sin(walk) * 2.4;
-    const armY2 = -13 + Math.cos(walk * 0.8) * 2.6;
-    const upperW = 4.4 * bulk, foreW = 3.4 * bulk;
-    // back arm (dimmer)
-    c.globalAlpha = 0.7;
-    this.limb(-1, -20, 8 + reach * 0.7, armY2 - 3, 13 + reach * 0.7, armY2 - 1, upperW, foreW, skinDark);
+    c.strokeStyle = skinDark;
+    c.lineWidth = 3.4 * bulk;
+    c.globalAlpha = 0.75;
+    c.beginPath();
+    c.moveTo(-2, -6 * bulk);
+    c.lineTo(6 + reach, -10 * bulk - shamble2 * 1.5);
+    c.stroke();
     c.globalAlpha = 1;
-    // front arm
-    this.limb(2, -20, 13 + reach, armY, 21 + reach, armY + 6, upperW, foreW, skin);
-    // claws
-    c.strokeStyle = "rgba(230,230,225,0.55)";
-    c.lineWidth = 1.2;
+    c.strokeStyle = skin;
+    c.beginPath();
+    c.moveTo(-2, 6 * bulk);
+    c.lineTo(7 + reach, 10 * bulk + shamble2 * 1.5);
+    c.stroke();
+    // claws on the front arm
+    c.strokeStyle = "rgba(230,230,225,0.6)";
+    c.lineWidth = 1.1;
     for (let i = -1; i <= 1; i++) {
       c.beginPath();
-      c.moveTo(21 + reach, armY + 6 + i * 2);
-      c.lineTo(26 + reach + i, armY + 8 + i * 2.6);
+      c.moveTo(7 + reach, 10 * bulk + i * 1.5);
+      c.lineTo(11 + reach + i, 12 * bulk + i * 1.8);
       c.stroke();
     }
 
-    // ---- head (jaw hanging open) ----
-    const headX = 7, headY = -33 + Math.sin(walk * 0.8 + 1) * 1.2;
-    // neck
-    this.limb(2, -25, headX - 4, headY + 5, headX - 2, headY, 3.4, 3.6, skinDark);
-    // skull
+    // ---- head, forward, with a hanging jaw ----
+    const headX = 9.5 * bulk;
     c.fillStyle = skin;
     c.beginPath();
-    c.ellipse(headX, headY, 8, 8.6, 0.06, 0, TAU);
+    c.ellipse(headX, 0, 7.4, 7, 0, 0, TAU);
     c.fill();
-    // grime shading on skull
     c.fillStyle = "rgba(0,0,0,0.18)";
-    c.beginPath(); c.ellipse(headX - 2, headY + 3, 6, 5.4, 0, 0, TAU); c.fill();
+    c.beginPath(); c.ellipse(headX - 2, 1.6, 5, 4.6, 0, 0, TAU); c.fill();
     // hanging jaw
     c.save();
-    c.translate(headX + 4, headY + 3);
-    c.rotate(0.25 + shamble2 * 0.08);
+    c.translate(headX + 3.5, 3);
+    c.rotate(0.4 + shamble2 * 0.1);
     c.fillStyle = skin;
-    this.rr(0, 0, 5, 6, 2.4);
+    this.rr(0, 0, 5.4, 5, 2.2);
     c.fill();
     c.fillStyle = "rgba(0,0,0,0.45)";
-    for (let i = 0; i < 2; i++) c.fillRect(1 + i * 2.2, 1.6, 1.4, 3);
+    for (let i = 0; i < 2; i++) c.fillRect(1 + i * 2.1, 0.8, 1.3, 2.8);
     c.restore();
     // eyes — glowing, unless asleep (closed, no glow to give it away). The
     // Screamer's eyes stay a normal yellow until she's actually alerted, then
@@ -3375,30 +3423,30 @@ export class Engine {
         ? "#ef4444" : "#fde047";
       c.globalAlpha = 0.3;
       c.fillStyle = eye;
-      c.beginPath(); c.arc(headX + 4.5, headY - 2.4, 3.4, 0, TAU); c.fill();
-      c.beginPath(); c.arc(headX + 4.5, headY + 2.6, 2.8, 0, TAU); c.fill();
+      c.beginPath(); c.arc(headX + 2, -2.8, 3, 0, TAU); c.fill();
+      c.beginPath(); c.arc(headX + 2, 2.8, 2.6, 0, TAU); c.fill();
       c.globalAlpha = 1;
       c.fillStyle = eye;
-      c.beginPath(); c.arc(headX + 4.6, headY - 2.4, 1.5, 0, TAU); c.fill();
-      c.beginPath(); c.arc(headX + 4.6, headY + 2.6, 1.2, 0, TAU); c.fill();
+      c.beginPath(); c.arc(headX + 2.4, -2.8, 1.4, 0, TAU); c.fill();
+      c.beginPath(); c.arc(headX + 2.4, 2.8, 1.2, 0, TAU); c.fill();
     }
 
-    // spitter sac on chest
+    // spitter sac, glowing at the chest
     if (z.type === "spitter") {
       const pulse = 1 + Math.sin(t * 5 + z.wob) * 0.12;
       c.globalCompositeOperation = "lighter";
-      const gr = c.createRadialGradient(0, -9, 1, 0, -9, 9 * pulse);
+      const gr = c.createRadialGradient(-1, 0, 1, -1, 0, 8 * pulse);
       gr.addColorStop(0, "rgba(190,242,100,0.6)");
       gr.addColorStop(1, "rgba(132,204,22,0)");
       c.fillStyle = gr;
-      c.fillRect(-11, -20, 22, 22);
+      c.fillRect(-10, -10, 20, 20);
       c.globalCompositeOperation = "source-over";
     }
 
-    // boss crown of gore
+    // boss crown of gore (finale-swarm tier, distinct from the unique Boss)
     if (z.boss) {
       c.fillStyle = "rgba(127,29,29,0.5)";
-      c.beginPath(); c.ellipse(headX, headY - 4, 9, 4, 0, 0, TAU); c.fill();
+      c.beginPath(); c.ellipse(headX - 4, 0, 4, 8, 0, 0, TAU); c.fill();
     }
 
     // hit flash
@@ -3406,21 +3454,20 @@ export class Engine {
       c.globalAlpha = clamp(z.flash * 9, 0, 0.8);
       c.fillStyle = "#ffffff";
       c.beginPath();
-      c.ellipse(0, -14, 11 * bulk, 16, 0, 0, TAU);
+      c.ellipse(0, 0, 12 * bulk, 10 * bulk, 0, 0, TAU);
       c.fill();
       c.beginPath();
-      c.ellipse(headX, headY, 8.4, 9, 0, 0, TAU);
+      c.ellipse(headX, 0, 7.6, 7.2, 0, 0, TAU);
       c.fill();
       c.globalAlpha = 1;
     }
-    c.restore(); // torso
     c.restore(); // root
 
     // hp bar
     if (z.hp < z.maxHp) {
       const wBar = 30 * z.scale;
       const xBar = px - wBar / 2;
-      const yBar = py - 74 * z.scale;
+      const yBar = py - 24 * z.scale;
       c.fillStyle = "rgba(0,0,0,0.55)";
       c.fillRect(xBar, yBar, wBar, 3.4);
       c.fillStyle = z.boss ? "#f87171" : "#dc2626";
@@ -3436,7 +3483,7 @@ export class Engine {
       for (let i = 0; i < 3; i++) {
         const ph = (t * 0.6 + i * 0.9) % 2.7;
         c.globalAlpha = clamp(1 - ph / 2.7, 0, 1) * 0.7;
-        c.fillText("z", px + 6 * z.scale + i * 3, py - 86 * z.scale - ph * 10);
+        c.fillText("z", px + 6 * z.scale + i * 3, py - 20 * z.scale - ph * 10);
       }
       c.restore();
     }
@@ -3449,7 +3496,7 @@ export class Engine {
       c.strokeStyle = "#ef4444";
       c.lineWidth = 2;
       c.beginPath();
-      c.arc(px, py - 80 * z.scale, 10 + pct * 4, 0, TAU);
+      c.arc(px, py, (10 + pct * 4) * z.scale, 0, TAU);
       c.stroke();
       c.restore();
     }
