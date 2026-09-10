@@ -276,6 +276,13 @@ export class Engine {
   /** Terminal Defense only — false while walking in, set once the fight is won so
    * the next checkpoint is treated as the exit walk, not a second entry into the arena */
   private campaignArenaCleared = false;
+  /** Exploration stages only — a "building" band along the same corridor (not a
+   * separate world) with calmer combat and the guaranteed intel doc inside it.
+   * buildingStartX === buildingEndX (both 0) means no building this stage. */
+  private buildingStartX = 0;
+  private buildingEndX = 0;
+  /** tracks the building-band crossing edge so the horde-thin/spawn-reset on entry fires once, not every tick */
+  private wasInBuilding = false;
 
   /* --- inventory: fixed 4x4 backpack, a persistent safe-house stash, loot crates --- */
   private backpack: PlacedItem[] = [];
@@ -524,6 +531,9 @@ export class Engine {
     this.campaignCheckpointX = 0;
     this.campaignSpawnT = 0;
     this.campaignArenaCleared = false;
+    this.buildingStartX = 0;
+    this.buildingEndX = 0;
+    this.wasInBuilding = false;
     this.backpack = [];
     this.deposit = [];
     this.intel = 0;
@@ -2545,12 +2555,31 @@ export class Engine {
       this.obstacles.push({ x: ox });
       ox += R(420, 650);
     }
+    // exploration stages route through a "building" — a tinted, calmer-combat
+    // band along the same corridor (not a separate world/level) with the
+    // stage's guaranteed intel doc inside it; the Terminal Defense stage skips this
+    if (!this.stageDef.fixedCamera) {
+      // shrink to fit when the corridor is short (e.g. stage 1 starts at world-center,
+      // not the left edge, leaving less room than stages 2-3) rather than clamping
+      // into a degenerate near-zero-width range that hugs the checkpoint
+      const corridorLen = this.campaignCheckpointX - this.pl.x;
+      const bLen = Math.min(R(750, 950), Math.max(400, corridorLen - 600));
+      const earliestStart = this.pl.x + 300;
+      const latestStart = this.campaignCheckpointX - bLen - 300;
+      this.buildingStartX = latestStart > earliestStart ? R(earliestStart, latestStart) : earliestStart;
+      this.buildingEndX = this.buildingStartX + bLen;
+    } else {
+      this.buildingStartX = 0;
+      this.buildingEndX = 0;
+    }
+    this.wasInBuilding = false;
     // one guaranteed intel document per exploration stage — never RNG-gated,
-    // per enhancement-1.md's "found in Stages 1-3" (never the Terminal Defense)
+    // per enhancement-1.md's "found in Stages 1-3" (never the Terminal Defense) —
+    // placed inside the building, since that's where the player is meant to find it
     if (!this.stageDef.fixedCamera) {
       const docId = docIdFor(this.stageDef.actId, this.stageDef.indexInAct as 0 | 1 | 2);
       if (docId && !this.docsFound.includes(docId)) {
-        const dx = clamp(this.pl.x + R(400, this.campaignCheckpointX - this.pl.x - 200), this.pl.x + 60, this.campaignCheckpointX - 60);
+        const dx = R(this.buildingStartX + 60, this.buildingEndX - 60);
         this.crates.push({ x: dx, y: GROUND, tier: 1, opened: false, docId });
       }
     }
@@ -2580,11 +2609,25 @@ export class Engine {
       }
     }
 
-    // no discrete waves — zombies keep coming from both sides until the checkpoint
+    // no discrete waves — zombies keep coming from both sides until the checkpoint,
+    // except inside the building, which is deliberately calmer: sparser and slower
+    const inBuilding = this.buildingStartX < this.buildingEndX && p.x >= this.buildingStartX && p.x <= this.buildingEndX;
+    const cap = inBuilding ? 4 : Math.min(14, 5 + this.power * 0.7);
+    if (inBuilding && !this.wasInBuilding) {
+      // a horde that formed outdoors doesn't cram in with you — thins to the
+      // calmer indoor cap on the way in, keeping whatever's already closest
+      if (this.zombies.length > cap) {
+        this.zombies.sort((a, b) => Math.abs(a.x - p.x) - Math.abs(b.x - p.x));
+        this.zombies.length = cap;
+      }
+      // also don't let a near-zero outdoor spawn timer fire on indoor rules
+      // the instant you cross the threshold — start the calm cadence fresh
+      this.campaignSpawnT = R(1.5, 2.5);
+    }
+    this.wasInBuilding = inBuilding;
     this.campaignSpawnT -= dt;
-    const cap = Math.min(14, 5 + this.power * 0.7);
     if (this.campaignSpawnT <= 0 && this.zombies.length < cap) {
-      this.campaignSpawnT = Math.max(0.45, 1.5 - this.power * 0.045);
+      this.campaignSpawnT = inBuilding ? R(2.5, 4) : Math.max(0.45, 1.5 - this.power * 0.045);
       this.spawnZombie({ type: rollEnemy(this.zombieWeights(this.power)) as ZType });
     }
 
@@ -3060,6 +3103,26 @@ export class Engine {
           c.fillText("[W] JUMP", ob.x, GROUND - 42);
         }
       }
+      // building interior — a tinted band with floor signage along the same
+      // corridor, not a separate world; see startCampaignTravel()'s comment
+      if (this.buildingStartX < this.buildingEndX && this.buildingEndX > cam - 80 && this.buildingStartX < cam + W + 80) {
+        const bx0 = this.buildingStartX, bx1 = this.buildingEndX;
+        c.fillStyle = "rgba(8,6,10,0.45)";
+        c.fillRect(bx0, 0, bx1 - bx0, H);
+        c.fillStyle = "rgba(120,113,108,0.5)";
+        c.fillRect(bx0 - 6, 0, 6, H);
+        c.fillRect(bx1, 0, 6, H);
+        c.textAlign = "center";
+        c.font = '700 10px "Space Grotesk", sans-serif';
+        c.fillStyle = "rgba(217,119,6,0.75)";
+        const floors = 3;
+        for (let i = 0; i < floors; i++) {
+          const fx = bx0 + ((i + 0.5) * (bx1 - bx0)) / floors;
+          if (fx < cam - 40 || fx > cam + W + 40) continue;
+          c.fillText(`FLOOR ${i + 1}`, fx, 40);
+        }
+      }
+
       // checkpoint marker — the stage's end, not a safe house
       const cx = this.campaignCheckpointX;
       const enteringArena = this.stageDef.fixedCamera && !this.campaignArenaCleared;
