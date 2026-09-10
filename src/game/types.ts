@@ -67,10 +67,6 @@ export interface HudState {
   crateTier: 0 | 1 | 2 | 3;
   /** 0..1 hold-to-open progress */
   crateOpenPct: number;
-  /** an unopened gate is in quiet-bypass range (hold E) */
-  gateBypassNear: boolean;
-  /** 0..1 hold-to-bypass progress */
-  gateBypassPct: number;
   /** stage 4 only — gates the prep/deployables/scrap UI */
   arena: boolean;
   /** seconds left in the arena's prep phase */

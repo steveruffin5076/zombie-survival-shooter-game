@@ -15,9 +15,9 @@ export interface StageDef {
   fixedCamera: boolean;
 }
 
-const WAVES_PER_STAGE = 9;
-/** boss + finale-swarm waves on the arena stage */
-const ARENA_BOSS_WAVES = [5, 9];
+const WAVES_PER_STAGE = 10;
+/** boss waves on the arena stage: wave 5 (small boss), wave 10 (big boss) */
+const ARENA_BOSS_WAVES = [5, 10];
 
 /** The endless cycle: 3 open stages, then a fixed-camera arena stage with a boss.
  * Cycles forever — same content, no ending. */

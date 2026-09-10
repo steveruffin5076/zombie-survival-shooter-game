@@ -477,23 +477,6 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
         </div>
       )}
 
-      {/* bottom-center: gate bypass prompt — always optional, never required */}
-      {hud.gateBypassNear && !hud.crateNear && (
-        <div className="absolute bottom-40 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
-          <div className="flex items-center gap-2 rounded-full border border-violet-400/30 bg-violet-950/40 px-4 py-1.5 text-[11px] font-bold tracking-[0.15em] backdrop-blur-sm text-violet-200">
-            <span className="kbd">E</span> HOLD TO BYPASS QUIETLY
-          </div>
-          {hud.gateBypassPct > 0 && (
-            <div className="h-1 w-32 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
-              <div
-                className="h-full rounded-full bg-violet-400 transition-[width] duration-75"
-                style={{ width: `${hud.gateBypassPct * 100}%` }}
-              />
-            </div>
-          )}
-        </div>
-      )}
-
       {/* bottom-center: controls hint */}
       {!touch && hud.stage === 1 && hud.waveInStage <= 1 && (
         <div className="absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-4 text-[10px] font-semibold tracking-wider text-white/35">

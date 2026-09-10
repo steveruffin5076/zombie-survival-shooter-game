@@ -28,12 +28,12 @@ describe("stageDefFor", () => {
 });
 
 describe("cumulativeWaveIndex", () => {
-  it("totals 36 across the first 4-stage cycle (4 stages x 9 waves)", () => {
-    expect(cumulativeWaveIndex(4, 9)).toBe(36);
+  it("totals 40 across the first 4-stage cycle (4 stages x 10 waves)", () => {
+    expect(cumulativeWaveIndex(4, 10)).toBe(40);
   });
 
   it("keeps growing unbounded past one cycle", () => {
-    expect(cumulativeWaveIndex(30, 9)).toBeGreaterThan(36);
+    expect(cumulativeWaveIndex(30, 10)).toBeGreaterThan(40);
   });
 });
 
@@ -41,7 +41,7 @@ describe("difficultyFor", () => {
   it("is monotonically non-decreasing", () => {
     let prev = 0;
     for (let stage = 1; stage <= 8; stage++) {
-      for (let wave = 1; wave <= 9; wave++) {
+      for (let wave = 1; wave <= 10; wave++) {
         const d = difficultyFor(stage, wave);
         expect(d).toBeGreaterThanOrEqual(prev);
         prev = d;
@@ -51,7 +51,7 @@ describe("difficultyFor", () => {
 
   it("is identical to cumulativeWaveIndex (unbounded — endless has no ending to balance toward)", () => {
     for (let stage = 1; stage <= 4; stage++) {
-      for (let wave = 1; wave <= 9; wave++) {
+      for (let wave = 1; wave <= 10; wave++) {
         expect(difficultyFor(stage, wave)).toBe(cumulativeWaveIndex(stage, wave));
       }
     }

@@ -250,8 +250,6 @@ export class Engine {
   private travelMinX = 26;
   private travelProgressX = 0;
   private travelIdleT = 0;
-  /** hold-to-open progress on whichever gate is in quiet-bypass range */
-  private gateBypassT = 0;
   private hazards: Hazard[] = [];
 
   /* --- inventory: fixed 4x4 backpack, a persistent safe-house stash, loot crates --- */
@@ -472,7 +470,6 @@ export class Engine {
     this.travelMinX = 26;
     this.travelProgressX = 0;
     this.travelIdleT = 0;
-    this.gateBypassT = 0;
     this.hazards = [];
     this.backpack = [];
     this.deposit = [];
@@ -1770,25 +1767,17 @@ export class Engine {
   selectClass(cls: WeaponClass) {
     const list = byClass(cls).filter((w) => this.owned.has(w));
     if (list.length === 0) return;
-    if (WDEF[this.kind].cls === cls && list.length > 1) {
-      const i = list.indexOf(this.kind);
-      const next = list[(i + 1) % list.length];
-      this.equip(next);
-      this.texts.push({
-        x: this.pl.x, y: this.pl.y - 88, vy: -44, life: 0.7, max: 0.7,
-        text: WDEF[next].short, color: "#fbbf24", size: 12,
-      });
-    } else {
+    // only allow switching to this class if currently using a different class
+    if (WDEF[this.kind].cls !== cls) {
       this.equip(this.equipped[cls] ?? list[0]);
     }
   }
 
-  /** Q cycles through every owned weapon regardless of class. */
+  /** Q cycles between weapon classes only, not within a class. */
   cycleWeapon(dir = 1) {
-    const list = WEAPON_IDS.filter((w) => this.owned.has(w));
-    if (list.length < 2) return;
-    const i = list.indexOf(this.kind);
-    this.equip(list[(i + dir + list.length) % list.length]);
+    const currentCls = WDEF[this.kind].cls;
+    const cls = CLASS_ORDER[(CLASS_ORDER.indexOf(currentCls) + dir + CLASS_ORDER.length) % CLASS_ORDER.length];
+    this.selectClass(cls);
   }
 
   private recompute() {
@@ -2197,7 +2186,6 @@ export class Engine {
     this.travelProgressX = this.pl.x;
     this.travelIdleT = 0;
     this.travelMinX = 26;
-    this.gateBypassT = 0;
     // always reachable: never past the world's hard right clamp, even if
     // combat left the player already near the edge (degrades to ~0 gates)
     this.safeHouseX = Math.min(this.worldW - 60, this.pl.x + R(1500, 1950));
@@ -2231,8 +2219,6 @@ export class Engine {
     const movingFast = Math.abs(p.vx) > 220;
     // gates: two verbs. Walk straight into one and it gives — wakes nearby
     // sleepers, always available. Hold E from just outside contact range and
-    // it opens quietly instead, without waking anyone.
-    let bypassing = false;
     for (const g of this.gates) {
       if (g.opened) continue;
       const d = Math.abs(g.x - p.x);
@@ -2252,27 +2238,8 @@ export class Engine {
             life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#94a3b8", grav: 500, add: false,
           });
         for (const z of this.zombies) if (z.dormant && Math.abs(z.x - g.x) < 240) this.wakeZombie(z);
-        this.gateBypassT = 0;
-      } else if (d < 70 && this.keys.has("KeyE")) {
-        bypassing = true;
-        this.gateBypassT += dt;
-        if (this.gateBypassT >= 0.9) {
-          g.opened = true;
-          this.travelMinX = Math.max(this.travelMinX, g.x - 34);
-          this.texts.push({
-            x: p.x, y: p.y - 92, vy: -46, life: 0.9, max: 0.9,
-            text: "SLIPPED THROUGH", color: "#a78bfa", size: 12,
-          });
-          for (let i = 0; i < 6; i++)
-            this.particles.push({
-              x: g.x, y: GROUND - R(10, 40), vx: R(-20, 20), vy: R(-30, -5),
-              life: R(0.3, 0.5), max: 0.5, size: R(1.5, 3), color: "#94a3b8", grav: 300, add: true,
-            });
-          this.gateBypassT = 0;
-        }
       }
     }
-    if (!bypassing) this.gateBypassT = Math.max(0, this.gateBypassT - dt * 2);
 
     // hazards: alarms/glass/flares only trip if you're running/dashing through
     // them — walking calmly by is always safe, no roll or check needed. Wakes
@@ -2421,7 +2388,6 @@ export class Engine {
   getHud(): HudState {
     const p = this.pl;
     const nearCrate = this.crates.find((c) => !c.opened && Math.abs(c.x - p.x) < 40) ?? null;
-    const nearGate = this.gates.find((g) => !g.opened && Math.abs(g.x - p.x) < 70 && Math.abs(g.x - p.x) >= 30) ?? null;
     return {
       hp: Math.max(0, Math.ceil(p.hp)),
       maxHp: this.st.maxHp,
@@ -2480,8 +2446,6 @@ export class Engine {
       crateNear: nearCrate !== null,
       crateTier: nearCrate?.tier ?? 0,
       crateOpenPct: clamp(this.crateOpenT / 1.2, 0, 1),
-      gateBypassNear: nearGate !== null,
-      gateBypassPct: clamp(this.gateBypassT / 0.9, 0, 1),
       arena: this.stageDef.fixedCamera,
       prepT: Math.max(0, this.prepT),
       prepMax: 45,

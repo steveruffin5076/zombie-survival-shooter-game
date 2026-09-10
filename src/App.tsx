@@ -236,7 +236,7 @@ export default function App() {
             onTap={tap}
             onFireStart={fireStart}
             onFireEnd={fireEnd}
-            showInteract={!!(hud?.crateNear || hud?.gateBypassNear)}
+            showInteract={!!hud?.crateNear}
             onInteractStart={interactStart}
             onInteractEnd={interactEnd}
           />
