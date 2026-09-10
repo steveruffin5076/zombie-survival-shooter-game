@@ -69,6 +69,8 @@ export interface HudState {
   paused: boolean;
   muted: boolean;
   playing: boolean;
+  /** in the Hideout, close enough to the terminal to interact */
+  terminalNear: boolean;
   /** simple scalar crate feedback — bulk grid contents go through getInventory(), not here */
   crateNear: boolean;
   crateTier: 0 | 1 | 2 | 3;

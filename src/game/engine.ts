@@ -164,7 +164,12 @@ export class Engine {
   private last = 0;
   private tGlobal = 0;
 
-  mode: "attract" | "play" = "attract";
+  mode: "attract" | "play" | "hideout" = "attract";
+  /** the Hideout's own small walkable room — width, and the terminal's x position within it */
+  private hideoutWorldW = 900;
+  private terminalX = 620;
+  /** player is close enough to the terminal to interact */
+  private terminalNear = false;
   private over = false;
   private paused = false;
   private modals = new Set<ModalKind>();
@@ -322,6 +327,7 @@ export class Engine {
       dt = Math.min(dt, 1 / 30);
       this.tGlobal += dt;
       if (this.mode === "attract") this.updateAttract(dt);
+      else if (this.mode === "hideout") { if (!this.paused) this.updateHideout(dt); }
       else if (!this.paused && !this.modalOpen && !this.over) this.update(dt);
       this.updateBanner(dt);
       this.render();
@@ -358,14 +364,30 @@ export class Engine {
     this.cam = 0;
   }
 
+  /** Campaign's entry point — a small walkable room with a terminal, not a menu overlay. */
+  enterHideout() {
+    this.sfx.ensure();
+    this.pl = this.freshPlayer();
+    this.pl.x = this.hideoutWorldW * 0.25;
+    this.st = this.baseStats();
+    this.mode = "hideout";
+    this.paused = false;
+    this.cam = 0;
+    this.terminalNear = false;
+    // the attract screen's ambient walkers must not carry into the hideout
+    this.zombies = [];
+    this.particles = [];
+  }
+
   togglePause() {
     if (this.mode !== "play" || this.over || this.modalOpen) return;
     this.paused = !this.paused;
     this.onEvent({ type: "pause", value: this.paused });
   }
 
+  /** Also used to freeze player movement while the Hideout terminal overlay is open. */
   setPaused(v: boolean) {
-    if (this.mode !== "play" || this.over) return;
+    if ((this.mode !== "play" && this.mode !== "hideout") || this.over) return;
     this.paused = v;
     this.onEvent({ type: "pause", value: v });
   }
@@ -759,6 +781,23 @@ export class Engine {
       z.face = z.vx >= 0 ? 1 : -1;
     }
     this.zombies = this.zombies.filter((z) => z.x > -120 && z.x < W + 120);
+    this.updateParticles(dt);
+    this.motes(dt);
+  }
+
+  /** The Hideout: a small walkable room, movement only — no combat, no waves. */
+  private updateHideout(dt: number) {
+    const p = this.pl;
+    const mov = this.inputDir();
+    p.vx = lerp(p.vx, mov * this.st.speed, Math.min(1, 14 * dt));
+    p.x = clamp(p.x + p.vx * dt, 30, this.hideoutWorldW - 30);
+    if (mov !== 0) p.face = mov;
+    p.grounded = true;
+    p.y = GROUND;
+    p.vy = 0;
+    const run = Math.abs(p.vx) > 26;
+    p.walk += dt * (run ? 10 + Math.abs(p.vx) * 0.014 : 3);
+    this.terminalNear = Math.abs(p.x - this.terminalX) < 60;
     this.updateParticles(dt);
     this.motes(dt);
   }
@@ -2558,6 +2597,7 @@ export class Engine {
       paused: this.paused,
       muted: this.sfx.muted,
       playing: this.mode === "play" && !this.over,
+      terminalNear: this.terminalNear,
       crateNear: nearCrate !== null,
       crateTier: nearCrate?.tier ?? 0,
       crateOpenPct: clamp(this.crateOpenT / 1.2, 0, 1),
@@ -2600,7 +2640,76 @@ export class Engine {
     c.closePath();
   }
 
+  /** A small crimson-lit basement room with a terminal — the campaign's actual starting point. */
+  private renderHideout() {
+    const c = this.ctx;
+    const t = this.tGlobal;
+    c.clearRect(0, 0, W, H);
+
+    const sky = c.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, "#0a0304");
+    sky.addColorStop(0.6, "#170808");
+    sky.addColorStop(1, "#050202");
+    c.fillStyle = sky;
+    c.fillRect(0, 0, W, H);
+
+    const cam = clamp(this.pl.x - W / 2, 0, Math.max(0, this.hideoutWorldW - W));
+    c.save();
+    c.translate(-cam, 0);
+
+    // back wall, panel seams
+    c.fillStyle = "#170b0a";
+    c.fillRect(0, 0, this.hideoutWorldW, GROUND);
+    c.strokeStyle = "rgba(185,28,28,0.14)";
+    c.lineWidth = 1;
+    for (let x = 80; x < this.hideoutWorldW; x += 140) {
+      c.beginPath(); c.moveTo(x, 0); c.lineTo(x, GROUND); c.stroke();
+    }
+    // floor
+    const floor = c.createLinearGradient(0, GROUND, 0, H);
+    floor.addColorStop(0, "#140a09");
+    floor.addColorStop(1, "#050302");
+    c.fillStyle = floor;
+    c.fillRect(0, GROUND, this.hideoutWorldW, H - GROUND);
+
+    // the terminal
+    const tx = this.terminalX;
+    c.fillStyle = "#241512";
+    this.rr(tx - 34, GROUND - 50, 68, 50, 4);
+    c.fill();
+    c.globalCompositeOperation = "lighter";
+    const glow = c.createRadialGradient(tx, GROUND - 70, 4, tx, GROUND - 70, 110);
+    const glowA = this.terminalNear ? 0.5 : 0.3;
+    glow.addColorStop(0, `rgba(239,68,68,${glowA})`);
+    glow.addColorStop(1, "rgba(239,68,68,0)");
+    c.fillStyle = glow;
+    c.fillRect(tx - 110, GROUND - 180, 220, 180);
+    c.globalCompositeOperation = "source-over";
+    c.fillStyle = this.terminalNear ? "#fca5a5" : "#7f1d1d";
+    this.rr(tx - 24, GROUND - 78, 48, 30, 2);
+    c.fill();
+    c.strokeStyle = "rgba(0,0,0,0.4)";
+    c.lineWidth = 1;
+    for (let i = 0; i < 3; i++) { c.beginPath(); c.moveTo(tx - 20, GROUND - 70 + i * 8); c.lineTo(tx + 20, GROUND - 70 + i * 8); c.stroke(); }
+
+    c.restore();
+
+    this.drawPlayer(cam, 0, t);
+
+    if (this.terminalNear) {
+      c.save();
+      c.textAlign = "center";
+      c.font = '700 13px "Space Grotesk", sans-serif';
+      c.fillStyle = "#fca5a5";
+      c.globalAlpha = 0.75 + 0.25 * Math.sin(t * 5);
+      c.fillText("[E] ACCESS TERMINAL", tx - cam, GROUND - 100);
+      c.globalAlpha = 1;
+      c.restore();
+    }
+  }
+
   private render() {
+    if (this.mode === "hideout") { this.renderHideout(); return; }
     const c = this.ctx;
     const t = this.tGlobal;
     const cam = this.cam + this.shakeX;

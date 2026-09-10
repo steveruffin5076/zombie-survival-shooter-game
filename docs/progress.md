@@ -6,7 +6,7 @@
 - **Completed plan (Phases 0–7):** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
 - **Design doc driving Phases 8+:** `enhancement-1.md` (repo root, on `main`)
-- **Last updated:** 2026-09-10 (Phases 8-12 done; Phases 13-15 planned after user testing feedback)
+- **Last updated:** 2026-09-10 (Phases 8-13 done; Phases 14-15 planned)
 
 ---
 
@@ -16,7 +16,7 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 
 **Phases 8–12 are a new plan**, driven by `enhancement-1.md`: a narrative/campaign overhaul that replaces the 4-stage mission with **6 Acts × (3 exploration stages + 1 Terminal Defense stage)** under the Aetheris Dynamics / "Redshift" fiction. Scope decision: build the **Act I vertical slice** — the act framework sized to hold all six acts, with Act I fully authored and Acts II–VI present as thin data rows.
 
-**Immediate next action:** Phase 13 (Hideout scene + terminal). Phases 8-12 (the Act I vertical slice) are done, but user testing surfaced a real structural gap: the campaign had no real starting point, still leveled up mid-run exactly like endless (contradicting the doc's tactical-survivor framing), and the Menu's look didn't match the Redshift/Aetheris lore. Phases 13-15 below fix that.
+**Immediate next action:** Phase 14 (campaign loadout + remove campaign leveling). Phase 13 (Hideout scene + terminal) is done — campaign now has a real starting point, matching the earlier user feedback. Phase 14 is the one that changes core balance: campaign still levels up mid-run exactly like endless today, which Phase 14 removes.
 
 ## Phases 13-15 — Hideout, campaign loadout, menu redesign (planned 2026-09-10)
 
@@ -28,12 +28,13 @@ User feedback after testing the Phase 8-12 build, resolved via a clarifying roun
 
 **Real bug found while scoping this, not by inspection:** `applyUpgrade`'s weapon-unlock cards (`engine.ts:1751`, `this.owned.add(wid)`) are the *only* place a weapon is ever added to `owned` — there is no other unlock path. Stripping leveling from campaign with nothing to replace it would permanently lock the player to the starter pistol for the whole campaign. Phase 14 has to ship a loadout-selection replacement in the same phase leveling is removed, not after.
 
-### Phase 13 — Hideout scene + terminal
-- [ ] New `Engine.mode` value `"hideout"` alongside `"attract"`/`"play"`, with its own minimal update/render pass: player movement/physics only, reusing `drawPlayer`/movement code — no zombies, bullets, waves, or threat system ticking
-- [ ] A small fixed-width interior room + a `Terminal` decor object; proximity (~50px) sets a new `HudState.terminalNear: boolean`, mirroring the existing `crateNear`/`gateBypassNear` prompt idiom exactly
-- [ ] Pressing `E` near the terminal opens a new full-screen `HideoutTerminal.tsx` overlay with 3 tabs: **INTEL** (reuses `docsForAct`/`INTEL_DOCS` from Phase 11 as-is), **LOADOUT** (stubbed this phase, wired in Phase 14), **MISSIONS** (the act-select grid, moved here from the Menu)
-- [ ] Menu's campaign button now calls a new `Engine.enterHideout()` (transitions `mode: "hideout"`) instead of `startGame("mission")` directly; selecting Act I's tile in the Missions tab is what actually calls `startGame("mission")`
-- **Verify:** in-browser — walk the hideout room, confirm the terminal prompt appears/disappears with proximity, `E` opens the overlay, each tab renders, selecting Act I transitions cleanly into real stage-1 gameplay with no leftover hideout state (zombies/queue empty, phase correct)
+### Phase 13 — Hideout scene + terminal — DONE (2026-09-10)
+- [x] `Engine.mode` gains `"hideout"` alongside `"attract"`/`"play"`. New `updateHideout(dt)` — movement physics only (`inputDir()`, `st.speed`, world-clamp) — no zombies, bullets, waves, or threat ticking; `renderHideout()` — a self-contained crimson-lit basement (own gradient/wall-seam/floor draw, not the outdoor stage theme system) that reuses `drawPlayer()` unchanged. `render()` and `begin()`'s tick both gained one early branch each for the new mode
+- [x] A small fixed-width room (`hideoutWorldW = 900`) with a `terminalX = 620` point rather than a full `Decor`/`Deployable`-style object — proximity (60px) sets `terminalNear: boolean`, mirroring the existing `crateNear`/`gateBypassNear` prompt idiom exactly; exposed through `getHud()`/`HudState` the same way
+- [x] Pressing `E` near the terminal opens a new full-screen `HideoutTerminal.tsx` overlay with 3 tabs: **MISSIONS** (the act-select grid, moved here from the Menu, reusing `ACTS`/`PLAYABLE_ACTS`), **LOADOUT** (stubbed — shows the starter P365 read-only, real selection arrives in Phase 14), **INTEL** (reuses `docsForAct`/`INTEL_DOCS`/`IntelDocOverlay` from Phase 11 completely as-is, now showing every act with documents rather than just the current one)
+- [x] Opening the terminal reuses the existing `setPaused(true)`/`setPaused(false)` pause mechanism instead of a new modal kind — its guard widened from `mode !== "play"` to also accept `"hideout"`. Menu's campaign button now calls a new `Engine.enterHideout()` instead of `startGame("mission")` directly; selecting Act I's tile in the Missions tab is what actually calls `startGame("mission")`, closing the terminal and transitioning `mode: "hideout" → "play"`
+- **Bug found by the in-browser test, not by inspection:** the Menu screen's ambient background (`updateAttract()`, up to 7 wandering zombies) keeps running the whole time the player sits at the main menu. `enterHideout()` didn't clear `this.zombies`, so an ambient walker from the menu carried straight into the supposedly zombie-free hideout room. Fixed by clearing `zombies`/`particles` in `enterHideout()`
+- **Verified:** `npx tsc --noEmit` clean · `npm test` 80/80 unchanged (new state, no new pure-logic module) · `npm run build` succeeds (435.3kB) · **in-browser** via Playwright: entering the hideout carries zero leftover zombies; walking toward the terminal sets `terminalNear` and walking away clears it; `E` opens the terminal only while near and paused the engine, closing it unpaused; all 3 tabs render (Missions shows Act I unlocked + 5 "coming soon" locks, Loadout shows the P365, Intel reflects `docsFound` state live); selecting Act I transitions cleanly into real stage-1 play; Endless Mode's button still bypasses the Hideout entirely, launching straight into `runMode: "endless"`; a full 24-stage mission fast-forward through the real Menu→Hideout→Terminal→Act I flow completed cleanly
 
 ### Phase 14 — Campaign loadout + remove campaign leveling
 - [ ] Gate `gainXp`/`openLevelModal` off for `runMode === "mission"` at one call site — campaign kills/gems still award score, never XP; no level-up modal, no mid-run weapon unlocks

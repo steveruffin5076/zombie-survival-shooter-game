@@ -11,13 +11,15 @@ import InventoryOverlay from "./components/InventoryOverlay";
 import SafeHouseOverlay from "./components/SafeHouseOverlay";
 import RepairPanel from "./components/RepairPanel";
 import TouchControls from "./components/TouchControls";
+import HideoutTerminal from "./components/HideoutTerminal";
 import { isTouchCapable } from "./game/input";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Engine | null>(null);
 
-  const [screen, setScreen] = useState<"menu" | "game">("menu");
+  const [screen, setScreen] = useState<"menu" | "hideout" | "game">("menu");
+  const [showTerminal, setShowTerminal] = useState(false);
   const [hud, setHud] = useState<HudState | null>(null);
   const [choices, setChoices] = useState<UpgradeChoice[] | null>(null);
   const [over, setOver] = useState<GameStats | null>(null);
@@ -112,9 +114,36 @@ export default function App() {
   // Restart (from pause/game-over/mission-win) replays whichever mode was last started.
   const restart = useCallback(() => start(lastModeRef.current), [start]);
 
+  // Campaign's real entry point — a walkable room, not a menu overlay.
+  const enterHideout = useCallback(() => {
+    engineRef.current?.enterHideout();
+    setScreen("hideout");
+    setShowTerminal(false);
+    setOver(null);
+    setChoices(null);
+    setStageClear(null);
+    setSafeHouse(false);
+    setMissionWin(null);
+    setShowInventory(false);
+    setPaused(false);
+  }, []);
+  const openTerminal = useCallback(() => {
+    engineRef.current?.setPaused(true);
+    setShowTerminal(true);
+  }, []);
+  const closeTerminal = useCallback(() => {
+    engineRef.current?.setPaused(false);
+    setShowTerminal(false);
+  }, []);
+  const startMissionFromHideout = useCallback(() => {
+    setShowTerminal(false);
+    start("mission");
+  }, [start]);
+
   const quit = useCallback(() => {
     engineRef.current?.toMenu();
     setScreen("menu");
+    setShowTerminal(false);
     setOver(null);
     setChoices(null);
     setStageClear(null);
@@ -196,6 +225,16 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, [screen]);
 
+  // E opens the Hideout terminal when standing near it
+  useEffect(() => {
+    if (screen !== "hideout" || showTerminal) return;
+    const handler = (ev: KeyboardEvent) => {
+      if (ev.code === "KeyE" && hud?.terminalNear) openTerminal();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [screen, showTerminal, hud?.terminalNear, openTerminal]);
+
   return (
     <div className="fixed inset-0 grid place-items-center overflow-hidden bg-black select-none">
       <div className="relative" style={{ width: "min(100vw, 177.78vh)", aspectRatio: "16 / 9" }}>
@@ -242,7 +281,17 @@ export default function App() {
         )}
 
         {screen === "menu" && (
-          <Menu onStart={start} high={hud?.high ?? 0} muted={hud?.muted ?? false} onMute={toggleMute} />
+          <Menu
+            onEnterHideout={enterHideout}
+            onEndless={() => start("endless")}
+            high={hud?.high ?? 0}
+            muted={hud?.muted ?? false}
+            onMute={toggleMute}
+          />
+        )}
+
+        {showTerminal && inv && (
+          <HideoutTerminal inv={inv} onClose={closeTerminal} onStartMission={startMissionFromHideout} />
         )}
 
         {choices && <LevelUpModal choices={choices} level={hud?.level ?? 1} onPick={choose} />}
