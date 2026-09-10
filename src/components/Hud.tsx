@@ -1,9 +1,11 @@
-import type { HudState } from "../game/types";
+import type { HudState, InventorySnapshot } from "../game/types";
 import { DEPLOYABLE_DEFS, type DeployableKind } from "../game/arena";
 import { ATTACK_LABELS } from "../game/boss";
+import { CONSUMABLE_ITEMS, ITEMS, type ConsumableKey } from "../game/items";
+import { ICONS } from "./ui";
 import {
   Heart, Skull, Pause, Volume2, VolumeX, Crosshair, Zap, Trophy, Lock,
-  Ear, Bot, Hand, DoorOpen, Gem,
+  Bot, Hand, DoorOpen, Gem,
 } from "lucide-react";
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -16,15 +18,17 @@ const TOOL_KEYS: { kind: DeployableKind; key: string }[] = [
 
 interface Props {
   hud: HudState;
+  inv: InventorySnapshot;
   onMute: () => void;
   onPause: () => void;
   onSwitch: (id: string) => void;
   onFireMode: () => void;
   onSelectTool: (kind: DeployableKind) => void;
+  onUseItem: (key: ConsumableKey) => void;
   touch?: boolean;
 }
 
-export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSelectTool, touch = false }: Props) {
+export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, onSelectTool, onUseItem, touch = false }: Props) {
   const hpPct = Math.max(0, Math.min(1, hud.hp / hud.maxHp));
   const xpPct = Math.max(0, Math.min(1, hud.xp / hud.xpNext));
   const dashPct = hud.dashMax > 0 ? 1 - Math.max(0, hud.dashT) / hud.dashMax : 1;
@@ -40,45 +44,42 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
   // panel here is pointer-events-none, so touch input elsewhere still
   // reaches TouchControls.
   return (
-    <div className="pointer-events-none absolute inset-0 z-40 p-6 font-sans">
+    <div className="pointer-events-none absolute inset-0 z-40 p-3 font-sans md:p-6">
       {/* top-left: vitals */}
-      <div className="absolute left-6 top-6 flex flex-col gap-2.5">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-black/50 backdrop-blur-sm">
-            <Heart className={`h-4.5 w-4.5 ${hpPct > 0.25 ? "text-red-400" : "text-red-500 animate-pulse"}`} fill="currentColor" />
+      <div className="absolute left-3 top-3 flex flex-col gap-1.5 md:left-6 md:top-6 md:gap-2.5">
+        <div className="flex items-center gap-2 md:gap-3">
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-black/50 backdrop-blur-sm md:h-9 md:w-9">
+            <Heart className={`h-3 w-3 md:h-4.5 md:w-4.5 ${hpPct > 0.25 ? "text-red-400" : "text-red-500 animate-pulse"}`} fill="currentColor" />
           </div>
           <div>
-            <div className="h-3.5 w-56 overflow-hidden rounded-full border border-white/10 bg-black/60">
+            <div className="h-2 w-40 overflow-hidden rounded-full border border-white/10 bg-black/60 md:h-3.5 md:w-56">
               <div
                 className={`h-full rounded-full bg-gradient-to-r ${hpColor} transition-[width] duration-200`}
                 style={{ width: `${hpPct * 100}%` }}
               />
             </div>
-            <div className="mt-1 text-[10px] font-semibold tracking-widest text-white/50">
+            <div className="mt-0.5 text-[8px] font-semibold tracking-widest text-white/50 md:mt-1 md:text-[10px]">
               {hud.hp} / {hud.maxHp}
             </div>
           </div>
         </div>
 
-        {/* campaign has no leveling — power comes from the Hideout loadout + found gear */}
-        {!hud.campaignMode && (
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-violet-400/25 bg-black/50 text-[10px] font-bold text-violet-300 backdrop-blur-sm">
-              {hud.level}
+        <div className="flex items-center gap-2 md:gap-3">
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-violet-400/25 bg-black/50 text-[8px] font-bold text-violet-300 backdrop-blur-sm md:h-9 md:w-9 md:text-[10px]">
+            {hud.level}
+          </div>
+          <div>
+            <div className="h-1.5 w-40 overflow-hidden rounded-full border border-white/10 bg-black/60 md:h-2 md:w-56">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-400 transition-[width] duration-200"
+                style={{ width: `${xpPct * 100}%` }}
+              />
             </div>
-            <div>
-              <div className="h-2 w-56 overflow-hidden rounded-full border border-white/10 bg-black/60">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-400 transition-[width] duration-200"
-                  style={{ width: `${xpPct * 100}%` }}
-                />
-              </div>
-              <div className="mt-1 text-[10px] font-semibold tracking-widest text-white/50">
-                LEVEL {hud.level}
-              </div>
+            <div className="mt-0.5 text-[7px] font-semibold tracking-widest text-white/50 md:mt-1 md:text-[10px]">
+              LEVEL {hud.level}
             </div>
           </div>
-        )}
+        </div>
       </div>
 
       {/* top-center: stage + wave, or travel progress */}
@@ -228,58 +229,58 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
       )}
 
       {/* top-right: score + controls */}
-      <div className="absolute right-6 top-6 flex items-start gap-4">
+      <div className="absolute right-3 top-3 flex items-start gap-1 md:right-6 md:top-6 md:gap-4">
         <div className="text-right">
-          <div className="font-display text-3xl leading-none tracking-wider text-zinc-100 tabular-nums">
+          <div className="font-display text-xl leading-none tracking-wider text-zinc-100 tabular-nums md:text-3xl">
             {hud.score.toLocaleString()}
           </div>
-          <div className="mt-1.5 flex items-center justify-end gap-3 text-[11px] font-semibold tracking-widest text-white/50">
-            <span className="flex items-center gap-1">
-              <Skull className="h-3.5 w-3.5" /> {hud.kills}
+          <div className="mt-0.5 flex items-center justify-end gap-1 text-[7px] font-semibold tracking-widest text-white/50 md:mt-1.5 md:gap-3 md:text-[11px]">
+            <span className="flex items-center gap-0.5 md:gap-1">
+              <Skull className="h-2 w-2 md:h-3.5 md:w-3.5" /> {hud.kills}
             </span>
-            <span className="flex items-center gap-1">
-              <Trophy className="h-3.5 w-3.5 text-amber-400/80" /> {hud.high.toLocaleString()}
+            <span className="hidden gap-0.5 md:flex md:gap-1">
+              <Trophy className="h-2.5 w-2.5 text-amber-400/80 md:h-3.5 md:w-3.5" /> {hud.high.toLocaleString()}
             </span>
             {hud.arena && (
-              <span className="flex items-center gap-1 text-slate-300">
-                <Gem className="h-3.5 w-3.5 text-slate-400" /> {hud.scrap}
+              <span className="hidden gap-0.5 text-slate-300 md:flex md:gap-1">
+                <Gem className="h-2.5 w-2.5 text-slate-400 md:h-3.5 md:w-3.5" /> {hud.scrap}
               </span>
             )}
           </div>
         </div>
-        <div className="pointer-events-auto flex flex-col gap-2">
+        <div className="pointer-events-auto flex flex-col gap-1 md:gap-2">
           <button
             onClick={onPause}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white"
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white md:h-9 md:w-9"
             aria-label="Pause"
           >
-            <Pause className="h-4 w-4" />
+            <Pause className="h-3 w-3 md:h-4 md:w-4" />
           </button>
           <button
             onClick={onMute}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white"
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white md:h-9 md:w-9"
             aria-label="Mute"
           >
-            {hud.muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+            {hud.muted ? <VolumeX className="h-3 w-3 md:h-4 md:w-4" /> : <Volume2 className="h-3 w-3 md:h-4 md:w-4" />}
           </button>
         </div>
       </div>
 
       {/* bottom-left: weapon inventory + ammo */}
-      <div className="absolute bottom-6 left-6">
-        <div className="mb-2 flex items-end gap-3">
+      <div className="absolute bottom-3 left-3 md:bottom-6 md:left-6">
+        <div className="mb-1 flex items-end gap-2 md:mb-2 md:gap-3">
           <div>
-            <div className="flex items-center gap-2 text-[11px] font-bold tracking-[0.2em] text-amber-300">
-              <Crosshair className="h-4 w-4" />
+            <div className="flex items-center gap-1 text-[8px] font-bold tracking-[0.2em] text-amber-300 md:gap-2 md:text-[11px]">
+              <Crosshair className="h-3 w-3 md:h-4 md:w-4" />
               {hud.weapon.toUpperCase()}
-              <span className="rounded bg-white/10 px-1.5 py-0.5 text-[8px] tracking-[0.15em] text-white/55">
+              <span className="rounded bg-white/10 px-1 py-0.5 text-[6px] tracking-[0.15em] text-white/55 md:px-1.5 md:text-[8px]">
                 {hud.weaponRole}
               </span>
             </div>
             {/* big ammo readout */}
-            <div className="mt-1 flex items-baseline gap-1.5 font-display tabular-nums leading-none">
+            <div className="mt-0.5 flex items-baseline gap-1 font-display tabular-nums leading-none md:mt-1 md:gap-1.5">
               <span
-                className={`text-4xl tracking-wider transition-colors ${
+                className={`text-2xl tracking-wider transition-colors md:text-4xl ${
                   hud.reloading
                     ? "text-amber-400"
                     : hud.ammo === 0
@@ -291,9 +292,9 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
               >
                 {String(hud.ammo).padStart(2, "0")}
               </span>
-              <span className="text-lg text-white/35">/ {hud.mag}</span>
+              <span className="text-sm text-white/35 md:text-lg">/ {hud.mag}</span>
               <span
-                className={`ml-1 text-xs font-semibold ${
+                className={`ml-0.5 text-[10px] font-semibold md:ml-1 md:text-xs ${
                   hud.reserve < 0
                     ? "text-emerald-400"
                     : hud.reserve === 0
@@ -305,7 +306,7 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
               </span>
             </div>
             {/* reload progress / ammo bar */}
-            <div className="mt-1.5 h-1.5 w-40 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
+            <div className="mt-1 h-1 w-32 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10 md:mt-1.5 md:h-1.5 md:w-40">
               {hud.reloading ? (
                 <div
                   className="h-full rounded-full bg-gradient-to-r from-amber-500 to-yellow-300 transition-[width] duration-75"
@@ -320,48 +321,18 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
                 />
               )}
             </div>
-            <div className="mt-1 h-3 text-[9px] font-bold tracking-[0.25em] text-amber-400/80">
+            <div className="mt-0.5 h-2 text-[7px] font-bold tracking-[0.25em] text-amber-400/80 md:mt-1 md:h-3 md:text-[9px]">
               {hud.reloading ? "RELOADING…" : hud.ammo === 0 ? "PRESS R" : ""}
             </div>
-
-            {/* suppressor durability — campaign has no noise/suppressor system */}
-            {!hud.campaignMode && (
-              <div className="mt-1.5 flex items-center gap-2">
-                <span
-                  className={`text-[9px] font-bold tracking-[0.15em] ${
-                    hud.suppBroken ? "text-red-400" : "text-white/45"
-                  }`}
-                >
-                  {hud.suppMax >= 999 ? "INTEGRAL SUPP" : hud.suppBroken ? "SUPP BROKEN" : "SUPP"}
-                </span>
-                {hud.suppMax < 999 && (
-                  <>
-                    <div className="h-1 w-16 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
-                      <div
-                        className={`h-full rounded-full ${
-                          hud.suppBroken
-                            ? "bg-red-600"
-                            : hud.supp / hud.suppMax < 0.3
-                              ? "bg-amber-500"
-                              : "bg-emerald-500"
-                        }`}
-                        style={{ width: `${(hud.supp / hud.suppMax) * 100}%` }}
-                      />
-                    </div>
-                    <span className="text-[9px] tabular-nums text-white/40">{hud.supp}</span>
-                  </>
-                )}
-              </div>
-            )}
           </div>
         </div>
-        <div className="pointer-events-auto flex gap-2">
+        <div className="pointer-events-auto flex gap-1 md:gap-2">
           {hud.weapons.map((w) => (
             <button
               key={w.cls}
               onClick={() => w.owned && onSwitch(w.cls)}
               disabled={!w.owned}
-              className={`relative flex h-16 w-[4.2rem] flex-col items-center justify-center rounded-lg border transition-all duration-150 ${
+              className={`relative flex h-12 w-14 flex-col items-center justify-center rounded-lg border text-[8px] transition-all duration-150 md:h-16 md:w-[4.2rem] md:text-[9px] ${
                 w.active
                   ? "border-amber-400/70 bg-amber-400/15 shadow-[0_0_20px_rgba(245,158,11,0.3)]"
                   : w.owned
@@ -369,15 +340,15 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
                     : "border-white/5 bg-black/40 opacity-35"
               }`}
             >
-              <span className={`absolute left-1 top-0.5 text-[9px] font-bold ${w.active ? "text-amber-300" : "text-white/35"}`}>
+              <span className={`absolute left-0.5 top-0 text-[7px] font-bold md:left-1 md:top-0.5 ${w.active ? "text-amber-300" : "text-white/35"}`}>
                 {w.key}
               </span>
               {w.owned ? (
                 <>
-                  <span className="text-[7px] font-bold tracking-[0.15em] text-white/35">
+                  <span className="text-[6px] font-bold tracking-[0.15em] text-white/35 md:text-[7px]">
                     {w.label}
                   </span>
-                  <span className={`text-[9px] font-bold tracking-wide ${w.active ? "text-amber-200" : "text-zinc-300"}`}>
+                  <span className={`text-[7px] font-bold tracking-wide md:text-[9px] ${w.active ? "text-amber-200" : "text-zinc-300"}`}>
                     {w.short}
                   </span>
                   <span
@@ -407,86 +378,78 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
         </div>
       </div>
 
-      {/* right column: fire mode + threat */}
-      <div className="absolute bottom-28 right-6 flex flex-col items-end gap-3">
-        {/* THREAT METER — campaign has no noise/suppressor system */}
-        {!hud.campaignMode && (
-          <div className="w-44 rounded-xl border border-white/10 bg-black/50 px-3 py-2 backdrop-blur-sm">
-            <div className="mb-1 flex items-center justify-between">
-              <span className="flex items-center gap-1 text-[9px] font-bold tracking-[0.2em] text-white/55">
-                <Ear className="h-3 w-3" /> NOISE
-              </span>
-              <span
-                className={`text-[9px] font-bold tracking-widest ${
-                  hud.threat > 0.75 ? "text-red-400 animate-pulse" : "text-white/40"
+      {/* right column: consumable slots + fire mode */}
+      <div className="absolute bottom-32 right-3 flex flex-col items-end gap-1.5 md:bottom-28 md:right-6 md:gap-3">
+        {/* CONSUMABLE SLOTS — hidden on mobile, visible on desktop */}
+        <div className="pointer-events-auto hidden gap-2 md:flex w-44 justify-end">
+          {CONSUMABLE_ITEMS.map((id) => {
+            const def = ITEMS[id];
+            const count = inv.backpack.filter((it) => it.itemId === id).length;
+            const Icon = ICONS[def.icon] ?? ICONS.Crosshair;
+            const has = count > 0;
+            return (
+              <button
+                key={id}
+                onClick={() => has && onUseItem(def.hotkey!)}
+                disabled={!has}
+                title={def.desc}
+                className={`relative flex h-12 w-12 flex-col items-center justify-center gap-0.5 rounded-lg border backdrop-blur-sm transition ${
+                  has
+                    ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-200 hover:border-cyan-400/70"
+                    : "border-white/10 bg-black/40 text-white/25"
                 }`}
               >
-                {hud.threat > 0.75 ? "DETECTED" : hud.threat > 0.4 ? "HEARD" : "QUIET"}
-              </span>
-            </div>
-            <div className="relative h-2 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
-              <div
-                className={`h-full rounded-full transition-[width] duration-150 ${
-                  hud.threat > 0.75
-                    ? "bg-gradient-to-r from-red-600 to-red-400"
-                    : hud.threat > 0.4
-                      ? "bg-gradient-to-r from-amber-600 to-amber-400"
-                      : "bg-gradient-to-r from-emerald-700 to-emerald-500"
-                }`}
-                style={{ width: `${hud.threat * 100}%` }}
-              />
-              {/* LOOT LOCK tick — bypass/quiet-kill windows close past this threat */}
-              <div className="absolute inset-y-0 w-px bg-white/50" style={{ left: "35%" }} />
-            </div>
-            <div className="relative mt-0.5 h-2.5 text-[7px] font-bold tracking-widest text-white/35">
-              <span className="absolute -translate-x-1/2" style={{ left: "35%" }}>LOOT LOCK</span>
-            </div>
-          </div>
-        )}
+                <span className="absolute left-1 top-0.5 text-[8px] font-bold text-white/40">{def.hotkey}</span>
+                <Icon className="h-4 w-4" />
+                <span className="text-[9px] font-bold tabular-nums">{count}</span>
+              </button>
+            );
+          })}
+        </div>
 
         {/* FIRE MODE TOGGLE */}
         <button
           onClick={onFireMode}
-          className={`pointer-events-auto flex w-44 items-center gap-2.5 rounded-xl border px-3 py-2.5 backdrop-blur-sm transition-all active:scale-[0.97] ${
+          className={`pointer-events-auto flex w-40 items-center gap-1.5 rounded-xl border px-2 py-1.5 text-[9px] backdrop-blur-sm transition-all active:scale-[0.97] md:w-44 md:gap-2.5 md:px-3 md:py-2.5 md:text-[11px] ${
             hud.autoFire
               ? "border-emerald-400/50 bg-emerald-500/10 hover:bg-emerald-500/20"
               : "border-amber-400/50 bg-amber-500/10 hover:bg-amber-500/20"
           }`}
         >
           {hud.autoFire ? (
-            <Bot className="h-5 w-5 text-emerald-300" />
+            <Bot className="h-4 w-4 md:h-5 md:w-5 text-emerald-300" />
           ) : (
-            <Hand className="h-5 w-5 text-amber-300" />
+            <Hand className="h-4 w-4 md:h-5 md:w-5 text-amber-300" />
           )}
           <div className="text-left">
             <div
-              className={`text-[11px] font-bold tracking-[0.14em] ${
+              className={`hidden font-bold tracking-[0.14em] md:block ${
                 hud.autoFire ? "text-emerald-200" : "text-amber-200"
               }`}
             >
               {hud.autoFire ? "AUTO-FIRE" : "MANUAL"}
             </div>
-            <div className="text-[8px] tracking-[0.12em] text-white/40">
-              {hud.autoFire ? "FIRES ON LASER CONTACT" : "CLICK TO SHOOT"}
+            <div className="text-[7px] tracking-[0.12em] text-white/40 md:text-[8px]">
+              {hud.autoFire ? "FIRES ON LASER" : "CLICK TO SHOOT"}
             </div>
           </div>
-          <span className="kbd ml-auto text-[8px]">F</span>
+          <span className="kbd ml-auto text-[7px] md:text-[8px]">F</span>
         </button>
       </div>
 
       {/* bottom-right: dash */}
-      <div className="absolute bottom-6 right-6">
+      <div className="absolute bottom-3 right-3 md:bottom-6 md:right-6">
         <div
-          className={`flex items-center gap-3 rounded-xl border px-4 py-2.5 backdrop-blur-sm transition-colors ${
+          className={`flex items-center gap-2 rounded-xl border px-2 py-1.5 text-[8px] backdrop-blur-sm transition-colors md:gap-3 md:px-4 md:py-2.5 md:text-[10px] ${
             dashPct >= 1 ? "border-cyan-300/30 bg-cyan-950/40" : "border-white/10 bg-black/50"
           }`}
         >
-          <Zap className={`h-5 w-5 ${dashPct >= 1 ? "text-cyan-300" : "text-white/30"}`} />
+          <Zap className={`h-4 w-4 md:h-5 md:w-5 ${dashPct >= 1 ? "text-cyan-300" : "text-white/30"}`} />
           <div>
-            <div className={`text-[10px] font-bold tracking-[0.2em] ${dashPct >= 1 ? "text-cyan-200" : "text-white/40"}`}>
+            <div className={`font-bold tracking-[0.2em] ${dashPct >= 1 ? "text-cyan-200" : "text-white/40"}`}>
               {dashPct >= 1 ? "DASH READY" : "DASH"}
             </div>
-            <div className="mt-1 h-1.5 w-24 overflow-hidden rounded-full bg-white/10">
+            <div className="mt-0.5 h-1 w-16 overflow-hidden rounded-full bg-white/10 md:mt-1 md:h-1.5 md:w-24">
               <div
                 className={`h-full rounded-full ${dashPct >= 1 ? "bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.8)]" : "bg-white/40"}`}
                 style={{ width: `${dashPct * 100}%` }}
@@ -498,57 +461,16 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
 
       {/* bottom-center: crate interact prompt */}
       {hud.crateNear && (
-        <div className="absolute bottom-40 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
-          <div
-            className={`flex items-center gap-2 rounded-full border px-4 py-1.5 text-[11px] font-bold tracking-[0.15em] backdrop-blur-sm ${
-              hud.crateLocked
-                ? "border-red-400/40 bg-red-950/50 text-red-300"
-                : "border-white/15 bg-black/60 text-zinc-200"
-            }`}
-          >
-            {hud.crateLocked ? (
-              "TOO LOUD — WAIT FOR QUIET"
-            ) : (
-              <>
-                <span className="kbd">E</span> HOLD TO OPEN
-                <span className="text-white/40">· TIER {hud.crateTier}</span>
-              </>
-            )}
+        <div className="absolute bottom-32 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 md:bottom-40 md:gap-1.5">
+          <div className="flex items-center gap-1 rounded-full border border-white/15 bg-black/60 px-2 py-1 text-[8px] font-bold tracking-[0.15em] backdrop-blur-sm text-zinc-200 md:gap-2 md:px-4 md:py-1.5 md:text-[11px]">
+            <span className="kbd">E</span> HOLD TO OPEN
+            <span className="text-white/40">· TIER {hud.crateTier}</span>
           </div>
-          {!hud.crateLocked && hud.crateOpenPct > 0 && (
-            <div className="h-1 w-32 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
+          {hud.crateOpenPct > 0 && (
+            <div className="h-0.5 w-24 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10 md:h-1 md:w-32">
               <div
                 className="h-full rounded-full bg-amber-400 transition-[width] duration-75"
                 style={{ width: `${hud.crateOpenPct * 100}%` }}
-              />
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* bottom-center: gate bypass prompt — always optional, never required */}
-      {hud.gateBypassNear && !hud.crateNear && (
-        <div className="absolute bottom-40 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
-          <div
-            className={`flex items-center gap-2 rounded-full border px-4 py-1.5 text-[11px] font-bold tracking-[0.15em] backdrop-blur-sm ${
-              hud.gateBypassLocked
-                ? "border-red-400/40 bg-red-950/50 text-red-300"
-                : "border-violet-400/30 bg-violet-950/40 text-violet-200"
-            }`}
-          >
-            {hud.gateBypassLocked ? (
-              "TOO LOUD TO SLIP THROUGH"
-            ) : (
-              <>
-                <span className="kbd">E</span> HOLD TO BYPASS QUIETLY
-              </>
-            )}
-          </div>
-          {!hud.gateBypassLocked && hud.gateBypassPct > 0 && (
-            <div className="h-1 w-32 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
-              <div
-                className="h-full rounded-full bg-violet-400 transition-[width] duration-75"
-                style={{ width: `${hud.gateBypassPct * 100}%` }}
               />
             </div>
           )}
@@ -566,7 +488,7 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
           <span><span className="kbd">F</span> FIRE MODE</span>
           <span><span className="kbd">E</span> OPEN CRATE</span>
           <span><span className="kbd">I</span> BACKPACK</span>
-          <span><span className="kbd">G</span>/<span className="kbd">B</span>/<span className="kbd">N</span>/<span className="kbd">T</span> ITEMS</span>
+          <span><span className="kbd">G</span>/<span className="kbd">B</span>/<span className="kbd">T</span> ITEMS</span>
         </div>
       )}
     </div>

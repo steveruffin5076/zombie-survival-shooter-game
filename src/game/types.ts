@@ -1,5 +1,6 @@
 import type { DeployableKind } from "./arena";
 import type { BossAttack } from "./boss";
+import type { WeaponClass } from "./weapons";
 
 export interface WeaponSlot {
   /** weapon class this slot represents */
@@ -24,8 +25,6 @@ export interface HudState {
   level: number;
   stage: number;
   stageName: string;
-  /** which act this stage belongs to — used to pick the Hideout board's document set */
-  actId: number;
   waveInStage: number;
   wavesPerStage: number;
   /** in-stage wave numbers (1-based) that spawn a boss */
@@ -55,12 +54,6 @@ export interface HudState {
   reloadPct: number;
   /** true = auto engage, false = manual trigger */
   autoFire: boolean;
-  /** 0..1 noise/threat build-up */
-  threat: number;
-  /** remaining suppressor shots */
-  supp: number;
-  suppMax: number;
-  suppBroken: boolean;
   /** which lane the player is locked to */
   facing: 1 | -1;
   /** a target is currently on the laser line */
@@ -69,23 +62,11 @@ export interface HudState {
   paused: boolean;
   muted: boolean;
   playing: boolean;
-  /** in the Hideout, close enough to the terminal to interact */
-  terminalNear: boolean;
-  /** campaign run — no XP/leveling, so the HUD hides that bar entirely */
-  campaignMode: boolean;
   /** simple scalar crate feedback — bulk grid contents go through getInventory(), not here */
   crateNear: boolean;
   crateTier: 0 | 1 | 2 | 3;
   /** 0..1 hold-to-open progress */
   crateOpenPct: number;
-  /** tier 2/3 crate refusing to open because threat is too high */
-  crateLocked: boolean;
-  /** an unopened gate is in quiet-bypass range (hold E) */
-  gateBypassNear: boolean;
-  /** 0..1 hold-to-bypass progress */
-  gateBypassPct: number;
-  /** a bypassable gate is in range but threat is too high to use it */
-  gateBypassLocked: boolean;
   /** stage 4 only — gates the prep/deployables/scrap UI */
   arena: boolean;
   /** seconds left in the arena's prep phase */
@@ -135,15 +116,6 @@ export interface GameStats {
   isBest: boolean;
 }
 
-export interface MissionStats {
-  score: number;
-  kills: number;
-  level: number;
-  time: number;
-  bestTime: number;
-  isBestTime: boolean;
-}
-
 export interface InventoryItem {
   id: string;
   itemId: string;
@@ -160,10 +132,18 @@ export interface InventorySnapshot {
   invVer: number;
   backpack: InventoryItem[];
   deposit: string[];
-  intel: number;
-  /** ids of intel documents found so far — the Hideout board looks these up in INTEL_DOCS */
-  docs: string[];
   backpackSize: { w: number; h: number };
+}
+
+/** Loadout + Profile screen data — Engine.getProfile(), polled separately from HudState. */
+export interface ProfileSnapshot {
+  metaLevel: number;
+  metaXp: number;
+  metaXpNext: number;
+  totalKills: number;
+  bestWave: number;
+  totalScrap: number;
+  equipped: Partial<Record<WeaponClass, string>>;
 }
 
 export type EngineEvent =
@@ -171,5 +151,4 @@ export type EngineEvent =
   | { type: "resume" }
   | { type: "gameover"; stats: GameStats }
   | { type: "stageclear"; stage: number; next: number; wavesPerStage: number }
-  | { type: "missionwin"; stats: MissionStats }
   | { type: "pause"; value: boolean };

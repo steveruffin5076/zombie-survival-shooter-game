@@ -1,17 +1,19 @@
 import { UPGRADES, type UpgradeDef } from "./upgrades";
 import {
-  WEAPONS as WDEF, WEAPON_IDS, CLASS_ORDER, CLASS_LABEL, CLASS_ROLE, byClass, STARTER, CAMPAIGN_ARSENAL,
+  WEAPONS as WDEF, WEAPON_IDS, CLASS_ORDER, CLASS_LABEL, CLASS_ROLE, byClass, STARTER,
   type WeaponClass,
 } from "./weapons";
 import { Sfx } from "./audio";
-import { stageDefFor, cumulativeWaveIndex, difficultyFor, STAGES, type StageDef, type RunMode } from "./stages";
-import { enemyPoolFor, rollEnemy } from "./acts";
-import { docIdFor } from "./intel";
+import { stageDefFor, cumulativeWaveIndex, difficultyFor, rollEnemy, type StageDef } from "./stages";
+import { WEAPON_UNLOCK_LEVEL, metaXpFor, ownedWeaponsForLevel, isWeaponUnlocked } from "./progression";
 import { THEMES, type ThemeDef } from "./themes";
 import { BACKPACK_SIZE, moveItem, placeItem, removeItem, type PlacedItem } from "./grid";
 import { ITEMS, shapeOfItem, itemForHotkey, type ConsumableKey } from "./items";
 import { rollLoot, type CrateTier } from "./loot";
-import { saveRun, loadRun, clearRun, SAVE_VERSION, type SaveData } from "./save";
+import {
+  saveRun, loadRun, SAVE_VERSION, type SaveData,
+  loadProfile, saveProfile, type ProfileData,
+} from "./save";
 import {
   DEPLOYABLE_DEFS, canPlaceAt, slotToWorldX, worldXToSlot,
   type Deployable, type DeployableKind,
@@ -20,7 +22,7 @@ import {
   BOSS_DEFS, cooldownFor, phaseFor, pickAttack, windupFor,
   type AimTarget, type BossAttack,
 } from "./boss";
-import type { EngineEvent, GameStats, HudState, InventorySnapshot, UpgradeChoice } from "./types";
+import type { EngineEvent, GameStats, HudState, InventorySnapshot, ProfileSnapshot, UpgradeChoice } from "./types";
 
 /* ------------------------------------------------------------------ */
 /* constants + helpers                                                 */
@@ -28,12 +30,9 @@ import type { EngineEvent, GameStats, HudState, InventorySnapshot, UpgradeChoice
 
 const W = 1280;
 const H = 720;
-const GROUND = 584;
-const GRAV = 2400;
-// campaign has no mid-run leveling to grow survivability (see baseStats()/recompute()),
-// so it starts with more HP and passive regen than endless's leveled-from-100 baseline
-const CAMPAIGN_MAX_HP = 160;
-const CAMPAIGN_REGEN = 1.5;
+const GROUND = 584; // Kept for compatibility with attract mode and particle effects
+// Top-down camera: world bounds for player movement
+const WORLD_H = 1440; // vertical play area height
 const TAU = Math.PI * 2;
 
 const R = (a: number, b: number) => a + Math.random() * (b - a);
@@ -61,10 +60,14 @@ const ZCONF: Record<ZType, ZConf> = {
   runner: { hp: 20, speed: 128, dmg: 7, r: 15, scale: 0.88, xp: 2, score: 14 },
   spitter: { hp: 30, speed: 46, dmg: 8, r: 16, scale: 0.95, xp: 2, score: 22 },
   brute: { hp: 150, speed: 36, dmg: 22, r: 30, scale: 1.5, xp: 6, score: 45 },
-  // Act I's Screamer — fragile and slow, but punishes a sloppy kill hard
+  // the Screamer — fragile and slow, but punishes a sloppy kill hard
   // (an ambush), so worth notably more than her stats alone suggest
   screamer: { hp: 18, speed: 40, dmg: 6, r: 15, scale: 0.85, xp: 4, score: 35 },
 };
+
+/** A rare, deliberate encounter across every stage — not power-scaled like the
+ * base roster, so she stays a fixed low-probability spice pick, never fodder. */
+const SCREAMER_WEIGHT = 0.18;
 
 const WAVE_SUBS = [
   "they see your light",
@@ -85,7 +88,7 @@ interface Zombie {
   type: ZType; xp: number; score: number;
   t: number; atk: number; flash: number; face: number; dead: boolean; spit: number;
   tint: number; boss: boolean; wob: number;
-  /** sleeper: inert until woken by threat, damage, or a fast player passing close */
+  /** sleeper: inert until a hit (an instant quiet kill), a fast player passing close, or a hazard */
   dormant: boolean;
   /** screamer only: 0 idle, >0 counting down to her scream, -1 already spent */
   alertT: number;
@@ -128,7 +131,7 @@ interface Particle {
   life: number; max: number; size: number; color: string; grav: number; add: boolean;
 }
 
-interface Gem { x: number; y: number; vx: number; vy: number; val: number; t: number; rest: boolean; kind: "xp" | "scrap" | "health" | "ammo" }
+interface Gem { x: number; y: number; vx: number; vy: number; val: number; t: number; rest: boolean; kind: "xp" | "scrap" }
 interface FloatText { x: number; y: number; vy: number; life: number; max: number; text: string; color: string; size: number }
 interface Decal { x: number; s: number; a: number }
 interface SpawnItem { type: ZType; boss?: boolean }
@@ -138,16 +141,10 @@ interface Building { x: number; w: number; h: number; win: number }
 interface Decor { x: number; kind: number; s: number; ph: number }
 interface Star { x: number; y: number; r: number; ph: number; tw: number }
 interface Gate { x: number; opened: boolean }
-interface Crate {
-  x: number; y: number; tier: CrateTier; opened: boolean;
-  /** set only for a guaranteed intel-document crate — openCrate() special-cases it */
-  docId?: string;
-}
+interface Crate { x: number; y: number; tier: CrateTier; opened: boolean }
 interface GrenadeProj { x: number; y: number; vx: number; vy: number; fuse: number }
 type HazardKind = "alarm" | "glass" | "flare";
 interface Hazard { x: number; y: number; kind: HazardKind; triggered: boolean }
-/** Campaign travel only — rubble/debris blocking the ground path; jump over it. */
-interface Obstacle { x: number }
 
 /* ------------------------------------------------------------------ */
 /* engine                                                              */
@@ -160,9 +157,7 @@ export class Engine {
   readonly sfx = new Sfx();
   private debug = new URLSearchParams(window.location.search).get("debug") === "1";
 
-  /** mission = finite 4-stage run; endless = the old infinite mode */
-  private runMode: RunMode = "endless";
-  private stageDef: StageDef = stageDefFor(1, this.runMode);
+  private stageDef: StageDef = stageDefFor(1);
   private worldW = this.stageDef.worldW;
   private theme: ThemeDef = THEMES[this.stageDef.themeId];
 
@@ -170,14 +165,9 @@ export class Engine {
   private last = 0;
   private tGlobal = 0;
 
-  mode: "attract" | "play" | "hideout" = "attract";
-  /** the Hideout's own small walkable room — width, and the terminal's x position within it */
-  private hideoutWorldW = 900;
-  private terminalX = 620;
-  /** player is close enough to the terminal to interact */
-  private terminalNear = false;
-  /** weapon picked in the Hideout's Loadout tab, applied by reset() on the next startGame("mission") */
-  private pendingKind: string | null = null;
+  mode: "attract" | "play" = "attract";
+  /** persistent lifetime progression — loaded once, survives every run in this session */
+  private profile: ProfileData = loadProfile();
   private over = false;
   private paused = false;
   private modals = new Set<ModalKind>();
@@ -190,6 +180,7 @@ export class Engine {
 
   // world state
   private cam = 0;
+  private camY = 0; // top-down camera Y position
   private shakeMag = 0;
   private shakeX = 0;
   private shakeY = 0;
@@ -221,13 +212,9 @@ export class Engine {
   private onTarget = false;
   private laserFlash = 0;
   /** blocks fire() briefly after a lane flip; scaled by the weapon's pivotMul */
-  private pivotT = 0;
 
-  /* --- noise / threat --- */
-  private threat = 0;
+  /** re-entrancy guard so overlapping triggers can't stack ambushes */
   private ambushT = 0;
-  /** suppressor durability per weapon */
-  private supp: Record<string, number> = {};
 
   private zombies: Zombie[] = [];
   private bullets: Bullet[] = [];
@@ -264,32 +251,17 @@ export class Engine {
   private travelMinX = 26;
   private travelProgressX = 0;
   private travelIdleT = 0;
-  /** hold-to-open progress on whichever gate is in quiet-bypass range */
-  private gateBypassT = 0;
   private hazards: Hazard[] = [];
-
-  /* --- campaign travel: continuous left-to-right combat to a checkpoint,
-   * replacing the wave-room + safe-house-corridor loop endless still uses --- */
-  private obstacles: Obstacle[] = [];
-  private campaignCheckpointX = 0;
-  private campaignSpawnT = 0;
-  /** Terminal Defense only — false while walking in, set once the fight is won so
-   * the next checkpoint is treated as the exit walk, not a second entry into the arena */
-  private campaignArenaCleared = false;
 
   /* --- inventory: fixed 4x4 backpack, a persistent safe-house stash, loot crates --- */
   private backpack: PlacedItem[] = [];
   private deposit: string[] = [];
-  private intel = 0;
-  /** ids of intel documents found so far — persists like `deposit`, survives death */
-  private docsFound: string[] = [];
   /** bumped on every backpack/deposit mutation — the UI polls this, not HudState */
   private invVer = 0;
   private nextItemSeq = 1;
   private crates: Crate[] = [];
   /** hold-to-open progress (seconds held) on whichever crate is currently in range */
   private crateOpenT = 0;
-  private crateWarnT = 0;
   private grenades: GrenadeProj[] = [];
   /** active Tactical Stim buff remaining, seconds */
   private stimT = 0;
@@ -344,7 +316,6 @@ export class Engine {
       dt = Math.min(dt, 1 / 30);
       this.tGlobal += dt;
       if (this.mode === "attract") this.updateAttract(dt);
-      else if (this.mode === "hideout") { if (!this.paused) this.updateHideout(dt); }
       else if (!this.paused && !this.modalOpen && !this.over) this.update(dt);
       this.updateBanner(dt);
       this.render();
@@ -364,46 +335,46 @@ export class Engine {
     this.canvas.removeEventListener("contextmenu", this.onCtx);
   }
 
-  startGame(mode: RunMode = "endless") {
-    this.runMode = mode;
+  startGame() {
     this.sfx.ensure();
     this.reset();
     this.recompute();
     this.pl.hp = this.st.maxHp;
     this.mode = "play";
-    if (mode === "mission") {
-      this.startCampaignTravel();
-    } else {
-      this.phase = "break";
-      this.breakT = 2.2;
-      this.announce(`STAGE 1 — ${this.stageDef.name}`, this.stageDef.sub, 2.6);
-    }
+    this.phase = "break";
+    this.breakT = 2.2;
+    this.announce(`STAGE 1 — ${this.stageDef.name}`, this.stageDef.sub, 2.6);
   }
 
   toMenu() {
+    // flush this run's lifetime meta-progress — it's otherwise only persisted
+    // at stage-clear/death, so quitting mid-stage would silently drop it
+    saveProfile(this.profile);
     this.reset();
     this.mode = "attract";
     this.cam = 0;
   }
 
-  /** Campaign's entry point — a small walkable room with a terminal, not a menu overlay. */
-  enterHideout() {
-    this.sfx.ensure();
-    this.pl = this.freshPlayer();
-    this.pl.x = this.hideoutWorldW * 0.25;
-    this.st = this.baseStats();
-    this.mode = "hideout";
-    this.paused = false;
-    this.cam = 0;
-    this.terminalNear = false;
-    // the attract screen's ambient walkers must not carry into the hideout
-    this.zombies = [];
-    this.particles = [];
+  /** Loadout screen: picks which owned weapon a class starts equipped with next run.
+   * Persists immediately — this is lifetime progression, not per-run state. */
+  setLoadout(weaponId: string) {
+    const w = WDEF[weaponId];
+    if (!w || !isWeaponUnlocked(weaponId, this.profile.metaLevel)) return;
+    this.profile.equipped = { ...this.profile.equipped, [w.cls]: weaponId };
+    saveProfile(this.profile);
   }
 
-  /** Picks which of CAMPAIGN_ARSENAL's weapons the next campaign run starts equipped with. */
-  setLoadout(weaponId: string) {
-    if (CAMPAIGN_ARSENAL.includes(weaponId)) this.pendingKind = weaponId;
+  /** Loadout + Profile screen data — read-only snapshot, polled separately from HudState. */
+  getProfile(): ProfileSnapshot {
+    return {
+      metaLevel: this.profile.metaLevel,
+      metaXp: this.profile.metaXp,
+      metaXpNext: metaXpFor(this.profile.metaLevel),
+      totalKills: this.profile.totalKills,
+      bestWave: this.profile.bestWave,
+      totalScrap: this.profile.totalScrap,
+      equipped: { ...this.profile.equipped },
+    };
   }
 
   togglePause() {
@@ -412,9 +383,8 @@ export class Engine {
     this.onEvent({ type: "pause", value: this.paused });
   }
 
-  /** Also used to freeze player movement while the Hideout terminal overlay is open. */
   setPaused(v: boolean) {
-    if ((this.mode !== "play" && this.mode !== "hideout") || this.over) return;
+    if (this.mode !== "play" || this.over) return;
     this.paused = v;
     this.onEvent({ type: "pause", value: v });
   }
@@ -429,33 +399,23 @@ export class Engine {
 
   private freshPlayer() {
     return {
-      x: this.worldW / 2, y: GROUND, vx: 0, vy: 0,
+      x: this.worldW / 2, y: WORLD_H / 2, vx: 0, vy: 0,
       hp: 100, level: 1, xp: 0, xpNext: 12,
       face: 1, aim: 0, cd: 0, ifr: 0, flash: 0, hurtT: 0,
       dashT: 0, dashCd: 0, dashDir: 1,
-      jumps: 0, grounded: true, walk: 0,
+      walk: 0,
       /** blocks fire() while > 0 — consumable "use" animation lockout */
       useT: 0,
     };
   }
 
   private baseStats() {
-    // Campaign has no mid-run leveling to grow survivability, but the enemy
-    // hp/dmg curve (difficultyFor) still climbs across all 4 of Act I's
-    // stages exactly as it always did. Boss DPS was already tuned against
-    // the unleveled pistol baseline (see docs/progress.md's Phase 6 note),
-    // so damage stays untouched — but a full uncheated Act I playthrough
-    // with the flat starter loadout needed 58 HP-critical saves in barely
-    // 1.5 stages without this. Campaign gets more HP and passive regen to
-    // compensate for the survivability growth leveling used to provide;
-    // endless is completely unaffected.
-    const campaign = this.runMode === "mission";
     return {
       damage: 13, fireRate: 3.1, bulletSpeed: 800, jitter: 0.02,
       projectiles: 1, projSpread: 0, projJitter: 1,
       pierce: 0, crit: 0.05,
-      speed: 275, maxHp: campaign ? CAMPAIGN_MAX_HP : 100, magnet: 1, lifesteal: 0,
-      regen: campaign ? CAMPAIGN_REGEN : 0, dashMax: 2.3,
+      speed: 275, maxHp: 100, magnet: 1, lifesteal: 0,
+      regen: 0, dashMax: 2.3,
     };
   }
 
@@ -466,26 +426,20 @@ export class Engine {
     this.pl = this.freshPlayer();
     this.st = this.baseStats();
     this.stacks = {};
-    this.owned = new Set<string>([STARTER]);
-    this.equipped = { pistol: STARTER };
-    this.kind = STARTER;
-    // campaign: no mid-run weapon unlocks (leveling is off, see gainXp), so the
-    // full curated arsenal is owned from the start and the player picks which
-    // one to carry at the Hideout's Loadout tab before the run begins
-    if (this.runMode === "mission") {
-      for (const wid of CAMPAIGN_ARSENAL) {
-        this.owned.add(wid);
-        this.equipped[WDEF[wid].cls] = wid;
-      }
-      if (this.pendingKind && this.owned.has(this.pendingKind)) this.kind = this.pendingKind;
+    // ownership is a function of lifetime meta level, not run state — every
+    // weapon unlocked so far is available from the start of every run
+    this.owned = new Set<string>(ownedWeaponsForLevel(this.profile.metaLevel));
+    this.equipped = {};
+    for (const cls of CLASS_ORDER) {
+      const pick = this.profile.equipped[cls];
+      if (pick && this.owned.has(pick)) this.equipped[cls] = pick;
     }
+    this.kind = this.equipped.pistol ?? STARTER;
     this.ammo = {};
     this.reserve = {};
-    this.supp = {};
     for (const id of WEAPON_IDS) {
       this.ammo[id] = WDEF[id].mag;
       this.reserve[id] = WDEF[id].reserve;
-      this.supp[id] = WDEF[id].supp;
     }
     this.reloading = false;
     this.reloadT = 0;
@@ -494,10 +448,8 @@ export class Engine {
     this.facing = 1;
     this.target = null;
     this.onTarget = false;
-    this.threat = 0;
     this.ambushT = 0;
     this.laserFlash = 0;
-    this.pivotT = 0;
     this.zombies = [];
     this.bullets = [];
     this.eshots = [];
@@ -518,20 +470,12 @@ export class Engine {
     this.travelMinX = 26;
     this.travelProgressX = 0;
     this.travelIdleT = 0;
-    this.gateBypassT = 0;
     this.hazards = [];
-    this.obstacles = [];
-    this.campaignCheckpointX = 0;
-    this.campaignSpawnT = 0;
-    this.campaignArenaCleared = false;
     this.backpack = [];
     this.deposit = [];
-    this.intel = 0;
-    this.docsFound = [];
     this.invVer++;
     this.crates = [];
     this.crateOpenT = 0;
-    this.crateWarnT = 0;
     this.grenades = [];
     this.stimT = 0;
     this.deployables = [];
@@ -559,7 +503,7 @@ export class Engine {
   /** Switches to a stage's def/world width/theme and regenerates decor to fit. */
   private setStage(stageNum: number) {
     this.stage = stageNum;
-    this.stageDef = stageDefFor(stageNum, this.runMode);
+    this.stageDef = stageDefFor(stageNum);
     this.worldW = this.stageDef.worldW;
     this.theme = THEMES[this.stageDef.themeId];
     this.genDecor(this.theme, this.worldW);
@@ -647,7 +591,6 @@ export class Engine {
     if (c === "KeyF" || c === "KeyV") this.toggleFireMode();
     if (c === "KeyG") this.useConsumable("G");
     if (c === "KeyB") this.useConsumable("B");
-    if (c === "KeyN") this.useConsumable("N");
     if (c === "KeyT") this.useConsumable("T");
   };
 
@@ -686,22 +629,8 @@ export class Engine {
       return;
     }
     this.mouse.down = true;
-    // right/left half of the screen pivots the lane (mobile-style tap to turn)
-    if (this.mode === "play" && !this.over && !this.paused && !this.modalOpen) {
-      const half = this.mouse.x > W / 2 ? 1 : -1;
-      if (half !== this.facing) {
-        this.pivotTo(half as 1 | -1);
-        this.target = null;
-      }
-    }
+    // Top-down mode: no pivoting, just aim toward mouse
   };
-
-  /** Flips the locked lane and starts the brief post-pivot fire lockout. */
-  private pivotTo(dir: 1 | -1) {
-    this.facing = dir;
-    const w = WDEF[this.kind] ?? WDEF.pistol;
-    this.pivotT = 0.12 * (w.pivotMul ?? 1);
-  }
 
   toggleFireMode() {
     this.autoFire = !this.autoFire;
@@ -761,11 +690,7 @@ export class Engine {
       this.tryPlaceDeployable();
       return;
     }
-    const half = p.x > W / 2 ? 1 : -1;
-    if (half !== this.facing) {
-      this.pivotTo(half as 1 | -1);
-      this.target = null;
-    }
+    // Top-down: tap updates aim direction, no pivoting
   }
 
   /** KeyE (or its touch interact-button equivalent) while a boss is alive forces
@@ -787,20 +712,20 @@ export class Engine {
   }
 
   private inputDir() {
+    // Returns normalized direction in 2D for top-down movement
     const r = this.keys.has("KeyD") || this.keys.has("ArrowRight") ? 1 : 0;
     const l = this.keys.has("KeyA") || this.keys.has("ArrowLeft") ? 1 : 0;
-    return r - l;
+    const d = this.keys.has("KeyS") || this.keys.has("ArrowDown") ? 1 : 0;
+    const u = this.keys.has("KeyW") || this.keys.has("ArrowUp") ? 1 : 0;
+    const dx = r - l;
+    const dy = d - u;
+    // Return both X and Y components
+    return { x: dx, y: dy };
   }
 
   private jump() {
-    const p = this.pl;
-    if (p.jumps >= 1) return;
-    p.vy = -870;
-    p.jumps++;
-    p.grounded = false;
-    this.sfx.jump();
-    for (let i = 0; i < 5; i++)
-      this.particles.push({ x: p.x + R(-8, 8), y: GROUND + 2, vx: R(-50, 50), vy: R(-40, -10), life: 0.4, max: 0.4, size: R(2, 4), color: "#3a4552", grav: 300, add: false });
+    // Jump removed in top-down mode
+    // Kept as no-op for compatibility
   }
 
   private dash() {
@@ -809,8 +734,13 @@ export class Engine {
     const stDash = this.stacks["dash"] || 0;
     p.dashCd = this.st.dashMax;
     p.dashT = 0.16 + 0.06 * stDash;
-    p.dashDir = this.inputDir() || p.face;
-    p.vy = Math.min(p.vy, 30);
+    const mov = this.inputDir();
+    // In top-down, dash in direction of input or facing direction
+    if (mov.x !== 0 || mov.y !== 0) {
+      p.dashDir = Math.atan2(mov.y, mov.x);
+    } else {
+      p.dashDir = p.aim; // dash toward where player is aiming
+    }
     this.sfx.dash();
   }
 
@@ -823,7 +753,7 @@ export class Engine {
       const fromLeft = chance(0.5);
       const type: ZType = chance(0.72) ? "walker" : chance(0.5) ? "runner" : "brute";
       const c = ZCONF[type];
-      const z = this.mkZombie(type, fromLeft ? -60 : W + 60, 1, 1);
+      const z = this.mkZombie(type, fromLeft ? -60 : W + 60, GROUND, 1, 1);
       z.vx = (fromLeft ? 1 : -1) * c.speed * R(0.35, 0.6);
       this.zombies.push(z);
     }
@@ -833,24 +763,6 @@ export class Engine {
       z.face = z.vx >= 0 ? 1 : -1;
     }
     this.zombies = this.zombies.filter((z) => z.x > -120 && z.x < W + 120);
-    this.updateParticles(dt);
-    this.motes(dt);
-  }
-
-  /** The Hideout: a small walkable room, movement only — no combat, no waves. */
-  private updateHideout(dt: number) {
-    const p = this.pl;
-    const mov = this.inputDir();
-    p.vx = lerp(p.vx, mov * this.st.speed, Math.min(1, 14 * dt));
-    p.x = clamp(p.x + p.vx * dt, 30, this.hideoutWorldW - 30);
-    if (mov !== 0) p.face = mov;
-    p.grounded = true;
-    p.y = GROUND;
-    p.vy = 0;
-    const run = Math.abs(p.vx) > 26;
-    p.walk += dt * (run ? 10 + Math.abs(p.vx) * 0.014 : 3);
-    // usable from anywhere in the room — no need to walk to a specific spot
-    this.terminalNear = true;
     this.updateParticles(dt);
     this.motes(dt);
   }
@@ -878,46 +790,46 @@ export class Engine {
     // timers
     p.cd -= dt; p.ifr -= dt; p.hurtT -= dt; p.flash -= dt; p.dashCd -= dt; p.useT -= dt;
     if (this.stimT > 0) this.stimT -= dt;
-    if (this.crateWarnT > 0) this.crateWarnT -= dt;
 
-    // horizontal
+    // 2D movement (top-down)
     const mov = this.inputDir();
     if (p.dashT > 0) {
       p.dashT -= dt;
-      p.vx = p.dashDir * 1350;
-      this.particles.push({ x: p.x - p.dashDir * 10, y: p.y - 34, vx: -p.dashDir * R(30, 90), vy: R(-30, 30), life: 0.3, max: 0.3, size: R(4, 10), color: "#67e8f9", grav: 0, add: true });
+      const speed = 1350;
+      p.vx = Math.cos(p.dashDir) * speed;
+      p.vy = Math.sin(p.dashDir) * speed;
+      const pdx = Math.cos(p.dashDir) * 10;
+      const pdy = Math.sin(p.dashDir) * 10;
+      this.particles.push({ x: p.x - pdx, y: p.y - pdy, vx: -pdx * R(3, 9), vy: -pdy * R(3, 9), life: 0.3, max: 0.3, size: R(4, 10), color: "#67e8f9", grav: 0, add: true });
     } else {
       // Tactical Stim: temporary speed rush
-      const target = mov * this.st.speed * (this.stimT > 0 ? 1.35 : 1);
-      const rate = p.grounded ? 14 : 7;
-      p.vx = lerp(p.vx, target, Math.min(1, rate * dt));
-    }
-
-    // vertical
-    p.vy += GRAV * dt;
-    p.y += p.vy * dt;
-    if (p.y >= GROUND) {
-      if (!p.grounded && p.vy > 300) {
-        for (let i = 0; i < 6; i++)
-          this.particles.push({ x: p.x + R(-10, 10), y: GROUND + 2, vx: R(-70, 70), vy: R(-50, -12), life: 0.35, max: 0.35, size: R(2, 4), color: "#3a4552", grav: 320, add: false });
+      const speed = this.st.speed * (this.stimT > 0 ? 1.35 : 1);
+      const mag = Math.hypot(mov.x, mov.y);
+      if (mag > 0) {
+        const speedMul = speed / mag;
+        p.vx = lerp(p.vx, mov.x * speedMul, Math.min(1, 14 * dt));
+        p.vy = lerp(p.vy, mov.y * speedMul, Math.min(1, 14 * dt));
+      } else {
+        p.vx = lerp(p.vx, 0, Math.min(1, 14 * dt));
+        p.vy = lerp(p.vy, 0, Math.min(1, 14 * dt));
       }
-      p.y = GROUND; p.vy = 0; p.grounded = true; p.jumps = 0;
     }
-    // travel only clamps the right edge for real — the left bound is the
-    // last opened gate, so backtracking past a cleared checkpoint is out
-    const leftBound = this.phase === "travel" ? this.travelMinX : 26;
-    p.x = clamp(p.x + p.vx * dt, leftBound, this.worldW - 26);
 
-    const run = Math.abs(p.vx) > 26 && p.grounded;
-    p.walk += dt * (run ? 10 + Math.abs(p.vx) * 0.014 : 3);
+    // Update position (no gravity in top-down)
+    p.x = clamp(p.x + p.vx * dt, 26, this.worldW - 26);
+    p.y = clamp(p.y + p.vy * dt, 26, WORLD_H - 26);
 
-    // ---- DIRECTIONAL LOCK: movement input pivots the lane ----
-    if (mov !== 0 && Math.sign(mov) !== this.facing) this.pivotTo(mov > 0 ? 1 : -1);
-    p.face = this.facing;
+    // Animation: walk cycle based on velocity magnitude
+    const vel = Math.hypot(p.vx, p.vy);
+    p.walk += dt * (vel > 26 ? 10 + vel * 0.014 : 3);
+
+    // Face direction based on movement or aim
+    if (vel > 26) {
+      p.face = Math.cos(Math.atan2(p.vy, p.vx)) > 0 ? 1 : -1;
+    }
     this.acquireTarget();
     p.aim = this.aimAngle();
     if (this.laserFlash > 0) this.laserFlash -= dt;
-    if (this.pivotT > 0) this.pivotT -= dt;
 
     // reload + auto-fire (all weapons are full-auto; rate differs per weapon)
     this.updateReload(dt);
@@ -925,14 +837,12 @@ export class Engine {
       // can't shoot mid-reload
     } else if (this.ammo[this.kind] <= 0) {
       this.startReload(); // auto reload the instant the mag runs dry
-    } else if (p.cd <= 0 && this.pivotT <= 0 && p.useT <= 0) {
+    } else if (p.cd <= 0 && p.useT <= 0) {
       // AUTO-FIRE ON: shoot only when a zombie is on the laser line.
       // AUTO-FIRE OFF: manual trigger via mouse.
       if (this.autoFire ? this.onTarget : this.mouse.down) this.fire();
     }
-    // threat decays while you stay quiet
     if (this.ambushT > 0) this.ambushT -= dt;
-    this.threat = Math.max(0, this.threat - dt * 0.05);
 
     // regen
     if (this.st.regen > 0) p.hp = Math.min(this.st.maxHp, p.hp + this.st.regen * dt);
@@ -964,21 +874,7 @@ export class Engine {
       if (this.queue.length === 0 && this.zombies.length === 0 && (!this.boss || this.boss.dead)) {
         this.score += 50 * this.power;
         if (this.waveInStage >= this.stageDef.wavesPerStage) {
-          // campaign: clearing the Terminal Defense fight (the only stage that
-          // still reaches "active" here) doesn't end the stage on the spot —
-          // it opens a short walk back out, mirroring the walk in
-          if (this.runMode === "mission") {
-            this.campaignArenaCleared = true;
-            // the fight can end anywhere in the arena, including already past
-            // where startCampaignTravel() would put the checkpoint (worldW-140)
-            // — reset to a known start, same as walking into the arena, so the
-            // exit walk is a real distance every time, not an instant skip
-            this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
-            this.pl.vx = 0;
-            this.startCampaignTravel();
-          } else {
-            this.startTravel();
-          }
+          this.startTravel();
         } else {
           const boss = this.stageDef.bossWaves.includes(this.waveInStage);
           this.beginRest(3.4);
@@ -992,10 +888,7 @@ export class Engine {
         }
       }
     } else {
-      // campaign's "travel" is continuous bidirectional combat toward a
-      // checkpoint; endless keeps the old gate/hazard corridor to a safe house
-      if (this.runMode === "mission") this.updateCampaignTravel(dt);
-      else this.updateTravel(dt);
+      this.updateTravel(dt);
     }
     this.updateDeployables();
 
@@ -1011,13 +904,15 @@ export class Engine {
     for (const d of this.decals) d.a -= dt * 0.02;
     this.decals = this.decals.filter((d) => d.a > 0.05);
 
-    // camera — the arena's prep/active phases hold a fixed frame; travel
-    // afterward still follows the player like every other stage
+    // camera — top-down follows player position in 2D
     if (this.stageDef.fixedCamera && this.phase !== "travel") {
       this.cam = this.camOrigin();
+      this.camY = 0;
     } else {
-      const target = clamp(p.x - W / 2 + Math.cos(p.aim) * 60, 0, this.worldW - W);
-      this.cam = lerp(this.cam, target, Math.min(1, 5 * dt));
+      const targetX = clamp(p.x - W / 2, 0, this.worldW - W);
+      const targetY = clamp(p.y - H / 2, 0, WORLD_H - H);
+      this.cam = lerp(this.cam, targetX, Math.min(1, 5 * dt));
+      this.camY = lerp(this.camY, targetY, Math.min(1, 5 * dt));
     }
     this.shakeMag = Math.max(0, this.shakeMag - dt * 26);
     this.shakeX = R(-this.shakeMag, this.shakeMag);
@@ -1035,99 +930,74 @@ export class Engine {
     const range = w.range * (1 + 0.12 * (this.stacks["velo"] || 0));
     let best: AimTarget | null = null;
     let bestD = Infinity;
+
+    // Omnidirectional targeting: find closest zombie within range
     for (const z of this.zombies) {
       if (z.dead) continue;
       const dx = z.x - p.x;
-      // strictly the lane we're facing
-      if (this.facing === 1 ? dx < -14 : dx > 14) continue;
-      const d = Math.abs(dx);
+      const dy = z.y - p.y;
+      const d = Math.hypot(dx, dy);
       if (d > range) continue;
-      // must be roughly on our plane (not mid-air above us)
-      if (Math.abs(z.y - p.y) > 90) continue;
       if (d < bestD) { bestD = d; best = z; }
     }
+
+    // Boss targeting
     const boss = this.boss;
     if (boss && !boss.dead) {
       const dx = boss.x - p.x;
-      const inLane = this.facing === 1 ? dx >= -14 : dx <= 14;
-      const d = Math.abs(dx);
-      if (inLane && d <= range && Math.abs(boss.y - p.y) <= 90) {
+      const dy = boss.y - p.y;
+      const d = Math.hypot(dx, dy);
+      if (d <= range) {
         const addIsClose = best !== null && bestD < 130;
         if (!addIsClose || this.bossForceTarget) best = boss;
       }
     }
+
     const had = this.onTarget;
     this.target = best;
     this.onTarget = best !== null;
     if (this.onTarget && !had) this.laserFlash = 0.25;
   }
 
-  /** Angle toward the locked target, else flat along the faced lane. */
+  /** Angle toward the target, or toward mouse position if no target */
   private aimAngle() {
     const p = this.pl;
     if (this.target && !this.target.dead) {
       const tx = this.target.x;
       const ty = this.target.y - 36 * this.target.scale;
-      return Math.atan2(ty - (p.y - 40), tx - p.x);
+      return Math.atan2(ty - p.y, tx - p.x);
     }
-    return this.facing === 1 ? 0 : Math.PI;
+    // Aim toward mouse position relative to player
+    const mx = this.mouse.x + this.cam - W / 2;
+    const my = this.mouse.y + this.camY - H / 2;
+    return Math.atan2(my - p.y, mx - p.x);
   }
 
-  /* ============ NOISE / THREAT ============ */
+  /* ============ AMBUSH ============ */
 
-  /** Every unsuppressed shot builds the threat meter. Campaign has no noise/suppressor system. */
-  private addNoise(amount: number) {
-    if (this.runMode === "mission") return;
-    this.threat = clamp(this.threat + amount, 0, 1);
-    if (this.threat >= 1 && this.ambushT <= 0) this.triggerAmbush(3);
-  }
-
-  /** Spawn Runners behind the player to punish loud play. */
+  /** Spawn Runners from random directions — triggered by Screamer's shriek, boss's Screaming
+   * Call, camping in place too long, or a hazard. */
   private triggerAmbush(count: number) {
-    this.threat = 0;
     this.ambushT = 6;
-    const behind = -this.facing as 1 | -1;
     for (let i = 0; i < count; i++) {
-      const x = clamp(this.pl.x + behind * (W * 0.55 + R(0, 260)), 22, this.worldW - 22);
-      const z = this.mkZombie("runner", x, 1 + (this.power - 1) * 0.2, 1.25);
+      // Omnidirectional ambush spawn
+      const angle = Math.random() * TAU;
+      const dist = 400;
+      const x = clamp(this.pl.x + Math.cos(angle) * dist, 22, this.worldW - 22);
+      const y = clamp(this.pl.y + Math.sin(angle) * dist, 22, WORLD_H - 22);
+      const z = this.mkZombie("runner", x, y, 1 + (this.power - 1) * 0.2, 1.25);
       z.face = x > this.pl.x ? -1 : 1;
       this.zombies.push(z);
       for (let k = 0; k < 8; k++)
         this.particles.push({
-          x, y: GROUND, vx: R(-80, 80), vy: R(-200, -30), life: R(0.3, 0.6), max: 0.6,
-          size: R(2, 5), color: "#7f1d1d", grav: 900, add: false,
+          x, y, vx: Math.cos(angle) * R(40, 80), vy: Math.sin(angle) * R(40, 80),
+          life: R(0.3, 0.6), max: 0.6,
+          size: R(2, 5), color: "#7f1d1d", grav: 0, add: false,
         });
     }
     this.announce("THEY HEARD YOU", "runners closing from behind");
     this.sfx.wave();
     this.shake(5);
-  }
-
-  /** Suppressor takes a shot of wear; shatters at zero. Campaign has no suppressor system. */
-  private wearSuppressor() {
-    if (this.runMode === "mission") return;
-    const w = WDEF[this.kind];
-    if (w.supp >= 999) return; // integrally suppressed (AS Val)
-    if (this.supp[this.kind] <= 0) return; // already broken
-    this.supp[this.kind]--;
-    if (this.supp[this.kind] <= 0) {
-      // THE SHATTER MECHANIC
-      this.sfx.reloadEnd();
-      this.sfx.hurt();
-      this.shake(7);
-      this.announce("SUPPRESSOR SHATTERED", "your position is exposed");
-      this.texts.push({
-        x: this.pl.x, y: this.pl.y - 92, vy: -50, life: 1, max: 1,
-        text: "SUPPRESSOR BROKEN!", color: "#f87171", size: 15,
-      });
-      for (let i = 0; i < 14; i++)
-        this.particles.push({
-          x: this.pl.x + Math.cos(this.pl.aim) * 46, y: this.pl.y - 40,
-          vx: R(-190, 190), vy: R(-190, 40), life: R(0.3, 0.6), max: 0.6,
-          size: R(1.5, 3.5), color: "#cbd5e1", grav: 1100, add: false,
-        });
-      this.triggerAmbush(3);
-    }
   }
 
   /** Begin a reload if it makes sense to. */
@@ -1243,10 +1113,6 @@ export class Engine {
         hitBoss: false,
       });
     }
-    // noise + suppressor wear
-    this.wearSuppressor();
-    const broken = w.supp < 999 && this.supp[this.kind] <= 0;
-    this.addNoise((w.noise / (W * 1.5)) * (broken ? 0.055 : 0.016));
     for (let i = 0; i < 5; i++)
       this.particles.push({ x: mzx, y: mzy, vx: Math.cos(base + R(-0.5, 0.5)) * R(120, 420), vy: Math.sin(base + R(-0.5, 0.5)) * R(120, 420), life: R(0.08, 0.16), max: 0.16, size: R(1.5, 3.5), color: chance(0.5) ? "#fde68a" : "#f59e0b", grav: 0, add: true });
     this.particles.push({ x: p.x - Math.cos(base) * 4, y: p.y - 42, vx: -p.face * R(50, 130), vy: R(-190, -140), life: 0.55, max: 0.55, size: 2, color: "#fbbf24", grav: 1500, add: false });
@@ -1264,25 +1130,23 @@ export class Engine {
       z.t += dt;
       z.flash -= dt;
       if (z.dormant) {
-        // sleepers wake on: threat spiking, or the player passing close while running/dashing
+        // sleepers wake when the player passes close while running/dashing
         const near = Math.abs(p.x - z.x) < 90;
-        if (this.threat > 0.5 || (near && movingFast)) this.wakeZombie(z);
+        if (near && movingFast) this.wakeZombie(z);
         else continue; // still asleep — no movement, no attack timer, no contact damage
       }
-      // the Screamer: crossing her path or gunfire nearby starts a windup; if
-      // she's still alive when it expires she shrieks — addNoise(1) spikes the
-      // meter to Loud and (via its own existing threshold check) triggers the
-      // same ambush a maxed-out noise meter always does, so a second Screamer
-      // mid-ambush can't stack one — the ambushT guard is already shared
+      // the Screamer: crossing her path starts a windup; if she's still alive
+      // when it expires she shrieks and triggers an ambush — a second Screamer
+      // mid-ambush can't stack one, the ambushT guard is already shared
       if (z.type === "screamer" && z.alertT >= 0) {
         if (z.alertT === 0) {
           const close = Math.abs(p.x - z.x) < 260 && Math.abs(p.y - z.y) < 90;
-          if (close || this.threat > 0.3) z.alertT = 1.4;
+          if (close) z.alertT = 1.4;
         } else {
           z.alertT -= dt;
           if (z.alertT <= 0) {
             z.alertT = -1; // spent — a killed-or-survived Screamer never re-triggers
-            this.addNoise(1);
+            if (this.ambushT <= 0) this.triggerAmbush(3);
           }
         }
       }
@@ -1513,7 +1377,7 @@ export class Engine {
     this.announce(def.deathBanner, def.deathSub, 2.6);
   }
 
-  /** Rouses one sleeper. A loud wake (gunfire, high threat) spreads to nearby sleepers too. */
+  /** Rouses one sleeper. A loud wake (walking into a gate, a hazard) spreads to nearby sleepers too. */
   private wakeZombie(z: Zombie, spread = false) {
     if (!z.dormant) return;
     z.dormant = false;
@@ -1560,16 +1424,9 @@ export class Engine {
         const dx = b.x - z.x, dy = b.y - cy;
         if (dx * dx + dy * dy < rr * rr * 1.25) {
           b.hits.add(z);
-          if (z.dormant) {
-            const w = WDEF[this.kind];
-            const suppressed = w.supp >= 999 || (this.supp[this.kind] ?? 0) > 0;
-            // a suppressed shot on a sleeper is a takedown, not a firefight —
-            // gives the suppressor a reason to exist beyond just staying quiet
-            if (suppressed) this.quietKill(z);
-            else { this.wakeZombie(z, true); this.hitZombie(z, b); }
-          } else {
-            this.hitZombie(z, b);
-          }
+          // any hit on a still-dormant sleeper is a takedown, not a firefight
+          if (z.dormant) this.quietKill(z);
+          else this.hitZombie(z, b);
           if (b.pierce > 0) b.pierce--;
           else { b.life = 0; break; }
         }
@@ -1632,13 +1489,9 @@ export class Engine {
         g.val = -g.val; // mark collected
         if (g.kind === "scrap") {
           this.scrap += Math.abs(g.val);
+          this.profile.totalScrap += Math.abs(g.val);
+          this.gainMetaXp(2);
           this.particles.push({ x: p.x, y: p.y - 34, vx: R(-30, 30), vy: R(-60, -10), life: 0.3, max: 0.3, size: 3, color: "#94a3b8", grav: 0, add: true });
-        } else if (g.kind === "health") {
-          this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + 20);
-          this.particles.push({ x: p.x, y: p.y - 34, vx: R(-30, 30), vy: R(-60, -10), life: 0.3, max: 0.3, size: 3, color: "#4ade80", grav: 0, add: true });
-        } else if (g.kind === "ammo") {
-          this.awardSupply(0.25, 1);
-          this.particles.push({ x: p.x, y: p.y - 34, vx: R(-30, 30), vy: R(-60, -10), life: 0.3, max: 0.3, size: 3, color: "#fbbf24", grav: 0, add: true });
         } else {
           this.gainXp(Math.abs(g.val));
           this.particles.push({ x: p.x, y: p.y - 34, vx: R(-30, 30), vy: R(-60, -10), life: 0.3, max: 0.3, size: 3, color: "#a78bfa", grav: 0, add: true });
@@ -1691,6 +1544,8 @@ export class Engine {
   private killZombie(z: Zombie, dir: number) {
     z.dead = true;
     this.kills++;
+    this.profile.totalKills++;
+    this.gainMetaXp(1);
     this.score += Math.round(z.score * (1 + this.power * 0.06));
     this.shake(z.type === "brute" ? 5 : 1.6);
     this.sfx.zdie();
@@ -1699,25 +1554,13 @@ export class Engine {
       this.particles.push({ x: cx + R(-8, 8), y: cy + R(-14, 14), vx: dir * R(20, 160) + R(-110, 110), vy: R(-200, 60), life: R(0.3, 0.7), max: 0.7, size: R(2, 5.5), color: BLOOD[RI(0, BLOOD.length - 1)], grav: 1200, add: false });
     this.decals.push({ x: z.x, s: z.scale, a: 0.55 });
     if (this.decals.length > 70) this.decals.shift();
-    if (this.runMode === "mission") {
-      // campaign has no leveling — XP gems would do nothing, so zombies have a
-      // small chance to drop a health or ammo pickup instead
-      if (chance(0.28)) {
-        const kind: "health" | "ammo" = chance(0.5) ? "health" : "ammo";
-        this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: 1, t: R(0, 9), rest: false, kind });
-      }
-    } else {
-      // xp gems
-      const total = z.xp;
-      const n = Math.min(8, Math.max(1, Math.round(total)));
-      for (let i = 0; i < n; i++)
-        this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: total / n, t: R(0, 9), rest: false, kind: "xp" });
-    }
-    // scrap — feeds building/repairing deployables. Endless only ever sees it
-    // in the arena; campaign also drops it on the walk in, so there's already
-    // something banked by the time the Terminal Defense prep phase opens
-    const scrapChance = this.stageDef.fixedCamera ? 0.22 : this.runMode === "mission" ? 0.2 : 0;
-    if (chance(scrapChance)) {
+    // xp gems
+    const total = z.xp;
+    const n = Math.min(8, Math.max(1, Math.round(total)));
+    for (let i = 0; i < n; i++)
+      this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: total / n, t: R(0, 9), rest: false, kind: "xp" });
+    // scrap — feeds building/repairing deployables in the arena; endless only ever sees it there
+    if (this.stageDef.fixedCamera && chance(0.22)) {
       this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: 1, t: R(0, 9), rest: false, kind: "scrap" });
     }
   }
@@ -1758,10 +1601,12 @@ export class Engine {
     const p = this.pl;
     for (let i = 0; i < 40; i++)
       this.particles.push({ x: p.x, y: p.y - 34, vx: R(-260, 260), vy: R(-320, 40), life: R(0.4, 1), max: 1, size: R(2, 6), color: chance(0.6) ? BLOOD[RI(0, BLOOD.length - 1)] : "#0e7490", grav: 1100, add: false });
+    this.profile.bestWave = Math.max(this.profile.bestWave, this.waveIndex);
+    saveProfile(this.profile);
     // Decisions locked: restart at the last safe house, keep level/XP/upgrades/
     // weapons/deposit/progression, lose the carried backpack. Only a genuine
     // game-over (no checkpoint reached yet) ends the run.
-    const checkpoint = loadRun(this.runMode);
+    const checkpoint = loadRun();
     if (checkpoint) {
       this.retryStage(checkpoint);
       return;
@@ -1789,13 +1634,9 @@ export class Engine {
     this.score = checkpoint.score;
     this.kills = checkpoint.kills;
     this.playTime = checkpoint.playTime;
-    this.owned = new Set(checkpoint.owned);
-    this.equipped = { ...checkpoint.equipped };
-    this.kind = checkpoint.kind;
+    this.kind = this.owned.has(checkpoint.kind) ? checkpoint.kind : this.kind;
     this.stacks = { ...checkpoint.stacks };
     this.deposit = checkpoint.deposit;
-    this.intel = checkpoint.intel;
-    this.docsFound = checkpoint.hideout?.docs ?? [];
     this.scrap = checkpoint.scrap ?? 0;
     // backpack is deliberately dropped — that's the whole point of the penalty
     this.backpack = [];
@@ -1803,27 +1644,25 @@ export class Engine {
     this.recompute();
     this.pl.hp = this.st.maxHp;
     this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
+    this.pl.y = WORLD_H / 2;
     this.cam = this.stageDef.fixedCamera ? this.camOrigin() : clamp(this.pl.x - W / 2, 0, this.worldW - W);
+    this.camY = clamp(this.pl.y - H / 2, 0, WORLD_H - H);
     this.mode = "play";
-    if (this.runMode === "mission") {
-      this.announce("YOU DIED", `back at the checkpoint — ${this.stageDef.name}`, 2.8);
-      this.startCampaignTravel();
-    } else {
-      this.beginRest(2.4);
-      this.announce("YOU DIED", `back at the safe house — ${this.stageDef.name}`, 2.8);
-    }
+    this.beginRest(2.4);
+    this.announce("YOU DIED", `back at the safe house — ${this.stageDef.name}`, 2.8);
   }
 
   private writeCheckpoint(nextStage: number) {
     const data: SaveData = {
-      version: SAVE_VERSION, runMode: this.runMode, stage: nextStage,
+      version: SAVE_VERSION, stage: nextStage,
       level: this.pl.level, xp: this.pl.xp, xpNext: this.pl.xpNext,
       score: this.score, kills: this.kills, playTime: this.playTime,
-      owned: [...this.owned], equipped: { ...this.equipped }, kind: this.kind,
-      stacks: { ...this.stacks }, deposit: this.deposit, backpack: this.backpack,
-      intel: this.intel, hideout: { docs: this.docsFound }, scrap: this.scrap,
+      kind: this.kind, stacks: { ...this.stacks }, deposit: this.deposit, backpack: this.backpack,
+      scrap: this.scrap,
     };
     saveRun(data);
+    this.profile.bestWave = Math.max(this.profile.bestWave, this.waveIndex);
+    saveProfile(this.profile);
   }
 
   /* ---------------- xp / level / upgrades ---------------- */
@@ -1833,9 +1672,6 @@ export class Engine {
   }
 
   private gainXp(v: number) {
-    // campaign: no mid-run leveling — power comes from the Hideout loadout and
-    // whatever's found in the field, per enhancement-1.md's tactical-survivor framing
-    if (this.runMode === "mission") return;
     const p = this.pl;
     p.xp += v;
     while (p.xp >= p.xpNext) {
@@ -1847,6 +1683,22 @@ export class Engine {
     if (this.lvlPending > 0 && !this.modalOpen) this.openLevelModal();
   }
 
+  /** Lifetime account progression — permanently unlocks weapons in the Loadout
+   * screen as it climbs. Persisted at natural low-frequency checkpoints
+   * (stage clear, death), not on every gain, to avoid a localStorage write per kill. */
+  private gainMetaXp(v: number) {
+    this.profile.metaXp += v;
+    while (this.profile.metaXp >= metaXpFor(this.profile.metaLevel)) {
+      this.profile.metaXp -= metaXpFor(this.profile.metaLevel);
+      this.profile.metaLevel++;
+      const unlocked = WEAPON_IDS.filter((id) => WEAPON_UNLOCK_LEVEL[id] === this.profile.metaLevel);
+      for (const wid of unlocked) {
+        this.owned.add(wid);
+        this.announce("WEAPON UNLOCKED", `${WDEF[wid].name} — pick it in Loadout`, 2.6);
+      }
+    }
+  }
+
   private openLevelModal() {
     this.modals.add("levelup");
     this.sfx.levelup();
@@ -1854,22 +1706,9 @@ export class Engine {
   }
 
   private rollChoices(): UpgradeChoice[] {
+    // weapon ownership is entirely meta-level-gated now (see progression.ts) —
+    // leveling up mid-run only ever offers stat upgrades, never a weapon
     const out: UpgradeChoice[] = [];
-    // weapon unlock cards for anything not yet owned
-    const locked = WEAPON_IDS.filter((w) => !this.owned.has(w));
-    // prefer offering a class the player has never touched
-    const freshClasses = locked.filter((w) => !this.equipped[WDEF[w].cls]);
-    const forceWeapon = locked.length > 0 && (this.pl.level % 2 === 0 || this.owned.size === 1);
-    if (forceWeapon) {
-      const pickFrom = freshClasses.length > 0 && chance(0.7) ? freshClasses : locked;
-      const wid = pickFrom[RI(0, pickFrom.length - 1)];
-      const w = WDEF[wid];
-      out.push({
-        id: `unlock_${wid}`, name: w.name, icon: "Crosshair", max: 1, rarity: "weapon",
-        stacks: 0,
-        desc: `${CLASS_LABEL[w.cls]} · ${w.rpm} RPM · ${w.mag} RDS — ${w.desc}`,
-      });
-    }
     const avail = UPGRADES.filter((u) => (this.stacks[u.id] || 0) < u.max);
     const pool = [...avail];
     while (out.length < 3 && pool.length > 0) {
@@ -1885,19 +1724,10 @@ export class Engine {
 
   applyUpgrade(id: string) {
     if (!this.modalOpen) return;
-    if (id.startsWith("unlock_")) {
-      const wid = id.slice(7);
-      this.owned.add(wid);
-      this.equip(wid, true);
-      const slot = CLASS_ORDER.indexOf(WDEF[wid].cls) + 1;
-      this.announce("WEAPON ACQUIRED", `${WDEF[wid].name} — press ${slot} to equip`);
-      this.sfx.levelup();
-    } else {
-      this.stacks[id] = (this.stacks[id] || 0) + 1;
-      this.recompute();
-      if (id === "hp") this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + 30);
-      this.sfx.upgrade();
-    }
+    this.stacks[id] = (this.stacks[id] || 0) + 1;
+    this.recompute();
+    if (id === "hp") this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + 30);
+    this.sfx.upgrade();
     this.lvlPending--;
     if (this.lvlPending > 0) {
       this.onEvent({ type: "levelup", choices: this.rollChoices() });
@@ -1938,32 +1768,22 @@ export class Engine {
   selectClass(cls: WeaponClass) {
     const list = byClass(cls).filter((w) => this.owned.has(w));
     if (list.length === 0) return;
-    if (WDEF[this.kind].cls === cls && list.length > 1) {
-      const i = list.indexOf(this.kind);
-      const next = list[(i + 1) % list.length];
-      this.equip(next);
-      this.texts.push({
-        x: this.pl.x, y: this.pl.y - 88, vy: -44, life: 0.7, max: 0.7,
-        text: WDEF[next].short, color: "#fbbf24", size: 12,
-      });
-    } else {
+    // only allow switching to this class if currently using a different class
+    if (WDEF[this.kind].cls !== cls) {
       this.equip(this.equipped[cls] ?? list[0]);
     }
   }
 
-  /** Q cycles through every owned weapon regardless of class. */
+  /** Q cycles between weapon classes only, not within a class. */
   cycleWeapon(dir = 1) {
-    const list = WEAPON_IDS.filter((w) => this.owned.has(w));
-    if (list.length < 2) return;
-    const i = list.indexOf(this.kind);
-    this.equip(list[(i + dir + list.length) % list.length]);
+    const currentCls = WDEF[this.kind].cls;
+    const cls = CLASS_ORDER[(CLASS_ORDER.indexOf(currentCls) + dir + CLASS_ORDER.length) % CLASS_ORDER.length];
+    this.selectClass(cls);
   }
 
   private recompute() {
     const s = (id: string) => this.stacks[id] || 0;
     const w = WDEF[this.kind] ?? WDEF.pistol;
-    // campaign has no mid-run leveling to grow survivability — see baseStats()
-    const campaign = this.runMode === "mission";
     // multishot adds pellets to shotgun, extra rounds to everything else
     const extra = s("multi");
     const projectiles = w.projectiles + extra * (w.cls === "shotgun" ? 2 : 1);
@@ -1980,10 +1800,10 @@ export class Engine {
       crit: 0.05 + w.critBonus + 0.12 * s("crit"),
       // weapon class governs mobility (shotgun/BR are heavy, SMG/pistol are light)
       speed: 275 * (1 + 0.16 * s("speed")) * w.moveMul,
-      maxHp: (campaign ? CAMPAIGN_MAX_HP : 100) + 30 * s("hp"),
+      maxHp: 100 + 30 * s("hp"),
       magnet: 1 + 0.7 * s("magnet"),
       lifesteal: 0.03 * s("vamp"),
-      regen: (campaign ? CAMPAIGN_REGEN : 0) + 0.9 * s("regen"),
+      regen: 0.9 * s("regen"),
       dashMax: 2.3 * Math.pow(0.68, s("dash")),
     };
   }
@@ -2002,25 +1822,12 @@ export class Engine {
       if (cr.opened) continue;
       if (Math.abs(cr.x - p.x) < 40) { near = cr; break; }
     }
-    // ordinary crates only ever spawn during active combat, never travel — but
-    // a guaranteed intel-document crate lives in the travel corridor, so it
-    // needs its own exception to the phase guard
-    if (near && this.keys.has("KeyE") && (this.phase !== "travel" || near.docId)) {
-      if ((near.tier === 2 || near.tier === 3) && this.threat > 0.5) {
+    // crates only ever spawn during active combat, never travel
+    if (near && this.keys.has("KeyE") && this.phase !== "travel") {
+      this.crateOpenT += dt;
+      if (this.crateOpenT >= 1.2) {
+        this.openCrate(near);
         this.crateOpenT = 0;
-        if (this.crateWarnT <= 0) {
-          this.crateWarnT = 1.4;
-          this.texts.push({
-            x: p.x, y: p.y - 92, vy: -46, life: 1, max: 1,
-            text: "TOO LOUD TO OPEN", color: "#f87171", size: 12,
-          });
-        }
-      } else {
-        this.crateOpenT += dt;
-        if (this.crateOpenT >= 1.2) {
-          this.openCrate(near);
-          this.crateOpenT = 0;
-        }
       }
     } else {
       this.crateOpenT = Math.max(0, this.crateOpenT - dt * 2);
@@ -2029,24 +1836,6 @@ export class Engine {
 
   private openCrate(cr: Crate) {
     cr.opened = true;
-    if (cr.docId) {
-      // intel documents auto-bank on pickup, no grid cost — skip the loot
-      // roll and backpack entirely, unlike every other crate
-      if (!this.docsFound.includes(cr.docId)) {
-        this.docsFound = [...this.docsFound, cr.docId];
-        this.intel++;
-      }
-      this.invVer++;
-      this.sfx.levelup();
-      this.shake(2);
-      this.announce("DOCUMENT RECOVERED", "added to the Hideout board", 2.2);
-      for (let i = 0; i < 14; i++)
-        this.particles.push({
-          x: cr.x, y: GROUND - 10, vx: R(-90, 90), vy: R(-220, -60),
-          life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#a78bfa", grav: 700, add: true,
-        });
-      return;
-    }
     const drops = rollLoot(cr.tier);
     let gained = 0, lost = 0;
     for (const d of drops) {
@@ -2070,7 +1859,7 @@ export class Engine {
       });
   }
 
-  private useConsumable(key: ConsumableKey) {
+  useConsumable(key: ConsumableKey) {
     if (this.mode !== "play" || this.over || this.paused || this.modalOpen) return;
     if (this.pl.useT > 0) return;
     const def = itemForHotkey(key);
@@ -2093,10 +1882,6 @@ export class Engine {
       case "grenade":
         this.throwGrenade();
         break;
-      case "decoy":
-        this.threat = 0;
-        this.ambushT = 0;
-        break;
       case "stim":
         this.stimT = 6;
         break;
@@ -2110,20 +1895,24 @@ export class Engine {
 
   private throwGrenade() {
     const p = this.pl;
-    // a controlled lob into the faced lane, not a full-power throw — it needs
-    // to land near the engagement range a pistol/smg fights at, not sail past it
-    this.grenades.push({ x: p.x, y: p.y - 40, vx: this.facing * 220, vy: -280, fuse: 1.6 });
+    // Top-down: throw in aim direction at fixed range
+    const angle = p.aim;
+    const speed = 260;
+    const vx = Math.cos(angle) * speed;
+    const vy = Math.sin(angle) * speed;
+    this.grenades.push({ x: p.x, y: p.y, vx, vy, fuse: 1.6 });
     this.sfx.shoot();
   }
 
   private updateGrenades(dt: number) {
     for (const g of this.grenades) {
       g.fuse -= dt;
-      g.vy += GRAV * 0.6 * dt;
+      // Top-down: no gravity, grenades move in straight line
       g.x += g.vx * dt;
       g.y += g.vy * dt;
-      if (g.y > GROUND) {
-        g.y = GROUND; g.vy *= -0.4; g.vx *= 0.55;
+      // Grenades despawn if they go out of bounds
+      if (g.x < 0 || g.x > this.worldW || g.y < 0 || g.y > WORLD_H) {
+        g.fuse = -1;
         // detonate shortly after it actually lands, not wherever it happens
         // to be when the original flight fuse runs out — a grenade that's
         // still sailing through the air 460px from the thrower can't hit
@@ -2186,23 +1975,20 @@ export class Engine {
       invVer: this.invVer,
       backpack: this.backpack.map((it) => ({ id: it.id, itemId: it.itemId, x: it.x, y: it.y })),
       deposit: this.deposit,
-      intel: this.intel,
-      docs: this.docsFound,
       backpackSize: BACKPACK_SIZE,
     };
   }
 
   /* ---------------- waves ---------------- */
 
-  /** Shared enemy weight table — used by wave-room combat and campaign's continuous travel spawner alike. */
+  /** Shared enemy weight table for the wave spawner. */
   private zombieWeights(power: number): Partial<Record<string, number>> {
     return {
       walker: 1,
       runner: power >= 2 ? 0.42 + power * 0.02 : 0,
       spitter: power >= 4 ? 0.3 : 0,
       brute: power >= 3 ? 0.14 + power * 0.015 : 0,
-      // act-specific extras (e.g. the Screamer, Act I only) fold into the same roll
-      ...enemyPoolFor(this.stageDef.actId),
+      screamer: SCREAMER_WEIGHT,
     };
   }
 
@@ -2351,8 +2137,8 @@ export class Engine {
 
   private startWave(inStage: number) {
     this.waveInStage = inStage;
-    this.waveIndex = cumulativeWaveIndex(this.stage, inStage, this.runMode);
-    this.power = difficultyFor(this.stage, inStage, this.runMode);
+    this.waveIndex = cumulativeWaveIndex(this.stage, inStage);
+    this.power = difficultyFor(this.stage, inStage);
     this.queue = this.buildWave(this.power, inStage);
     this.waveTotal = this.queue.length;
     this.phase = "active";
@@ -2405,7 +2191,6 @@ export class Engine {
     this.travelProgressX = this.pl.x;
     this.travelIdleT = 0;
     this.travelMinX = 26;
-    this.gateBypassT = 0;
     // always reachable: never past the world's hard right clamp, even if
     // combat left the player already near the edge (degrades to ~0 gates)
     this.safeHouseX = Math.min(this.worldW - 60, this.pl.x + R(1500, 1950));
@@ -2416,7 +2201,7 @@ export class Engine {
       // a sleeper or two guarding most checkpoints — the whole reason to bypass quiet
       if (chance(0.7)) {
         const sx = clamp(gx + R(-110, 110), this.pl.x + 80, this.safeHouseX - 80);
-        const z = this.mkZombie("walker", sx, 1 + (this.power - 1) * 0.15, 1);
+        const z = this.mkZombie("walker", sx, GROUND, 1 + (this.power - 1) * 0.15, 1);
         z.dormant = true;
         this.zombies.push(z);
       }
@@ -2430,15 +2215,6 @@ export class Engine {
       this.hazards.push({ x: hx, y: GROUND, kind: kinds[RI(0, kinds.length - 1)], triggered: false });
       hx += R(400, 650);
     }
-    // one guaranteed intel document per exploration stage — never RNG-gated,
-    // per enhancement-1.md's "found in Stages 1-3" (never the Terminal Defense)
-    if (!this.stageDef.fixedCamera) {
-      const docId = docIdFor(this.stageDef.actId, this.stageDef.indexInAct as 0 | 1 | 2);
-      if (docId && !this.docsFound.includes(docId)) {
-        const dx = clamp(this.pl.x + R(400, this.safeHouseX - this.pl.x - 200), this.pl.x + 60, this.safeHouseX - 60);
-        this.crates.push({ x: dx, y: GROUND, tier: 1, opened: false, docId });
-      }
-    }
     this.announce("SECTOR CLEAR", "move out — reach the safe house", 2.6);
     this.sfx.wave();
   }
@@ -2446,11 +2222,8 @@ export class Engine {
   private updateTravel(dt: number) {
     const p = this.pl;
     const movingFast = Math.abs(p.vx) > 220;
-    // gates: two verbs. Walk straight into one and it gives — loud, wakes
-    // nearby sleepers, always available. Hold E from just outside contact
-    // range while threat is low and it opens quietly instead — a reward for
-    // patience, never a requirement (stealth failure just falls back to loud).
-    let bypassing = false;
+    // gates: two verbs. Walk straight into one and it gives — wakes nearby
+    // sleepers, always available. Hold E from just outside contact range and
     for (const g of this.gates) {
       if (g.opened) continue;
       const d = Math.abs(g.x - p.x);
@@ -2470,34 +2243,16 @@ export class Engine {
             life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#94a3b8", grav: 500, add: false,
           });
         for (const z of this.zombies) if (z.dormant && Math.abs(z.x - g.x) < 240) this.wakeZombie(z);
-        this.gateBypassT = 0;
-      } else if (d < 70 && this.keys.has("KeyE") && this.threat < 0.35) {
-        bypassing = true;
-        this.gateBypassT += dt;
-        if (this.gateBypassT >= 0.9) {
-          g.opened = true;
-          this.travelMinX = Math.max(this.travelMinX, g.x - 34);
-          this.texts.push({
-            x: p.x, y: p.y - 92, vy: -46, life: 0.9, max: 0.9,
-            text: "SLIPPED THROUGH", color: "#a78bfa", size: 12,
-          });
-          for (let i = 0; i < 6; i++)
-            this.particles.push({
-              x: g.x, y: GROUND - R(10, 40), vx: R(-20, 20), vy: R(-30, -5),
-              life: R(0.3, 0.5), max: 0.5, size: R(1.5, 3), color: "#94a3b8", grav: 300, add: true,
-            });
-          this.gateBypassT = 0;
-        }
       }
     }
-    if (!bypassing) this.gateBypassT = Math.max(0, this.gateBypassT - dt * 2);
 
     // hazards: alarms/glass/flares only trip if you're running/dashing through
-    // them — walking calmly by is always safe, no roll or check needed
+    // them — walking calmly by is always safe, no roll or check needed. Wakes
+    // nearby sleepers directly instead of building a meter.
     for (const hz of this.hazards) {
       if (hz.triggered || Math.abs(hz.x - p.x) >= 26 || !movingFast) continue;
       hz.triggered = true;
-      this.addNoise(0.35);
+      for (const z of this.zombies) if (z.dormant && Math.abs(z.x - hz.x) < 260) this.wakeZombie(z);
       this.shake(4);
       this.sfx.hurt();
       const label = hz.kind === "alarm" ? "ALARM TRIPPED" : hz.kind === "glass" ? "GLASS CRUNCHES" : "FLARE HISSES";
@@ -2509,15 +2264,15 @@ export class Engine {
         });
     }
 
-    // anti-camping: no rightward progress for 40s starts building threat
+    // anti-camping: no rightward progress for 40s triggers an ambush directly
     if (p.x > this.travelProgressX + 3) {
       this.travelProgressX = p.x;
       this.travelIdleT = 0;
     } else {
       this.travelIdleT += dt;
-      if (this.travelIdleT > 40) {
-        this.threat = clamp(this.threat + 0.055 * dt, 0, 1);
-        if (this.threat >= 1 && this.ambushT <= 0) this.triggerAmbush(3);
+      if (this.travelIdleT > 40 && this.ambushT <= 0) {
+        this.travelIdleT = 0;
+        this.triggerAmbush(3);
       }
     }
     if (p.x >= this.safeHouseX - 26) this.reachSafeHouse();
@@ -2526,93 +2281,7 @@ export class Engine {
   /** Player reached the safe house door at the end of travel. */
   private reachSafeHouse() {
     if (this.phase !== "travel") return;
-    if (this.runMode === "mission" && this.stage >= STAGES.length) this.missionComplete();
-    else this.completeStage();
-  }
-
-  /** Campaign only — every stage starts as one continuous walk to a checkpoint,
-   * zombies attacking from both sides the whole way, instead of discrete wave rooms. */
-  private startCampaignTravel() {
-    this.phase = "travel";
-    this.travelStartX = this.pl.x;
-    this.campaignSpawnT = 1;
-    // no per-wave escalation — the stage's own baseline difficulty, held for its whole travel
-    this.power = difficultyFor(this.stage, Math.ceil(this.stageDef.wavesPerStage / 2), this.runMode);
-    this.campaignCheckpointX = this.worldW - 140;
-    this.obstacles = [];
-    let ox = this.pl.x + R(360, 520);
-    while (ox < this.campaignCheckpointX - 200) {
-      this.obstacles.push({ x: ox });
-      ox += R(420, 650);
-    }
-    // one guaranteed intel document per exploration stage — never RNG-gated,
-    // per enhancement-1.md's "found in Stages 1-3" (never the Terminal Defense)
-    if (!this.stageDef.fixedCamera) {
-      const docId = docIdFor(this.stageDef.actId, this.stageDef.indexInAct as 0 | 1 | 2);
-      if (docId && !this.docsFound.includes(docId)) {
-        const dx = clamp(this.pl.x + R(400, this.campaignCheckpointX - this.pl.x - 200), this.pl.x + 60, this.campaignCheckpointX - 60);
-        this.crates.push({ x: dx, y: GROUND, tier: 1, opened: false, docId });
-      }
-    }
-    this.announce(
-      !this.stageDef.fixedCamera ? "MOVE OUT" : this.campaignArenaCleared ? "SECTOR SECURE" : "APPROACHING THE TERMINAL",
-      !this.stageDef.fixedCamera
-        ? "push east — they're closing from both sides"
-        : this.campaignArenaCleared
-          ? "fall back to the extraction point"
-          : "clear the path to the defense line",
-      2.6
-    );
-    this.sfx.wave();
-  }
-
-  /** Campaign only — continuous bidirectional combat toward this stage's checkpoint. */
-  private updateCampaignTravel(dt: number) {
-    const p = this.pl;
-    // rubble/debris on the ground — jump over it (mid-air passes straight through)
-    const half = 36;
-    if (p.grounded) {
-      for (const ob of this.obstacles) {
-        if (Math.abs(ob.x - p.x) < half) {
-          if (p.x <= ob.x) { p.x = ob.x - half; if (p.vx > 0) p.vx = 0; }
-          else { p.x = ob.x + half; if (p.vx < 0) p.vx = 0; }
-        }
-      }
-    }
-
-    // no discrete waves — zombies keep coming from both sides until the checkpoint
-    this.campaignSpawnT -= dt;
-    const cap = Math.min(14, 5 + this.power * 0.7);
-    if (this.campaignSpawnT <= 0 && this.zombies.length < cap) {
-      this.campaignSpawnT = Math.max(0.45, 1.5 - this.power * 0.045);
-      this.spawnZombie({ type: rollEnemy(this.zombieWeights(this.power)) as ZType });
-    }
-
-    if (p.x >= this.campaignCheckpointX - 26) this.reachCampaignCheckpoint();
-  }
-
-  /** Campaign only — checkpoint reached: the Terminal Defense stage flips into its
-   * fixed-camera arena fight on the way in; every other checkpoint (including the
-   * walk back out once that fight is won) just clears the stage normally. */
-  private reachCampaignCheckpoint() {
-    if (this.phase !== "travel") return;
-    if (this.stageDef.fixedCamera && !this.campaignArenaCleared) {
-      // any zombies still alive from the walk in don't carry into the arena —
-      // its own wave 1 shouldn't start already outnumbered
-      this.zombies = [];
-      // the arena's balance assumes the defender starts at the fixed frame's
-      // left edge with room to fall back — not pinned at the checkpoint's x,
-      // which sits at the frame's right edge after walking in from the west
-      this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
-      this.pl.vx = 0;
-      this.cam = this.camOrigin();
-      this.beginRest(2.4);
-      this.announce(this.stageDef.name, "hold the line — prepare your defenses", 2.8);
-    } else if (this.stage >= STAGES.length) {
-      this.missionComplete();
-    } else {
-      this.completeStage();
-    }
+    this.completeStage();
   }
 
   /** Called after the safe house door is reached — freezes the sim for the stage-clear screen. */
@@ -2625,35 +2294,15 @@ export class Engine {
     this.score += bonus;
     // full heal between stages — except leaving the arena, which stays scrap-and-supply-only
     if (!this.stageDef.fixedCamera) this.pl.hp = this.st.maxHp;
-    // safe house resupply: reserve tops up to 50% (not full), suppressors renewed
+    // safe house resupply: reserve tops up to 50% (not full)
     for (const id of WEAPON_IDS) {
       if (this.reserve[id] >= 0) this.reserve[id] = Math.max(this.reserve[id], Math.round(WDEF[id].reserve * 0.5));
-      this.supp[id] = WDEF[id].supp;
     }
     this.writeCheckpoint(cleared + 1);
     this.sfx.levelup();
     this.onEvent({
       type: "stageclear", stage: cleared, next: cleared + 1,
       wavesPerStage: this.stageDef.wavesPerStage,
-    });
-  }
-
-  /** Called after the safe house door is reached on the mission's final stage. */
-  private missionComplete() {
-    this.over = true;
-    this.phase = "break";
-    this.shake(6);
-    this.sfx.levelup();
-    clearRun(this.runMode); // mission's over — no more checkpoint to retry from
-    const bestTime = Number(localStorage.getItem("graveyard-shift-best-time") || 0);
-    const isBestTime = bestTime === 0 || this.playTime < bestTime;
-    if (isBestTime) localStorage.setItem("graveyard-shift-best-time", String(this.playTime));
-    this.onEvent({
-      type: "missionwin",
-      stats: {
-        score: this.score, kills: this.kills, level: this.pl.level, time: this.playTime,
-        bestTime: isBestTime ? this.playTime : bestTime, isBestTime,
-      },
     });
   }
 
@@ -2664,8 +2313,11 @@ export class Engine {
     // walk out of the safe house back onto the left side of the new stage —
     // also what keeps startTravel()'s safeHouseX comfortably in-bounds
     this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
+    this.pl.y = WORLD_H / 2;
     this.pl.vx = 0;
+    this.pl.vy = 0;
     this.cam = this.stageDef.fixedCamera ? this.camOrigin() : clamp(this.pl.x - W / 2, 0, this.worldW - W);
+    this.camY = clamp(this.pl.y - H / 2, 0, WORLD_H - H);
     this.waveInStage = 0;
     this.stageIntermission = false;
     this.modals.delete("stageclear");
@@ -2675,21 +2327,16 @@ export class Engine {
     for (const id of WEAPON_IDS) this.ammo[id] = WDEF[id].mag;
     this.reloading = false;
     this.reloadT = 0;
-    if (this.runMode === "mission") {
-      this.campaignArenaCleared = false;
-      this.startCampaignTravel();
-    } else {
-      this.beginRest(2.6);
-      this.announce(`STAGE ${this.stage} — ${this.stageDef.name}`, this.stageDef.sub, 2.8);
-    }
+    this.beginRest(2.6);
+    this.announce(`STAGE ${this.stage} — ${this.stageDef.name}`, this.stageDef.sub, 2.8);
   }
 
-  private mkZombie(type: ZType, x: number, hpMul: number, speedMul: number): Zombie {
+  private mkZombie(type: ZType, x: number, y: number, hpMul: number, speedMul: number): Zombie {
     const c = ZCONF[type];
     const scale = c.scale * R(0.94, 1.07);
     const hp = c.hp * hpMul;
     return {
-      x, y: GROUND, vx: 0,
+      x, y, vx: 0,
       hp, maxHp: hp,
       speed: c.speed * speedMul * R(0.9, 1.1),
       dmg: c.dmg, r: c.r * scale, scale,
@@ -2705,12 +2352,18 @@ export class Engine {
     const hpMul = (1 + (power - 1) * 0.22) * (it.boss ? 4.4 : 1);
     const speedMul = 1 + Math.min(0.55, (power - 1) * 0.035);
     const dmgMul = 1 + (power - 1) * 0.07;
-    let x: number;
-    const side = chance(0.5) ? -1 : 1;
-    x = side < 0 ? this.cam - 90 - R(0, 320) : this.cam + W + 90 + R(0, 320);
+
+    // Top-down: spawn from all directions around player edge
+    const angle = Math.random() * TAU;
+    const dist = 450 + R(0, 200);
+    let x = this.pl.x + Math.cos(angle) * dist;
+    let y = this.pl.y + Math.sin(angle) * dist;
+
+    // Keep within world bounds
     x = clamp(x, 22, this.worldW - 22);
-    if (Math.abs(x - this.pl.x) < 240) x = clamp(this.pl.x - side * 620, 22, this.worldW - 22);
-    const z = this.mkZombie(it.type, x, hpMul, speedMul);
+    y = clamp(y, 22, WORLD_H - 22);
+
+    const z = this.mkZombie(it.type, x, y, hpMul, speedMul);
     z.dmg *= dmgMul;
     if (it.boss) {
       z.scale *= 1.32;
@@ -2723,8 +2376,15 @@ export class Engine {
     }
     z.face = x > this.pl.x ? -1 : 1;
     this.zombies.push(z);
+
+    // Omnidirectional spawn particles
     for (let i = 0; i < 8; i++)
-      this.particles.push({ x, y: GROUND, vx: R(-70, 70), vy: R(-180, -20), life: R(0.3, 0.6), max: 0.6, size: R(2, 5), color: "#241d18", grav: 900, add: false });
+      this.particles.push({
+        x, y,
+        vx: Math.cos(angle) * R(30, 70),
+        vy: Math.sin(angle) * R(30, 70),
+        life: R(0.3, 0.6), max: 0.6, size: R(2, 5), color: "#241d18", grav: 0, add: false
+      });
   }
 
   /* ---------------- fx helpers ---------------- */
@@ -2749,7 +2409,6 @@ export class Engine {
   getHud(): HudState {
     const p = this.pl;
     const nearCrate = this.crates.find((c) => !c.opened && Math.abs(c.x - p.x) < 40) ?? null;
-    const nearGate = this.gates.find((g) => !g.opened && Math.abs(g.x - p.x) < 70 && Math.abs(g.x - p.x) >= 30) ?? null;
     return {
       hp: Math.max(0, Math.ceil(p.hp)),
       maxHp: this.st.maxHp,
@@ -2758,7 +2417,6 @@ export class Engine {
       level: p.level,
       stage: this.stage,
       stageName: this.stageDef.name,
-      actId: this.stageDef.actId,
       waveInStage: this.waveInStage,
       wavesPerStage: this.stageDef.wavesPerStage,
       bossWaves: this.stageDef.bossWaves,
@@ -2767,11 +2425,7 @@ export class Engine {
       remaining: this.queue.length + this.zombies.length,
       phase: this.phase,
       travelDistance: this.phase === "travel"
-        ? clamp(
-            (this.pl.x - this.travelStartX) /
-              Math.max(1, (this.runMode === "mission" ? this.campaignCheckpointX : this.safeHouseX) - this.travelStartX),
-            0, 1
-          )
+        ? clamp((this.pl.x - this.travelStartX) / Math.max(1, this.safeHouseX - this.travelStartX), 0, 1)
         : 0,
       travelGatesTotal: this.gates.length,
       travelGatesOpened: this.gates.filter((g) => g.opened).length,
@@ -2802,10 +2456,6 @@ export class Engine {
       mag: WDEF[this.kind].mag,
       reserve: this.reserve[this.kind] ?? 0,
       autoFire: this.autoFire,
-      threat: this.threat,
-      supp: Math.max(0, this.supp[this.kind] ?? 0),
-      suppMax: WDEF[this.kind].supp,
-      suppBroken: WDEF[this.kind].supp < 999 && (this.supp[this.kind] ?? 0) <= 0,
       facing: this.facing,
       onTarget: this.onTarget,
       range: WDEF[this.kind].range,
@@ -2814,15 +2464,9 @@ export class Engine {
       paused: this.paused,
       muted: this.sfx.muted,
       playing: this.mode === "play" && !this.over,
-      terminalNear: this.terminalNear,
-      campaignMode: this.runMode === "mission",
       crateNear: nearCrate !== null,
       crateTier: nearCrate?.tier ?? 0,
       crateOpenPct: clamp(this.crateOpenT / 1.2, 0, 1),
-      crateLocked: nearCrate !== null && (nearCrate.tier === 2 || nearCrate.tier === 3) && this.threat > 0.5,
-      gateBypassNear: nearGate !== null,
-      gateBypassPct: clamp(this.gateBypassT / 0.9, 0, 1),
-      gateBypassLocked: nearGate !== null && this.threat >= 0.35,
       arena: this.stageDef.fixedCamera,
       prepT: Math.max(0, this.prepT),
       prepMax: 45,
@@ -2858,76 +2502,99 @@ export class Engine {
     c.closePath();
   }
 
-  /** A small crimson-lit basement room with a terminal — the campaign's actual starting point. */
-  private renderHideout() {
+  /** Draws gems/crates/zombies/player/bullets/grenades/enemy-shots/particles/
+   * float-texts, cam-relative. */
+  private drawEntities(cam: number, camY: number, t: number) {
     const c = this.ctx;
-    const t = this.tGlobal;
-    c.clearRect(0, 0, W, H);
-
-    const sky = c.createLinearGradient(0, 0, 0, H);
-    sky.addColorStop(0, "#0a0304");
-    sky.addColorStop(0.6, "#170808");
-    sky.addColorStop(1, "#050202");
-    c.fillStyle = sky;
-    c.fillRect(0, 0, W, H);
-
-    const cam = clamp(this.pl.x - W / 2, 0, Math.max(0, this.hideoutWorldW - W));
     c.save();
-    c.translate(-cam, 0);
-
-    // back wall, panel seams
-    c.fillStyle = "#170b0a";
-    c.fillRect(0, 0, this.hideoutWorldW, GROUND);
-    c.strokeStyle = "rgba(185,28,28,0.14)";
-    c.lineWidth = 1;
-    for (let x = 80; x < this.hideoutWorldW; x += 140) {
-      c.beginPath(); c.moveTo(x, 0); c.lineTo(x, GROUND); c.stroke();
-    }
-    // floor
-    const floor = c.createLinearGradient(0, GROUND, 0, H);
-    floor.addColorStop(0, "#140a09");
-    floor.addColorStop(1, "#050302");
-    c.fillStyle = floor;
-    c.fillRect(0, GROUND, this.hideoutWorldW, H - GROUND);
-
-    // the terminal
-    const tx = this.terminalX;
-    c.fillStyle = "#241512";
-    this.rr(tx - 34, GROUND - 50, 68, 50, 4);
-    c.fill();
-    c.globalCompositeOperation = "lighter";
-    const glow = c.createRadialGradient(tx, GROUND - 70, 4, tx, GROUND - 70, 110);
-    // usable from anywhere in the room (see updateHideout()), so this always
-    // renders in its "near" state — no proximity to react to anymore
-    glow.addColorStop(0, "rgba(239,68,68,0.5)");
-    glow.addColorStop(1, "rgba(239,68,68,0)");
-    c.fillStyle = glow;
-    c.fillRect(tx - 110, GROUND - 180, 220, 180);
-    c.globalCompositeOperation = "source-over";
-    c.fillStyle = "#fca5a5";
-    this.rr(tx - 24, GROUND - 78, 48, 30, 2);
-    c.fill();
-    c.strokeStyle = "rgba(0,0,0,0.4)";
-    c.lineWidth = 1;
-    for (let i = 0; i < 3; i++) { c.beginPath(); c.moveTo(tx - 20, GROUND - 70 + i * 8); c.lineTo(tx + 20, GROUND - 70 + i * 8); c.stroke(); }
-
+    c.translate(-cam, camY);
+    for (const g of this.gems) this.drawGem(g, t);
+    for (const cr of this.crates) if (!cr.opened) this.drawCrate(cr, t);
     c.restore();
 
-    this.drawPlayer(cam, 0, t);
+    for (const z of this.zombies) this.drawZombie(z, cam, camY, t);
+    if (this.boss && !this.boss.dead) this.drawBoss(this.boss, cam, camY, t);
+    if (this.mode === "play" && !this.over) this.drawPlayer(cam, camY, t);
 
-    // usable from anywhere in the room, so this prompt is always up
     c.save();
-    c.textAlign = "center";
-    c.font = '700 13px "Space Grotesk", sans-serif';
-    c.fillStyle = "#fca5a5";
-    c.globalAlpha = 0.75 + 0.25 * Math.sin(t * 5);
-    c.fillText("[E] ACCESS TERMINAL", tx - cam, GROUND - 100);
+    c.translate(-cam, camY);
+    // bullets (additive tracers)
+    c.globalCompositeOperation = "lighter";
+    for (const b of this.bullets) {
+      c.strokeStyle = b.crit ? "rgba(251,191,36,0.95)" : "rgba(253,230,138,0.85)";
+      c.lineWidth = b.crit ? 3.4 : 2.4;
+      c.beginPath();
+      c.moveTo(b.x - b.vx * 0.016, b.y - b.vy * 0.016);
+      c.lineTo(b.x, b.y);
+      c.stroke();
+      c.fillStyle = "#fff7d6";
+      c.beginPath();
+      c.arc(b.x, b.y, b.crit ? 2.6 : 1.8, 0, TAU);
+      c.fill();
+    }
+    c.globalCompositeOperation = "source-over";
+    // thrown grenades
+    for (const g of this.grenades) {
+      const spin = t * 14;
+      c.save();
+      c.translate(g.x, g.y);
+      c.rotate(spin);
+      c.fillStyle = g.fuse < 0.35 ? (Math.sin(t * 40) > 0 ? "#f87171" : "#7f1d1d") : "#3f6212";
+      c.beginPath();
+      c.arc(0, 0, 4, 0, TAU);
+      c.fill();
+      c.restore();
+    }
+    // enemy shots
+    for (const s of this.eshots) {
+      const gr = c.createRadialGradient(s.x, s.y, 0, s.x, s.y, 12);
+      gr.addColorStop(0, "rgba(190,242,100,0.95)");
+      gr.addColorStop(0.4, "rgba(132,204,22,0.5)");
+      gr.addColorStop(1, "rgba(132,204,22,0)");
+      c.fillStyle = gr;
+      c.fillRect(s.x - 12, s.y - 12, 24, 24);
+      c.fillStyle = "#d9f99d";
+      c.beginPath();
+      c.arc(s.x, s.y, 3.4, 0, TAU);
+      c.fill();
+    }
+    c.restore();
+
+    /* --- particles --- */
+    c.save();
+    c.translate(-cam, camY);
+    let additive = false;
+    for (const q of this.particles) {
+      if (q.add !== additive) {
+        c.globalCompositeOperation = q.add ? "lighter" : "source-over";
+        additive = q.add;
+      }
+      const a = clamp(q.life / q.max, 0, 1);
+      c.globalAlpha = a * (q.add ? 0.8 : 1);
+      c.fillStyle = q.color;
+      c.beginPath();
+      c.arc(q.x, q.y, q.size * (0.5 + 0.5 * a), 0, TAU);
+      c.fill();
+    }
     c.globalAlpha = 1;
+    c.globalCompositeOperation = "source-over";
+    c.restore();
+
+    /* --- float texts --- */
+    c.save();
+    c.translate(-cam, camY);
+    c.textAlign = "center";
+    for (const ft of this.texts) {
+      const a = clamp(ft.life / ft.max, 0, 1);
+      c.globalAlpha = a;
+      c.font = `700 ${ft.size}px "Space Grotesk", sans-serif`;
+      c.fillStyle = ft.color;
+      c.fillText(ft.text, ft.x, ft.y);
+    }
     c.restore();
   }
 
   private render() {
-    if (this.mode === "hideout") { this.renderHideout(); return; }
     const c = this.ctx;
     const t = this.tGlobal;
     const cam = this.cam + this.shakeX;
@@ -3034,49 +2701,8 @@ export class Engine {
     }
     c.restore();
 
-    /* --- campaign travel: obstacles + checkpoint marker --- */
-    if (this.phase === "travel" && this.runMode === "mission") {
-      c.save();
-      c.translate(-cam, camY);
-      for (const ob of this.obstacles) {
-        if (ob.x < cam - 80 || ob.x > cam + W + 80) continue;
-        c.fillStyle = "#3f3a36";
-        this.rr(ob.x - 30, GROUND - 30, 60, 30, 5);
-        c.fill();
-        c.fillStyle = "#57534e";
-        this.rr(ob.x - 24, GROUND - 26, 48, 12, 3);
-        c.fill();
-        c.fillStyle = "#292524";
-        for (const dx of [-18, 2, 16]) {
-          c.beginPath();
-          c.arc(ob.x + dx, GROUND - 28, 5, 0, TAU);
-          c.fill();
-        }
-        const near = Math.abs(ob.x - this.pl.x) < 90;
-        if (near) {
-          c.textAlign = "center";
-          c.font = '700 9px "Space Grotesk", sans-serif';
-          c.fillStyle = "rgba(251,191,36,0.85)";
-          c.fillText("[W] JUMP", ob.x, GROUND - 42);
-        }
-      }
-      // checkpoint marker — the stage's end, not a safe house
-      const cx = this.campaignCheckpointX;
-      const enteringArena = this.stageDef.fixedCamera && !this.campaignArenaCleared;
-      const glow = c.createRadialGradient(cx, GROUND - 60, 4, cx, GROUND - 60, 130);
-      glow.addColorStop(0, enteringArena ? "rgba(248,113,113,0.28)" : "rgba(74,222,128,0.28)");
-      glow.addColorStop(1, "rgba(0,0,0,0)");
-      c.fillStyle = glow;
-      c.fillRect(cx - 130, GROUND - 190, 260, 260);
-      c.textAlign = "center";
-      c.font = '700 10px "Space Grotesk", sans-serif';
-      c.fillStyle = enteringArena ? "rgba(248,113,113,0.85)" : "rgba(74,222,128,0.85)";
-      c.fillText(enteringArena ? "TERMINAL DEFENSE" : this.campaignArenaCleared ? "EXTRACTION POINT" : "CHECKPOINT", cx, GROUND - 118);
-      c.restore();
-    }
-
-    /* --- endless travel: gates + safe house door --- */
-    if (this.phase === "travel" && this.runMode !== "mission") {
+    /* --- travel: gates + safe house door --- */
+    if (this.phase === "travel") {
       c.save();
       c.translate(-cam, camY);
       for (const g of this.gates) {
@@ -3170,92 +2796,7 @@ export class Engine {
     }
 
     /* --- gems / crates / zombies / player / projectiles --- */
-    c.save();
-    c.translate(-cam, camY);
-    for (const g of this.gems) this.drawGem(g, t);
-    for (const cr of this.crates) if (!cr.opened) this.drawCrate(cr, t);
-    c.restore();
-
-    for (const z of this.zombies) this.drawZombie(z, cam, camY, t);
-    if (this.boss && !this.boss.dead) this.drawBoss(this.boss, cam, camY, t);
-    if (this.mode === "play" && !this.over) this.drawPlayer(cam, camY, t);
-
-    c.save();
-    c.translate(-cam, camY);
-    // bullets (additive tracers)
-    c.globalCompositeOperation = "lighter";
-    for (const b of this.bullets) {
-      c.strokeStyle = b.crit ? "rgba(251,191,36,0.95)" : "rgba(253,230,138,0.85)";
-      c.lineWidth = b.crit ? 3.4 : 2.4;
-      c.beginPath();
-      c.moveTo(b.x - b.vx * 0.016, b.y - b.vy * 0.016);
-      c.lineTo(b.x, b.y);
-      c.stroke();
-      c.fillStyle = "#fff7d6";
-      c.beginPath();
-      c.arc(b.x, b.y, b.crit ? 2.6 : 1.8, 0, TAU);
-      c.fill();
-    }
-    c.globalCompositeOperation = "source-over";
-    // thrown grenades
-    for (const g of this.grenades) {
-      const spin = t * 14;
-      c.save();
-      c.translate(g.x, g.y);
-      c.rotate(spin);
-      c.fillStyle = g.fuse < 0.35 ? (Math.sin(t * 40) > 0 ? "#f87171" : "#7f1d1d") : "#3f6212";
-      c.beginPath();
-      c.arc(0, 0, 4, 0, TAU);
-      c.fill();
-      c.restore();
-    }
-    // enemy shots
-    for (const s of this.eshots) {
-      const gr = c.createRadialGradient(s.x, s.y, 0, s.x, s.y, 12);
-      gr.addColorStop(0, "rgba(190,242,100,0.95)");
-      gr.addColorStop(0.4, "rgba(132,204,22,0.5)");
-      gr.addColorStop(1, "rgba(132,204,22,0)");
-      c.fillStyle = gr;
-      c.fillRect(s.x - 12, s.y - 12, 24, 24);
-      c.fillStyle = "#d9f99d";
-      c.beginPath();
-      c.arc(s.x, s.y, 3.4, 0, TAU);
-      c.fill();
-    }
-    c.restore();
-
-    /* --- particles --- */
-    c.save();
-    c.translate(-cam, camY);
-    let additive = false;
-    for (const q of this.particles) {
-      if (q.add !== additive) {
-        c.globalCompositeOperation = q.add ? "lighter" : "source-over";
-        additive = q.add;
-      }
-      const a = clamp(q.life / q.max, 0, 1);
-      c.globalAlpha = a * (q.add ? 0.8 : 1);
-      c.fillStyle = q.color;
-      c.beginPath();
-      c.arc(q.x, q.y, q.size * (0.5 + 0.5 * a), 0, TAU);
-      c.fill();
-    }
-    c.globalAlpha = 1;
-    c.globalCompositeOperation = "source-over";
-    c.restore();
-
-    /* --- float texts --- */
-    c.save();
-    c.translate(-cam, camY);
-    c.textAlign = "center";
-    for (const ft of this.texts) {
-      const a = clamp(ft.life / ft.max, 0, 1);
-      c.globalAlpha = a;
-      c.font = `700 ${ft.size}px "Space Grotesk", sans-serif`;
-      c.fillStyle = ft.color;
-      c.fillText(ft.text, ft.x, ft.y);
-    }
-    c.restore();
+    this.drawEntities(cam, camY, t);
 
     /* --- foreground fog wisps --- */
     for (let i = 0; i < 2; i++) {
@@ -3446,14 +2987,13 @@ export class Engine {
 
     /* --- debug overlay (?debug=1) --- */
     if (this.debug) {
-      const cap = this.runMode === "mission" ? String(STAGES.length) : "∞";
       c.save();
       c.textAlign = "left";
       c.font = '600 11px monospace';
       c.fillStyle = "#4ade80";
       const travel = this.phase === "travel" ? ` gates:${this.gates.filter((g) => g.opened).length}/${this.gates.length}` : "";
       c.fillText(
-        `mode:${this.runMode} stage:${this.stage}/${cap} phase:${this.phase} wave:${this.waveInStage}/${this.stageDef.wavesPerStage} power:${this.power.toFixed(1)} idx:${this.waveIndex}${travel}`,
+        `stage:${this.stage} phase:${this.phase} wave:${this.waveInStage}/${this.stageDef.wavesPerStage} power:${this.power.toFixed(1)} idx:${this.waveIndex}${travel} metaLv:${this.profile.metaLevel}`,
         8, H - 8
       );
       c.restore();
@@ -3691,8 +3231,6 @@ export class Engine {
   private static readonly GEM_PALETTE: Record<Gem["kind"], [string, string, string, string]> = {
     xp: ["rgba(167,139,250,0.5)", "rgba(167,139,250,0)", "#c4b5fd", "#ede9fe"],
     scrap: ["rgba(148,163,184,0.5)", "rgba(148,163,184,0)", "#cbd5e1", "#f1f5f9"],
-    health: ["rgba(74,222,128,0.55)", "rgba(74,222,128,0)", "#4ade80", "#ecfdf5"],
-    ammo: ["rgba(251,191,36,0.55)", "rgba(251,191,36,0)", "#fbbf24", "#fffbeb"],
   };
 
   private drawGem(g: Gem, t: number) {
@@ -3728,7 +3266,7 @@ export class Engine {
 
   private drawCrate(cr: Crate, t: number) {
     const c = this.ctx;
-    const tierColor = cr.docId ? "#c4b5fd" : cr.tier === 3 ? "#fbbf24" : cr.tier === 2 ? "#a78bfa" : "#94a3b8";
+    const tierColor = cr.tier === 3 ? "#fbbf24" : cr.tier === 2 ? "#a78bfa" : "#94a3b8";
     const bob = Math.sin(t * 2 + cr.x) * 1.5;
     c.save();
     c.translate(cr.x, cr.y - 12 + bob);
@@ -3752,22 +3290,12 @@ export class Engine {
     c.moveTo(-15, 0); c.lineTo(15, 0);
     c.moveTo(0, -14); c.lineTo(0, 14);
     c.stroke();
-    if (cr.docId) {
-      // a small folded-page glyph, not tier pips — this crate never has a tier that matters
+    // tier pips
+    for (let i = 0; i < cr.tier; i++) {
       c.fillStyle = tierColor;
-      this.rr(-5, -24, 10, 12, 1);
+      c.beginPath();
+      c.arc(-6 + i * 6, -20, 2, 0, TAU);
       c.fill();
-      c.strokeStyle = "rgba(0,0,0,0.4)";
-      c.lineWidth = 1;
-      c.beginPath(); c.moveTo(-3, -21); c.lineTo(3, -21); c.moveTo(-3, -18); c.lineTo(3, -18); c.stroke();
-    } else {
-      // tier pips
-      for (let i = 0; i < cr.tier; i++) {
-        c.fillStyle = tierColor;
-        c.beginPath();
-        c.arc(-6 + i * 6, -20, 2, 0, TAU);
-        c.fill();
-      }
     }
     // glow
     c.globalCompositeOperation = "lighter";
@@ -4147,10 +3675,12 @@ export class Engine {
     if (p.ifr > 0) c.globalAlpha = 0.55 + 0.45 * Math.sin(t * 42);
     if (p.dashT > 0) c.globalAlpha = 0.82;
 
-    const run = Math.abs(p.vx) > 26 && p.grounded;
-    const bob = run ? Math.abs(Math.sin(p.walk)) * 2.4 : p.grounded ? Math.sin(t * 2.1) * 1.0 : -2.2;
+    // Top-down: run is based on velocity magnitude
+    const vel = Math.hypot(p.vx, p.vy);
+    const run = vel > 26;
+    const bob = run ? Math.abs(Math.sin(p.walk)) * 2.4 : Math.sin(t * 2.1) * 1.0;
     const swing = run ? Math.sin(p.walk) : 0;
-    const airLegs = !p.grounded;
+    const airLegs = false; // No jumping in top-down mode
 
     // ---- legs (flip x in screen space by dir) ----
     const l1 = airLegs ? 6 : swing * 8;
