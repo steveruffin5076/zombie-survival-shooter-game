@@ -30,10 +30,8 @@ import type { EngineEvent, GameStats, HudState, InventorySnapshot, ProfileSnapsh
 
 const W = 1280;
 const H = 720;
-const GROUND = 584;
-const GRAV = 2400;
+const GROUND = 584; // Kept for compatibility with attract mode and particle effects
 // Top-down camera: world bounds for player movement
-// GROUND is kept for compatibility but ignored in top-down mode
 const WORLD_H = 1440; // vertical play area height
 const TAU = Math.PI * 2;
 
@@ -214,7 +212,6 @@ export class Engine {
   private onTarget = false;
   private laserFlash = 0;
   /** blocks fire() briefly after a lane flip; scaled by the weapon's pivotMul */
-  private pivotT = 0;
 
   /** re-entrancy guard so overlapping triggers can't stack ambushes */
   private ambushT = 0;
@@ -453,7 +450,6 @@ export class Engine {
     this.onTarget = false;
     this.ambushT = 0;
     this.laserFlash = 0;
-    this.pivotT = 0;
     this.zombies = [];
     this.bullets = [];
     this.eshots = [];
@@ -633,22 +629,8 @@ export class Engine {
       return;
     }
     this.mouse.down = true;
-    // right/left half of the screen pivots the lane (mobile-style tap to turn)
-    if (this.mode === "play" && !this.over && !this.paused && !this.modalOpen) {
-      const half = this.mouse.x > W / 2 ? 1 : -1;
-      if (half !== this.facing) {
-        this.pivotTo(half as 1 | -1);
-        this.target = null;
-      }
-    }
+    // Top-down mode: no pivoting, just aim toward mouse
   };
-
-  /** Flips the locked lane and starts the brief post-pivot fire lockout. */
-  private pivotTo(dir: 1 | -1) {
-    this.facing = dir;
-    const w = WDEF[this.kind] ?? WDEF.pistol;
-    this.pivotT = 0.12 * (w.pivotMul ?? 1);
-  }
 
   toggleFireMode() {
     this.autoFire = !this.autoFire;
@@ -708,11 +690,7 @@ export class Engine {
       this.tryPlaceDeployable();
       return;
     }
-    const half = p.x > W / 2 ? 1 : -1;
-    if (half !== this.facing) {
-      this.pivotTo(half as 1 | -1);
-      this.target = null;
-    }
+    // Top-down: tap updates aim direction, no pivoting
   }
 
   /** KeyE (or its touch interact-button equivalent) while a boss is alive forces
@@ -775,7 +753,7 @@ export class Engine {
       const fromLeft = chance(0.5);
       const type: ZType = chance(0.72) ? "walker" : chance(0.5) ? "runner" : "brute";
       const c = ZCONF[type];
-      const z = this.mkZombie(type, fromLeft ? -60 : W + 60, 1, 1);
+      const z = this.mkZombie(type, fromLeft ? -60 : W + 60, GROUND, 1, 1);
       z.vx = (fromLeft ? 1 : -1) * c.speed * R(0.35, 0.6);
       this.zombies.push(z);
     }
@@ -852,7 +830,6 @@ export class Engine {
     this.acquireTarget();
     p.aim = this.aimAngle();
     if (this.laserFlash > 0) this.laserFlash -= dt;
-    if (this.pivotT > 0) this.pivotT -= dt;
 
     // reload + auto-fire (all weapons are full-auto; rate differs per weapon)
     this.updateReload(dt);
@@ -860,7 +837,7 @@ export class Engine {
       // can't shoot mid-reload
     } else if (this.ammo[this.kind] <= 0) {
       this.startReload(); // auto reload the instant the mag runs dry
-    } else if (p.cd <= 0 && this.pivotT <= 0 && p.useT <= 0) {
+    } else if (p.cd <= 0 && p.useT <= 0) {
       // AUTO-FIRE ON: shoot only when a zombie is on the laser line.
       // AUTO-FIRE OFF: manual trigger via mouse.
       if (this.autoFire ? this.onTarget : this.mouse.down) this.fire();
@@ -953,60 +930,69 @@ export class Engine {
     const range = w.range * (1 + 0.12 * (this.stacks["velo"] || 0));
     let best: AimTarget | null = null;
     let bestD = Infinity;
+
+    // Omnidirectional targeting: find closest zombie within range
     for (const z of this.zombies) {
       if (z.dead) continue;
       const dx = z.x - p.x;
-      // strictly the lane we're facing
-      if (this.facing === 1 ? dx < -14 : dx > 14) continue;
-      const d = Math.abs(dx);
+      const dy = z.y - p.y;
+      const d = Math.hypot(dx, dy);
       if (d > range) continue;
-      // must be roughly on our plane (not mid-air above us)
-      if (Math.abs(z.y - p.y) > 90) continue;
       if (d < bestD) { bestD = d; best = z; }
     }
+
+    // Boss targeting
     const boss = this.boss;
     if (boss && !boss.dead) {
       const dx = boss.x - p.x;
-      const inLane = this.facing === 1 ? dx >= -14 : dx <= 14;
-      const d = Math.abs(dx);
-      if (inLane && d <= range && Math.abs(boss.y - p.y) <= 90) {
+      const dy = boss.y - p.y;
+      const d = Math.hypot(dx, dy);
+      if (d <= range) {
         const addIsClose = best !== null && bestD < 130;
         if (!addIsClose || this.bossForceTarget) best = boss;
       }
     }
+
     const had = this.onTarget;
     this.target = best;
     this.onTarget = best !== null;
     if (this.onTarget && !had) this.laserFlash = 0.25;
   }
 
-  /** Angle toward the locked target, else flat along the faced lane. */
+  /** Angle toward the target, or toward mouse position if no target */
   private aimAngle() {
     const p = this.pl;
     if (this.target && !this.target.dead) {
       const tx = this.target.x;
       const ty = this.target.y - 36 * this.target.scale;
-      return Math.atan2(ty - (p.y - 40), tx - p.x);
+      return Math.atan2(ty - p.y, tx - p.x);
     }
-    return this.facing === 1 ? 0 : Math.PI;
+    // Aim toward mouse position relative to player
+    const mx = this.mouse.x + this.cam - W / 2;
+    const my = this.mouse.y + this.camY - H / 2;
+    return Math.atan2(my - p.y, mx - p.x);
   }
 
   /* ============ AMBUSH ============ */
 
-  /** Spawn Runners behind the player — the Screamer's shriek, a boss's Screaming
-   * Call, camping in place too long, or a hazard, can all trigger this. */
+  /** Spawn Runners from random directions — triggered by Screamer's shriek, boss's Screaming
+   * Call, camping in place too long, or a hazard. */
   private triggerAmbush(count: number) {
     this.ambushT = 6;
-    const behind = -this.facing as 1 | -1;
     for (let i = 0; i < count; i++) {
-      const x = clamp(this.pl.x + behind * (W * 0.55 + R(0, 260)), 22, this.worldW - 22);
-      const z = this.mkZombie("runner", x, 1 + (this.power - 1) * 0.2, 1.25);
+      // Omnidirectional ambush spawn
+      const angle = Math.random() * TAU;
+      const dist = 400;
+      const x = clamp(this.pl.x + Math.cos(angle) * dist, 22, this.worldW - 22);
+      const y = clamp(this.pl.y + Math.sin(angle) * dist, 22, WORLD_H - 22);
+      const z = this.mkZombie("runner", x, y, 1 + (this.power - 1) * 0.2, 1.25);
       z.face = x > this.pl.x ? -1 : 1;
       this.zombies.push(z);
       for (let k = 0; k < 8; k++)
         this.particles.push({
-          x, y: GROUND, vx: R(-80, 80), vy: R(-200, -30), life: R(0.3, 0.6), max: 0.6,
-          size: R(2, 5), color: "#7f1d1d", grav: 900, add: false,
+          x, y, vx: Math.cos(angle) * R(40, 80), vy: Math.sin(angle) * R(40, 80),
+          life: R(0.3, 0.6), max: 0.6,
+          size: R(2, 5), color: "#7f1d1d", grav: 0, add: false,
         });
     }
     this.announce("THEY HEARD YOU", "runners closing from behind");
@@ -1909,20 +1895,24 @@ export class Engine {
 
   private throwGrenade() {
     const p = this.pl;
-    // a controlled lob into the faced lane, not a full-power throw — it needs
-    // to land near the engagement range a pistol/smg fights at, not sail past it
-    this.grenades.push({ x: p.x, y: p.y - 40, vx: this.facing * 220, vy: -280, fuse: 1.6 });
+    // Top-down: throw in aim direction at fixed range
+    const angle = p.aim;
+    const speed = 260;
+    const vx = Math.cos(angle) * speed;
+    const vy = Math.sin(angle) * speed;
+    this.grenades.push({ x: p.x, y: p.y, vx, vy, fuse: 1.6 });
     this.sfx.shoot();
   }
 
   private updateGrenades(dt: number) {
     for (const g of this.grenades) {
       g.fuse -= dt;
-      g.vy += GRAV * 0.6 * dt;
+      // Top-down: no gravity, grenades move in straight line
       g.x += g.vx * dt;
       g.y += g.vy * dt;
-      if (g.y > GROUND) {
-        g.y = GROUND; g.vy *= -0.4; g.vx *= 0.55;
+      // Grenades despawn if they go out of bounds
+      if (g.x < 0 || g.x > this.worldW || g.y < 0 || g.y > WORLD_H) {
+        g.fuse = -1;
         // detonate shortly after it actually lands, not wherever it happens
         // to be when the original flight fuse runs out — a grenade that's
         // still sailing through the air 460px from the thrower can't hit
@@ -2211,7 +2201,7 @@ export class Engine {
       // a sleeper or two guarding most checkpoints — the whole reason to bypass quiet
       if (chance(0.7)) {
         const sx = clamp(gx + R(-110, 110), this.pl.x + 80, this.safeHouseX - 80);
-        const z = this.mkZombie("walker", sx, 1 + (this.power - 1) * 0.15, 1);
+        const z = this.mkZombie("walker", sx, GROUND, 1 + (this.power - 1) * 0.15, 1);
         z.dormant = true;
         this.zombies.push(z);
       }
@@ -2341,12 +2331,12 @@ export class Engine {
     this.announce(`STAGE ${this.stage} — ${this.stageDef.name}`, this.stageDef.sub, 2.8);
   }
 
-  private mkZombie(type: ZType, x: number, hpMul: number, speedMul: number): Zombie {
+  private mkZombie(type: ZType, x: number, y: number, hpMul: number, speedMul: number): Zombie {
     const c = ZCONF[type];
     const scale = c.scale * R(0.94, 1.07);
     const hp = c.hp * hpMul;
     return {
-      x, y: GROUND, vx: 0,
+      x, y, vx: 0,
       hp, maxHp: hp,
       speed: c.speed * speedMul * R(0.9, 1.1),
       dmg: c.dmg, r: c.r * scale, scale,
@@ -2362,12 +2352,18 @@ export class Engine {
     const hpMul = (1 + (power - 1) * 0.22) * (it.boss ? 4.4 : 1);
     const speedMul = 1 + Math.min(0.55, (power - 1) * 0.035);
     const dmgMul = 1 + (power - 1) * 0.07;
-    let x: number;
-    const side = chance(0.5) ? -1 : 1;
-    x = side < 0 ? this.cam - 90 - R(0, 320) : this.cam + W + 90 + R(0, 320);
+
+    // Top-down: spawn from all directions around player edge
+    const angle = Math.random() * TAU;
+    const dist = 450 + R(0, 200);
+    let x = this.pl.x + Math.cos(angle) * dist;
+    let y = this.pl.y + Math.sin(angle) * dist;
+
+    // Keep within world bounds
     x = clamp(x, 22, this.worldW - 22);
-    if (Math.abs(x - this.pl.x) < 240) x = clamp(this.pl.x - side * 620, 22, this.worldW - 22);
-    const z = this.mkZombie(it.type, x, hpMul, speedMul);
+    y = clamp(y, 22, WORLD_H - 22);
+
+    const z = this.mkZombie(it.type, x, y, hpMul, speedMul);
     z.dmg *= dmgMul;
     if (it.boss) {
       z.scale *= 1.32;
@@ -2380,8 +2376,15 @@ export class Engine {
     }
     z.face = x > this.pl.x ? -1 : 1;
     this.zombies.push(z);
+
+    // Omnidirectional spawn particles
     for (let i = 0; i < 8; i++)
-      this.particles.push({ x, y: GROUND, vx: R(-70, 70), vy: R(-180, -20), life: R(0.3, 0.6), max: 0.6, size: R(2, 5), color: "#241d18", grav: 900, add: false });
+      this.particles.push({
+        x, y,
+        vx: Math.cos(angle) * R(30, 70),
+        vy: Math.sin(angle) * R(30, 70),
+        life: R(0.3, 0.6), max: 0.6, size: R(2, 5), color: "#241d18", grav: 0, add: false
+      });
   }
 
   /* ---------------- fx helpers ---------------- */
