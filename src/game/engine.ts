@@ -128,7 +128,7 @@ interface Particle {
   life: number; max: number; size: number; color: string; grav: number; add: boolean;
 }
 
-interface Gem { x: number; y: number; vx: number; vy: number; val: number; t: number; rest: boolean; kind: "xp" | "scrap" }
+interface Gem { x: number; y: number; vx: number; vy: number; val: number; t: number; rest: boolean; kind: "xp" | "scrap" | "health" | "ammo" }
 interface FloatText { x: number; y: number; vy: number; life: number; max: number; text: string; color: string; size: number }
 interface Decal { x: number; s: number; a: number }
 interface SpawnItem { type: ZType; boss?: boolean }
@@ -146,6 +146,8 @@ interface Crate {
 interface GrenadeProj { x: number; y: number; vx: number; vy: number; fuse: number }
 type HazardKind = "alarm" | "glass" | "flare";
 interface Hazard { x: number; y: number; kind: HazardKind; triggered: boolean }
+/** Campaign travel only — rubble/debris blocking the ground path; jump over it. */
+interface Obstacle { x: number }
 
 /* ------------------------------------------------------------------ */
 /* engine                                                              */
@@ -266,6 +268,12 @@ export class Engine {
   private gateBypassT = 0;
   private hazards: Hazard[] = [];
 
+  /* --- campaign travel: continuous left-to-right combat to a checkpoint,
+   * replacing the wave-room + safe-house-corridor loop endless still uses --- */
+  private obstacles: Obstacle[] = [];
+  private campaignCheckpointX = 0;
+  private campaignSpawnT = 0;
+
   /* --- inventory: fixed 4x4 backpack, a persistent safe-house stash, loot crates --- */
   private backpack: PlacedItem[] = [];
   private deposit: string[] = [];
@@ -360,9 +368,13 @@ export class Engine {
     this.recompute();
     this.pl.hp = this.st.maxHp;
     this.mode = "play";
-    this.phase = "break";
-    this.breakT = 2.2;
-    this.announce(`STAGE 1 — ${this.stageDef.name}`, this.stageDef.sub, 2.6);
+    if (mode === "mission") {
+      this.startCampaignTravel();
+    } else {
+      this.phase = "break";
+      this.breakT = 2.2;
+      this.announce(`STAGE 1 — ${this.stageDef.name}`, this.stageDef.sub, 2.6);
+    }
   }
 
   toMenu() {
@@ -505,6 +517,9 @@ export class Engine {
     this.travelIdleT = 0;
     this.gateBypassT = 0;
     this.hazards = [];
+    this.obstacles = [];
+    this.campaignCheckpointX = 0;
+    this.campaignSpawnT = 0;
     this.backpack = [];
     this.deposit = [];
     this.intel = 0;
@@ -775,7 +790,7 @@ export class Engine {
 
   private jump() {
     const p = this.pl;
-    if (p.jumps >= 2) return;
+    if (p.jumps >= 1) return;
     p.vy = -870;
     p.jumps++;
     p.grounded = false;
@@ -830,7 +845,8 @@ export class Engine {
     p.vy = 0;
     const run = Math.abs(p.vx) > 26;
     p.walk += dt * (run ? 10 + Math.abs(p.vx) * 0.014 : 3);
-    this.terminalNear = Math.abs(p.x - this.terminalX) < 60;
+    // usable from anywhere in the room — no need to walk to a specific spot
+    this.terminalNear = true;
     this.updateParticles(dt);
     this.motes(dt);
   }
@@ -944,7 +960,15 @@ export class Engine {
       if (this.queue.length === 0 && this.zombies.length === 0 && (!this.boss || this.boss.dead)) {
         this.score += 50 * this.power;
         if (this.waveInStage >= this.stageDef.wavesPerStage) {
-          this.startTravel();
+          // campaign has no post-arena travel corridor — clearing the Terminal
+          // Defense fight (the only stage that still reaches "active" here in
+          // campaign) goes straight to the stage-clear/mission-complete screen
+          if (this.runMode === "mission") {
+            if (this.stage >= STAGES.length) this.missionComplete();
+            else this.completeStage();
+          } else {
+            this.startTravel();
+          }
         } else {
           const boss = this.stageDef.bossWaves.includes(this.waveInStage);
           this.beginRest(3.4);
@@ -958,7 +982,10 @@ export class Engine {
         }
       }
     } else {
-      this.updateTravel(dt);
+      // campaign's "travel" is continuous bidirectional combat toward a
+      // checkpoint; endless keeps the old gate/hazard corridor to a safe house
+      if (this.runMode === "mission") this.updateCampaignTravel(dt);
+      else this.updateTravel(dt);
     }
     this.updateDeployables();
 
@@ -1038,8 +1065,9 @@ export class Engine {
 
   /* ============ NOISE / THREAT ============ */
 
-  /** Every unsuppressed shot builds the threat meter. */
+  /** Every unsuppressed shot builds the threat meter. Campaign has no noise/suppressor system. */
   private addNoise(amount: number) {
+    if (this.runMode === "mission") return;
     this.threat = clamp(this.threat + amount, 0, 1);
     if (this.threat >= 1 && this.ambushT <= 0) this.triggerAmbush(3);
   }
@@ -1065,8 +1093,9 @@ export class Engine {
     this.shake(5);
   }
 
-  /** Suppressor takes a shot of wear; shatters at zero. */
+  /** Suppressor takes a shot of wear; shatters at zero. Campaign has no suppressor system. */
   private wearSuppressor() {
+    if (this.runMode === "mission") return;
     const w = WDEF[this.kind];
     if (w.supp >= 999) return; // integrally suppressed (AS Val)
     if (this.supp[this.kind] <= 0) return; // already broken
@@ -1594,6 +1623,12 @@ export class Engine {
         if (g.kind === "scrap") {
           this.scrap += Math.abs(g.val);
           this.particles.push({ x: p.x, y: p.y - 34, vx: R(-30, 30), vy: R(-60, -10), life: 0.3, max: 0.3, size: 3, color: "#94a3b8", grav: 0, add: true });
+        } else if (g.kind === "health") {
+          this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + 20);
+          this.particles.push({ x: p.x, y: p.y - 34, vx: R(-30, 30), vy: R(-60, -10), life: 0.3, max: 0.3, size: 3, color: "#4ade80", grav: 0, add: true });
+        } else if (g.kind === "ammo") {
+          this.awardSupply(0.25, 1);
+          this.particles.push({ x: p.x, y: p.y - 34, vx: R(-30, 30), vy: R(-60, -10), life: 0.3, max: 0.3, size: 3, color: "#fbbf24", grav: 0, add: true });
         } else {
           this.gainXp(Math.abs(g.val));
           this.particles.push({ x: p.x, y: p.y - 34, vx: R(-30, 30), vy: R(-60, -10), life: 0.3, max: 0.3, size: 3, color: "#a78bfa", grav: 0, add: true });
@@ -1654,11 +1689,20 @@ export class Engine {
       this.particles.push({ x: cx + R(-8, 8), y: cy + R(-14, 14), vx: dir * R(20, 160) + R(-110, 110), vy: R(-200, 60), life: R(0.3, 0.7), max: 0.7, size: R(2, 5.5), color: BLOOD[RI(0, BLOOD.length - 1)], grav: 1200, add: false });
     this.decals.push({ x: z.x, s: z.scale, a: 0.55 });
     if (this.decals.length > 70) this.decals.shift();
-    // xp gems
-    const total = z.xp;
-    const n = Math.min(8, Math.max(1, Math.round(total)));
-    for (let i = 0; i < n; i++)
-      this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: total / n, t: R(0, 9), rest: false, kind: "xp" });
+    if (this.runMode === "mission") {
+      // campaign has no leveling — XP gems would do nothing, so zombies have a
+      // small chance to drop a health or ammo pickup instead
+      if (chance(0.28)) {
+        const kind: "health" | "ammo" = chance(0.5) ? "health" : "ammo";
+        this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: 1, t: R(0, 9), rest: false, kind });
+      }
+    } else {
+      // xp gems
+      const total = z.xp;
+      const n = Math.min(8, Math.max(1, Math.round(total)));
+      for (let i = 0; i < n; i++)
+        this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: total / n, t: R(0, 9), rest: false, kind: "xp" });
+    }
     // scrap — arena only, feeds RepairPanel
     if (this.stageDef.fixedCamera && chance(0.22)) {
       this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: 1, t: R(0, 9), rest: false, kind: "scrap" });
@@ -1747,8 +1791,13 @@ export class Engine {
     this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
     this.cam = this.stageDef.fixedCamera ? this.camOrigin() : clamp(this.pl.x - W / 2, 0, this.worldW - W);
     this.mode = "play";
-    this.beginRest(2.4);
-    this.announce("YOU DIED", `back at the safe house — ${this.stageDef.name}`, 2.8);
+    if (this.runMode === "mission") {
+      this.announce("YOU DIED", `back at the checkpoint — ${this.stageDef.name}`, 2.8);
+      this.startCampaignTravel();
+    } else {
+      this.beginRest(2.4);
+      this.announce("YOU DIED", `back at the safe house — ${this.stageDef.name}`, 2.8);
+    }
   }
 
   private writeCheckpoint(nextStage: number) {
@@ -2131,13 +2180,9 @@ export class Engine {
 
   /* ---------------- waves ---------------- */
 
-  private buildWave(power: number, inStage: number): SpawnItem[] {
-    const items: SpawnItem[] = [];
-    const boss = this.stageDef.bossWaves.includes(inStage);
-    const count = boss
-      ? Math.min(30, Math.round(6 + power * 1.3))
-      : Math.min(52, Math.round(5 + power * 2.6 + power * power * 0.1));
-    const weights: Partial<Record<string, number>> = {
+  /** Shared enemy weight table — used by wave-room combat and campaign's continuous travel spawner alike. */
+  private zombieWeights(power: number): Partial<Record<string, number>> {
+    return {
       walker: 1,
       runner: power >= 2 ? 0.42 + power * 0.02 : 0,
       spitter: power >= 4 ? 0.3 : 0,
@@ -2145,6 +2190,15 @@ export class Engine {
       // act-specific extras (e.g. the Screamer, Act I only) fold into the same roll
       ...enemyPoolFor(this.stageDef.actId),
     };
+  }
+
+  private buildWave(power: number, inStage: number): SpawnItem[] {
+    const items: SpawnItem[] = [];
+    const boss = this.stageDef.bossWaves.includes(inStage);
+    const count = boss
+      ? Math.min(30, Math.round(6 + power * 1.3))
+      : Math.min(52, Math.round(5 + power * 2.6 + power * power * 0.1));
+    const weights = this.zombieWeights(power);
     for (let i = 0; i < count; i++) items.push({ type: rollEnemy(weights) as ZType });
     // shuffle the fodder
     for (let i = items.length - 1; i > 0; i--) {
@@ -2450,6 +2504,86 @@ export class Engine {
     else this.completeStage();
   }
 
+  /** Campaign only — every stage starts as one continuous walk to a checkpoint,
+   * zombies attacking from both sides the whole way, instead of discrete wave rooms. */
+  private startCampaignTravel() {
+    this.phase = "travel";
+    this.travelStartX = this.pl.x;
+    this.campaignSpawnT = 1;
+    // no per-wave escalation — the stage's own baseline difficulty, held for its whole travel
+    this.power = difficultyFor(this.stage, Math.ceil(this.stageDef.wavesPerStage / 2), this.runMode);
+    this.campaignCheckpointX = this.worldW - 140;
+    this.obstacles = [];
+    let ox = this.pl.x + R(360, 520);
+    while (ox < this.campaignCheckpointX - 200) {
+      this.obstacles.push({ x: ox });
+      ox += R(420, 650);
+    }
+    // one guaranteed intel document per exploration stage — never RNG-gated,
+    // per enhancement-1.md's "found in Stages 1-3" (never the Terminal Defense)
+    if (!this.stageDef.fixedCamera) {
+      const docId = docIdFor(this.stageDef.actId, this.stageDef.indexInAct as 0 | 1 | 2);
+      if (docId && !this.docsFound.includes(docId)) {
+        const dx = clamp(this.pl.x + R(400, this.campaignCheckpointX - this.pl.x - 200), this.pl.x + 60, this.campaignCheckpointX - 60);
+        this.crates.push({ x: dx, y: GROUND, tier: 1, opened: false, docId });
+      }
+    }
+    this.announce(
+      this.stageDef.fixedCamera ? "APPROACHING THE TERMINAL" : "MOVE OUT",
+      this.stageDef.fixedCamera ? "clear the path to the defense line" : "push east — they're closing from both sides",
+      2.6
+    );
+    this.sfx.wave();
+  }
+
+  /** Campaign only — continuous bidirectional combat toward this stage's checkpoint. */
+  private updateCampaignTravel(dt: number) {
+    const p = this.pl;
+    // rubble/debris on the ground — jump over it (mid-air passes straight through)
+    const half = 36;
+    if (p.grounded) {
+      for (const ob of this.obstacles) {
+        if (Math.abs(ob.x - p.x) < half) {
+          if (p.x <= ob.x) { p.x = ob.x - half; if (p.vx > 0) p.vx = 0; }
+          else { p.x = ob.x + half; if (p.vx < 0) p.vx = 0; }
+        }
+      }
+    }
+
+    // no discrete waves — zombies keep coming from both sides until the checkpoint
+    this.campaignSpawnT -= dt;
+    const cap = Math.min(14, 5 + this.power * 0.7);
+    if (this.campaignSpawnT <= 0 && this.zombies.length < cap) {
+      this.campaignSpawnT = Math.max(0.45, 1.5 - this.power * 0.045);
+      this.spawnZombie({ type: rollEnemy(this.zombieWeights(this.power)) as ZType });
+    }
+
+    if (p.x >= this.campaignCheckpointX - 26) this.reachCampaignCheckpoint();
+  }
+
+  /** Campaign only — checkpoint reached: the Terminal Defense stage flips into its
+   * fixed-camera arena fight; every other stage just clears normally. */
+  private reachCampaignCheckpoint() {
+    if (this.phase !== "travel") return;
+    if (this.stageDef.fixedCamera) {
+      // any zombies still alive from the walk in don't carry into the arena —
+      // its own wave 1 shouldn't start already outnumbered
+      this.zombies = [];
+      // the arena's balance assumes the defender starts at the fixed frame's
+      // left edge with room to fall back — not pinned at the checkpoint's x,
+      // which sits at the frame's right edge after walking in from the west
+      this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
+      this.pl.vx = 0;
+      this.cam = this.camOrigin();
+      this.beginRest(2.4);
+      this.announce(this.stageDef.name, "hold the line — prepare your defenses", 2.8);
+    } else if (this.stage >= STAGES.length) {
+      this.missionComplete();
+    } else {
+      this.completeStage();
+    }
+  }
+
   /** Called after the safe house door is reached — freezes the sim for the stage-clear screen. */
   private completeStage() {
     const cleared = this.stage;
@@ -2506,8 +2640,12 @@ export class Engine {
     this.modals.delete("stageclear");
     this.bullets = [];
     this.eshots = [];
-    this.beginRest(2.6);
-    this.announce(`STAGE ${this.stage} — ${this.stageDef.name}`, this.stageDef.sub, 2.8);
+    if (this.runMode === "mission") {
+      this.startCampaignTravel();
+    } else {
+      this.beginRest(2.6);
+      this.announce(`STAGE ${this.stage} — ${this.stageDef.name}`, this.stageDef.sub, 2.8);
+    }
   }
 
   private mkZombie(type: ZType, x: number, hpMul: number, speedMul: number): Zombie {
@@ -2593,7 +2731,11 @@ export class Engine {
       remaining: this.queue.length + this.zombies.length,
       phase: this.phase,
       travelDistance: this.phase === "travel"
-        ? clamp((this.pl.x - this.travelStartX) / Math.max(1, this.safeHouseX - this.travelStartX), 0, 1)
+        ? clamp(
+            (this.pl.x - this.travelStartX) /
+              Math.max(1, (this.runMode === "mission" ? this.campaignCheckpointX : this.safeHouseX) - this.travelStartX),
+            0, 1
+          )
         : 0,
       travelGatesTotal: this.gates.length,
       travelGatesOpened: this.gates.filter((g) => g.opened).length,
@@ -2856,8 +2998,48 @@ export class Engine {
     }
     c.restore();
 
-    /* --- travel: gates + safe house door --- */
-    if (this.phase === "travel") {
+    /* --- campaign travel: obstacles + checkpoint marker --- */
+    if (this.phase === "travel" && this.runMode === "mission") {
+      c.save();
+      c.translate(-cam, camY);
+      for (const ob of this.obstacles) {
+        if (ob.x < cam - 80 || ob.x > cam + W + 80) continue;
+        c.fillStyle = "#3f3a36";
+        this.rr(ob.x - 30, GROUND - 30, 60, 30, 5);
+        c.fill();
+        c.fillStyle = "#57534e";
+        this.rr(ob.x - 24, GROUND - 26, 48, 12, 3);
+        c.fill();
+        c.fillStyle = "#292524";
+        for (const dx of [-18, 2, 16]) {
+          c.beginPath();
+          c.arc(ob.x + dx, GROUND - 28, 5, 0, TAU);
+          c.fill();
+        }
+        const near = Math.abs(ob.x - this.pl.x) < 90;
+        if (near) {
+          c.textAlign = "center";
+          c.font = '700 9px "Space Grotesk", sans-serif';
+          c.fillStyle = "rgba(251,191,36,0.85)";
+          c.fillText("[W] JUMP", ob.x, GROUND - 42);
+        }
+      }
+      // checkpoint marker — the stage's end, not a safe house
+      const cx = this.campaignCheckpointX;
+      const glow = c.createRadialGradient(cx, GROUND - 60, 4, cx, GROUND - 60, 130);
+      glow.addColorStop(0, this.stageDef.fixedCamera ? "rgba(248,113,113,0.28)" : "rgba(74,222,128,0.28)");
+      glow.addColorStop(1, "rgba(0,0,0,0)");
+      c.fillStyle = glow;
+      c.fillRect(cx - 130, GROUND - 190, 260, 260);
+      c.textAlign = "center";
+      c.font = '700 10px "Space Grotesk", sans-serif';
+      c.fillStyle = this.stageDef.fixedCamera ? "rgba(248,113,113,0.85)" : "rgba(74,222,128,0.85)";
+      c.fillText(this.stageDef.fixedCamera ? "TERMINAL DEFENSE" : "CHECKPOINT", cx, GROUND - 118);
+      c.restore();
+    }
+
+    /* --- endless travel: gates + safe house door --- */
+    if (this.phase === "travel" && this.runMode !== "mission") {
       c.save();
       c.translate(-cam, camY);
       for (const g of this.gates) {
@@ -3469,19 +3651,27 @@ export class Engine {
     c.globalAlpha = 1;
   }
 
+  private static readonly GEM_PALETTE: Record<Gem["kind"], [string, string, string, string]> = {
+    xp: ["rgba(167,139,250,0.5)", "rgba(167,139,250,0)", "#c4b5fd", "#ede9fe"],
+    scrap: ["rgba(148,163,184,0.5)", "rgba(148,163,184,0)", "#cbd5e1", "#f1f5f9"],
+    health: ["rgba(74,222,128,0.55)", "rgba(74,222,128,0)", "#4ade80", "#ecfdf5"],
+    ammo: ["rgba(251,191,36,0.55)", "rgba(251,191,36,0)", "#fbbf24", "#fffbeb"],
+  };
+
   private drawGem(g: Gem, t: number) {
     const c = this.ctx;
     const bob = Math.sin(t * 3 + g.t) * 2.5;
     const y = g.rest || g.vy === 0 ? g.y + bob : g.y;
     const s = 3.5 + Math.min(3, g.val);
+    const [glowA, glowB, fill, core] = Engine.GEM_PALETTE[g.kind];
     c.globalCompositeOperation = "lighter";
     const gr = c.createRadialGradient(g.x, y, 0, g.x, y, s * 4);
-    gr.addColorStop(0, "rgba(167,139,250,0.5)");
-    gr.addColorStop(1, "rgba(167,139,250,0)");
+    gr.addColorStop(0, glowA);
+    gr.addColorStop(1, glowB);
     c.fillStyle = gr;
     c.fillRect(g.x - s * 4, y - s * 4, s * 8, s * 8);
     c.globalCompositeOperation = "source-over";
-    c.fillStyle = "#c4b5fd";
+    c.fillStyle = fill;
     c.beginPath();
     c.moveTo(g.x, y - s);
     c.lineTo(g.x + s * 0.8, y);
@@ -3489,7 +3679,7 @@ export class Engine {
     c.lineTo(g.x - s * 0.8, y);
     c.closePath();
     c.fill();
-    c.fillStyle = "#ede9fe";
+    c.fillStyle = core;
     c.beginPath();
     c.moveTo(g.x, y - s * 0.5);
     c.lineTo(g.x + s * 0.35, y);

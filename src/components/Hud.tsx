@@ -320,33 +320,35 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
               {hud.reloading ? "RELOADING…" : hud.ammo === 0 ? "PRESS R" : ""}
             </div>
 
-            {/* suppressor durability */}
-            <div className="mt-1.5 flex items-center gap-2">
-              <span
-                className={`text-[9px] font-bold tracking-[0.15em] ${
-                  hud.suppBroken ? "text-red-400" : "text-white/45"
-                }`}
-              >
-                {hud.suppMax >= 999 ? "INTEGRAL SUPP" : hud.suppBroken ? "SUPP BROKEN" : "SUPP"}
-              </span>
-              {hud.suppMax < 999 && (
-                <>
-                  <div className="h-1 w-16 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
-                    <div
-                      className={`h-full rounded-full ${
-                        hud.suppBroken
-                          ? "bg-red-600"
-                          : hud.supp / hud.suppMax < 0.3
-                            ? "bg-amber-500"
-                            : "bg-emerald-500"
-                      }`}
-                      style={{ width: `${(hud.supp / hud.suppMax) * 100}%` }}
-                    />
-                  </div>
-                  <span className="text-[9px] tabular-nums text-white/40">{hud.supp}</span>
-                </>
-              )}
-            </div>
+            {/* suppressor durability — campaign has no noise/suppressor system */}
+            {!hud.campaignMode && (
+              <div className="mt-1.5 flex items-center gap-2">
+                <span
+                  className={`text-[9px] font-bold tracking-[0.15em] ${
+                    hud.suppBroken ? "text-red-400" : "text-white/45"
+                  }`}
+                >
+                  {hud.suppMax >= 999 ? "INTEGRAL SUPP" : hud.suppBroken ? "SUPP BROKEN" : "SUPP"}
+                </span>
+                {hud.suppMax < 999 && (
+                  <>
+                    <div className="h-1 w-16 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
+                      <div
+                        className={`h-full rounded-full ${
+                          hud.suppBroken
+                            ? "bg-red-600"
+                            : hud.supp / hud.suppMax < 0.3
+                              ? "bg-amber-500"
+                              : "bg-emerald-500"
+                        }`}
+                        style={{ width: `${(hud.supp / hud.suppMax) * 100}%` }}
+                      />
+                    </div>
+                    <span className="text-[9px] tabular-nums text-white/40">{hud.supp}</span>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </div>
         <div className="pointer-events-auto flex gap-2">
@@ -403,38 +405,40 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
 
       {/* right column: fire mode + threat */}
       <div className="absolute bottom-28 right-6 flex flex-col items-end gap-3">
-        {/* THREAT METER */}
-        <div className="w-44 rounded-xl border border-white/10 bg-black/50 px-3 py-2 backdrop-blur-sm">
-          <div className="mb-1 flex items-center justify-between">
-            <span className="flex items-center gap-1 text-[9px] font-bold tracking-[0.2em] text-white/55">
-              <Ear className="h-3 w-3" /> NOISE
-            </span>
-            <span
-              className={`text-[9px] font-bold tracking-widest ${
-                hud.threat > 0.75 ? "text-red-400 animate-pulse" : "text-white/40"
-              }`}
-            >
-              {hud.threat > 0.75 ? "DETECTED" : hud.threat > 0.4 ? "HEARD" : "QUIET"}
-            </span>
+        {/* THREAT METER — campaign has no noise/suppressor system */}
+        {!hud.campaignMode && (
+          <div className="w-44 rounded-xl border border-white/10 bg-black/50 px-3 py-2 backdrop-blur-sm">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="flex items-center gap-1 text-[9px] font-bold tracking-[0.2em] text-white/55">
+                <Ear className="h-3 w-3" /> NOISE
+              </span>
+              <span
+                className={`text-[9px] font-bold tracking-widest ${
+                  hud.threat > 0.75 ? "text-red-400 animate-pulse" : "text-white/40"
+                }`}
+              >
+                {hud.threat > 0.75 ? "DETECTED" : hud.threat > 0.4 ? "HEARD" : "QUIET"}
+              </span>
+            </div>
+            <div className="relative h-2 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
+              <div
+                className={`h-full rounded-full transition-[width] duration-150 ${
+                  hud.threat > 0.75
+                    ? "bg-gradient-to-r from-red-600 to-red-400"
+                    : hud.threat > 0.4
+                      ? "bg-gradient-to-r from-amber-600 to-amber-400"
+                      : "bg-gradient-to-r from-emerald-700 to-emerald-500"
+                }`}
+                style={{ width: `${hud.threat * 100}%` }}
+              />
+              {/* LOOT LOCK tick — bypass/quiet-kill windows close past this threat */}
+              <div className="absolute inset-y-0 w-px bg-white/50" style={{ left: "35%" }} />
+            </div>
+            <div className="relative mt-0.5 h-2.5 text-[7px] font-bold tracking-widest text-white/35">
+              <span className="absolute -translate-x-1/2" style={{ left: "35%" }}>LOOT LOCK</span>
+            </div>
           </div>
-          <div className="relative h-2 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
-            <div
-              className={`h-full rounded-full transition-[width] duration-150 ${
-                hud.threat > 0.75
-                  ? "bg-gradient-to-r from-red-600 to-red-400"
-                  : hud.threat > 0.4
-                    ? "bg-gradient-to-r from-amber-600 to-amber-400"
-                    : "bg-gradient-to-r from-emerald-700 to-emerald-500"
-              }`}
-              style={{ width: `${hud.threat * 100}%` }}
-            />
-            {/* LOOT LOCK tick — bypass/quiet-kill windows close past this threat */}
-            <div className="absolute inset-y-0 w-px bg-white/50" style={{ left: "35%" }} />
-          </div>
-          <div className="relative mt-0.5 h-2.5 text-[7px] font-bold tracking-widest text-white/35">
-            <span className="absolute -translate-x-1/2" style={{ left: "35%" }}>LOOT LOCK</span>
-          </div>
-        </div>
+        )}
 
         {/* FIRE MODE TOGGLE */}
         <button

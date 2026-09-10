@@ -12,13 +12,14 @@ import SafeHouseOverlay from "./components/SafeHouseOverlay";
 import RepairPanel from "./components/RepairPanel";
 import TouchControls from "./components/TouchControls";
 import HideoutTerminal from "./components/HideoutTerminal";
+import Prologue from "./components/Prologue";
 import { isTouchCapable } from "./game/input";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Engine | null>(null);
 
-  const [screen, setScreen] = useState<"menu" | "hideout" | "game">("menu");
+  const [screen, setScreen] = useState<"menu" | "prologue" | "hideout" | "game">("menu");
   const [showTerminal, setShowTerminal] = useState(false);
   const [hud, setHud] = useState<HudState | null>(null);
   const [choices, setChoices] = useState<UpgradeChoice[] | null>(null);
@@ -113,6 +114,10 @@ export default function App() {
   }, []);
   // Restart (from pause/game-over/mission-win) replays whichever mode was last started.
   const restart = useCallback(() => start(lastModeRef.current), [start]);
+
+  // Menu's "ENTER HIDEOUT" shows the story prologue first — the actual room
+  // (and the engine's enterHideout() call) only happens once that's dismissed.
+  const goToPrologue = useCallback(() => setScreen("prologue"), []);
 
   // Campaign's real entry point — a walkable room, not a menu overlay.
   const enterHideout = useCallback(() => {
@@ -282,13 +287,15 @@ export default function App() {
 
         {screen === "menu" && (
           <Menu
-            onEnterHideout={enterHideout}
+            onEnterHideout={goToPrologue}
             onEndless={() => start("endless")}
             high={hud?.high ?? 0}
             muted={hud?.muted ?? false}
             onMute={toggleMute}
           />
         )}
+
+        {screen === "prologue" && <Prologue onContinue={enterHideout} />}
 
         {showTerminal && inv && (
           <HideoutTerminal

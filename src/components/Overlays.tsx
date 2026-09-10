@@ -68,7 +68,7 @@ export function Menu({
 
       <div className="anim-rise mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-[10px] font-semibold tracking-wider text-white/40" style={{ animationDelay: "260ms" }}>
         <span className="flex items-center gap-1.5"><span className="kbd">A</span><span className="kbd">D</span> MOVE · PIVOT LANE</span>
-        <span className="flex items-center gap-1.5"><span className="kbd">W</span> DOUBLE JUMP</span>
+        <span className="flex items-center gap-1.5"><span className="kbd">W</span> JUMP</span>
         <span className="flex items-center gap-1.5"><span className="kbd">SHIFT</span> DASH</span>
         <span className="flex items-center gap-1.5"><span className="kbd">1</span>-<span className="kbd">4</span> WEAPON CLASS</span>
         <span className="flex items-center gap-1.5"><span className="kbd">R</span> RELOAD</span>
