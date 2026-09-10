@@ -6,7 +6,7 @@
 - **Completed plan (Phases 0–7):** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
 - **Design doc driving Phases 8+:** `enhancement-1.md` (repo root, on `main`)
-- **Last updated:** 2026-09-09 (Phases 8-12 done — the Act I vertical slice is complete)
+- **Last updated:** 2026-09-10 (Phases 8-12 done; Phases 13-15 planned after user testing feedback)
 
 ---
 
@@ -16,7 +16,37 @@ Converting an endless wave shooter into a finite, mission-based tactical survivo
 
 **Phases 8–12 are a new plan**, driven by `enhancement-1.md`: a narrative/campaign overhaul that replaces the 4-stage mission with **6 Acts × (3 exploration stages + 1 Terminal Defense stage)** under the Aetheris Dynamics / "Redshift" fiction. Scope decision: build the **Act I vertical slice** — the act framework sized to hold all six acts, with Act I fully authored and Acts II–VI present as thin data rows.
 
-**Immediate next action:** none from this plan — Phases 8-12 are all DONE. The Act I vertical slice of `enhancement-1.md` is complete: 24-stage campaign framework, Act I fighting The Neighborhood Watch and the Screamer with 3 readable intel documents, a real Menu with mode selection and an act-select grid, and Acts II-VI present as honest stub data. Building out any of Acts II-VI is a new phase/plan — see "Risks carried into Phases 8–12" for what it needs first (per-act boss art, wider `decorWeights`, and the three doc-described mechanics flagged unbudgeted).
+**Immediate next action:** Phase 13 (Hideout scene + terminal). Phases 8-12 (the Act I vertical slice) are done, but user testing surfaced a real structural gap: the campaign had no real starting point, still leveled up mid-run exactly like endless (contradicting the doc's tactical-survivor framing), and the Menu's look didn't match the Redshift/Aetheris lore. Phases 13-15 below fix that.
+
+## Phases 13-15 — Hideout, campaign loadout, menu redesign (planned 2026-09-10)
+
+User feedback after testing the Phase 8-12 build, resolved via a clarifying round:
+1. Campaign shouldn't level up mid-run like endless — power comes from loadout + found gear only; endless keeps XP/leveling exactly as-is.
+2. The Hideout is a real walkable scene the player roams, not a menu overlay — a computer terminal the player interacts with shows intel collected, weapon loadout, and which act to play.
+3. Menu keeps the name "GRAVEYARD SHIFT" (it already puns on Redshift) but gets a crimson Aetheris-branded redesign, not the current green horror-movie palette.
+4. Scope: fix the structure for what exists (Act I) — Acts II-VI stay clearly-labeled stubs, not built out now.
+
+**Real bug found while scoping this, not by inspection:** `applyUpgrade`'s weapon-unlock cards (`engine.ts:1751`, `this.owned.add(wid)`) are the *only* place a weapon is ever added to `owned` — there is no other unlock path. Stripping leveling from campaign with nothing to replace it would permanently lock the player to the starter pistol for the whole campaign. Phase 14 has to ship a loadout-selection replacement in the same phase leveling is removed, not after.
+
+### Phase 13 — Hideout scene + terminal
+- [ ] New `Engine.mode` value `"hideout"` alongside `"attract"`/`"play"`, with its own minimal update/render pass: player movement/physics only, reusing `drawPlayer`/movement code — no zombies, bullets, waves, or threat system ticking
+- [ ] A small fixed-width interior room + a `Terminal` decor object; proximity (~50px) sets a new `HudState.terminalNear: boolean`, mirroring the existing `crateNear`/`gateBypassNear` prompt idiom exactly
+- [ ] Pressing `E` near the terminal opens a new full-screen `HideoutTerminal.tsx` overlay with 3 tabs: **INTEL** (reuses `docsForAct`/`INTEL_DOCS` from Phase 11 as-is), **LOADOUT** (stubbed this phase, wired in Phase 14), **MISSIONS** (the act-select grid, moved here from the Menu)
+- [ ] Menu's campaign button now calls a new `Engine.enterHideout()` (transitions `mode: "hideout"`) instead of `startGame("mission")` directly; selecting Act I's tile in the Missions tab is what actually calls `startGame("mission")`
+- **Verify:** in-browser — walk the hideout room, confirm the terminal prompt appears/disappears with proximity, `E` opens the overlay, each tab renders, selecting Act I transitions cleanly into real stage-1 gameplay with no leftover hideout state (zombies/queue empty, phase correct)
+
+### Phase 14 — Campaign loadout + remove campaign leveling
+- [ ] Gate `gainXp`/`openLevelModal` off for `runMode === "mission"` at one call site — campaign kills/gems still award score, never XP; no level-up modal, no mid-run weapon unlocks
+- [ ] New persistent `campaignUnlocked: string[]` (separate from the per-run `owned` Set, which still resets on `reset()`) — a small curated starter arsenal so the Loadout tab has real choices from the first run, not just the P365
+- [ ] Loadout tab lets the player pick their equipped weapon from `campaignUnlocked` before starting; the choice feeds `startGame("mission")`'s initial `equipped`/`kind`
+- [ ] `HudState`'s XP/level bar hides during campaign runs (nothing to show — no leveling)
+- [ ] Rebalance and re-verify Act I is still winnable with no mid-run power growth — the existing tuned numbers (Juggernaut kill time, wave difficulty curve) assumed the player was leveling up throughout
+- **Verify:** in-browser — confirm zero XP gain and no level-up modal in a full campaign run; confirm the loadout selection is actually equipped at stage 1; confirm endless mode's leveling is completely unaffected; re-run Act I's boss-kill-time check from Phase 6/9 with the new no-leveling baseline
+
+### Phase 15 — Menu redesign
+- [ ] Restyle the Menu's palette from the current green "THE DEAD DON'T SLEEP" horror-movie treatment to the crimson Aetheris/Redshift branding established in Phase 12's blurb — keep the "GRAVEYARD SHIFT" title
+- [ ] Remove the Phase-12 act-select strip from the Menu (superseded by the Hideout's Missions tab); Menu simplifies to title, blurb, "ENTER HIDEOUT" (campaign), "ENDLESS MODE", best score, controls hint
+- **Verify:** full flow end-to-end in-browser — Menu → Hideout → terminal → Missions tab → Act I → stage clear → safe house → mission complete; separately confirm Endless Mode's direct-start path is unaffected by the Hideout detour
 
 ### Branch state
 
