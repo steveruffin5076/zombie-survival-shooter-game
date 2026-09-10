@@ -13,33 +13,72 @@ export interface StageDef {
   bossId?: string;
   /** fixed-camera arena mode — prep phase, deployables, scrap */
   fixedCamera: boolean;
+  /** act this stage belongs to (1-6) */
+  actId: number;
+  /** 0-3: which stage within the act (0-2 exploration, 3 Terminal Defense) */
+  indexInAct: number;
 }
 
-const WAVES_PER_STAGE = 10;
+import { ACTS } from "./acts";
+
 /** boss waves on the arena stage: wave 5 (small boss), wave 10 (big boss) */
 const ARENA_BOSS_WAVES = [5, 10];
 
-/** The endless cycle: 3 open stages, then a fixed-camera arena stage with a boss.
- * Cycles forever — same content, no ending. */
-export const STAGES: StageDef[] = [
+/** 24-stage campaign: 6 acts × (3 exploration + 1 Terminal Defense).
+ * Derived from ACTS; cycles forever after reaching the end. */
+export const STAGES: StageDef[] = ACTS.flatMap((act, actIndex) => [
+  // 3 exploration stages per act
   {
-    id: 1, name: "THE CEMETERY", sub: "where it all began",
-    wavesPerStage: WAVES_PER_STAGE, bossWaves: [], worldW: 2880, themeId: "cemetery", fixedCamera: false,
+    id: actIndex * 4 + 1,
+    name: act.name,
+    sub: act.sub,
+    wavesPerStage: act.explorationWaves,
+    bossWaves: [],
+    worldW: act.worldW,
+    themeId: act.themeId,
+    fixedCamera: false,
+    actId: act.id,
+    indexInAct: 0,
   },
   {
-    id: 2, name: "RUINED SUBURBS", sub: "nothing left to save",
-    wavesPerStage: WAVES_PER_STAGE, bossWaves: [], worldW: 2880, themeId: "suburbs", fixedCamera: false,
+    id: actIndex * 4 + 2,
+    name: act.name,
+    sub: act.sub,
+    wavesPerStage: act.explorationWaves,
+    bossWaves: [],
+    worldW: act.worldW,
+    themeId: act.themeId,
+    fixedCamera: false,
+    actId: act.id,
+    indexInAct: 1,
   },
   {
-    id: 3, name: "THE HIGHWAY", sub: "keep moving forward",
-    wavesPerStage: WAVES_PER_STAGE, bossWaves: [], worldW: 2880, themeId: "highway", fixedCamera: false,
+    id: actIndex * 4 + 3,
+    name: act.name,
+    sub: act.sub,
+    wavesPerStage: act.explorationWaves,
+    bossWaves: [],
+    worldW: act.worldW,
+    themeId: act.themeId,
+    fixedCamera: false,
+    actId: act.id,
+    indexInAct: 2,
   },
+  // Terminal Defense stage (arena with boss)
   {
-    id: 4, name: "GROUND ZERO", sub: "the end of the night",
-    wavesPerStage: WAVES_PER_STAGE, bossWaves: ARENA_BOSS_WAVES, worldW: 1600, themeId: "arena",
-    bossId: "juggernaut", fixedCamera: true,
+    id: actIndex * 4 + 4,
+    name: act.name,
+    sub: "terminal defense",
+    wavesPerStage: act.defenseWaves,
+    bossWaves: ARENA_BOSS_WAVES,
+    worldW: 1600,
+    themeId: act.arenaThemeId,
+    fixedCamera: true,
+    bossId: act.bossId,
+    actId: act.id,
+    indexInAct: 3,
   },
-];
+]);
 
 /** Resolves the stage definition for a given 1-based stage number — cycles
  * the table forever as a synthetic, repeating stage. */
@@ -56,10 +95,15 @@ export function cumulativeWaveIndex(stageNum: number, inStage: number): number {
 }
 
 /** The difficulty scalar every combat-balance formula reads (spawn count,
- * zombie hp/speed/dmg, boss hp...). Unbounded — endless has no ending to
- * balance toward. */
-export function difficultyFor(stageNum: number, inStage: number): number {
-  return cumulativeWaveIndex(stageNum, inStage);
+ * zombie hp/speed/dmg, boss hp...). Mission mode caps at ~40 by Act VI;
+ * endless keeps its unbounded ramp. */
+export function difficultyFor(stageNum: number, inStage: number, mode: "mission" | "endless" = "mission"): number {
+  if (mode === "endless") return cumulativeWaveIndex(stageNum, inStage);
+
+  // Linear curve: difficulty = waveIndex / 6, capping at 40 at the final wave (240 total)
+  // This means: Act I stage 1 ≈ 1.7, Act VI stage 4 ≈ 40
+  const waveIndex = cumulativeWaveIndex(stageNum, inStage);
+  return Math.min(waveIndex / 6, 40);
 }
 
 /**
