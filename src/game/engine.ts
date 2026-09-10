@@ -250,7 +250,7 @@ export class Engine {
   private stage = 1;
   private waveInStage = 0;       // 1..stageDef.wavesPerStage
   private stageIntermission = false;
-  private phase: "break" | "active" | "travel" | "prep" = "break";
+  private phase: "break" | "active" | "travel" | "prep" | "building" = "break";
   private breakT = 0;
   private spawnT = 0;
   private queue: SpawnItem[] = [];
@@ -276,13 +276,22 @@ export class Engine {
   /** Terminal Defense only — false while walking in, set once the fight is won so
    * the next checkpoint is treated as the exit walk, not a second entry into the arena */
   private campaignArenaCleared = false;
-  /** Exploration stages only — a "building" band along the same corridor (not a
-   * separate world) with calmer combat and the guaranteed intel doc inside it.
-   * buildingStartX === buildingEndX (both 0) means no building this stage. */
-  private buildingStartX = 0;
-  private buildingEndX = 0;
-  /** tracks the building-band crossing edge so the horde-thin/spawn-reset on entry fires once, not every tick */
-  private wasInBuilding = false;
+  /* --- exploration stages only: a small self-contained building along the
+   * corridor, floor by floor, each floor its own tiny fixed-camera room --- */
+  /** outdoor corridor x where the building's entrance sits; 0 means no building this stage */
+  private buildingEntranceX = 0;
+  /** outdoor x to resume walking from once the building is exited */
+  private buildingResumeX = 0;
+  /** the outdoor stage's real worldW, saved while phase === "building" temporarily
+   * narrows this.worldW to the room's width (confines movement/zombies/bullets to it) */
+  private outdoorWorldW = 0;
+  private campaignFloor = 0;
+  private campaignFloorCount = 3;
+  /** which floor (0-indexed) holds the stage's guaranteed intel doc; -1 = already found */
+  private buildingDocFloor = -1;
+  private buildingRoomW = 1100;
+  /** x within the current floor's room where the stairs-up/exit trigger sits */
+  private stairsX = 0;
 
   /* --- inventory: fixed 4x4 backpack, a persistent safe-house stash, loot crates --- */
   private backpack: PlacedItem[] = [];
@@ -531,9 +540,12 @@ export class Engine {
     this.campaignCheckpointX = 0;
     this.campaignSpawnT = 0;
     this.campaignArenaCleared = false;
-    this.buildingStartX = 0;
-    this.buildingEndX = 0;
-    this.wasInBuilding = false;
+    this.buildingEntranceX = 0;
+    this.buildingResumeX = 0;
+    this.outdoorWorldW = 0;
+    this.campaignFloor = 0;
+    this.buildingDocFloor = -1;
+    this.stairsX = 0;
     this.backpack = [];
     this.deposit = [];
     this.intel = 0;
@@ -1001,6 +1013,8 @@ export class Engine {
           );
         }
       }
+    } else if (this.phase === "building") {
+      this.updateBuildingLogic();
     } else {
       // campaign's "travel" is continuous bidirectional combat toward a
       // checkpoint; endless keeps the old gate/hazard corridor to a safe house
@@ -1021,9 +1035,12 @@ export class Engine {
     for (const d of this.decals) d.a -= dt * 0.02;
     this.decals = this.decals.filter((d) => d.a > 0.05);
 
-    // camera — the arena's prep/active phases hold a fixed frame; travel
-    // afterward still follows the player like every other stage
-    if (this.stageDef.fixedCamera && this.phase !== "travel") {
+    // camera — a building floor's room is small enough to show whole, fixed at
+    // 0; the arena's prep/active phases hold a fixed frame too; travel (outdoor
+    // or the walk back out of the arena) still follows the player like any stage
+    if (this.phase === "building") {
+      this.cam = 0;
+    } else if (this.stageDef.fixedCamera && this.phase !== "travel") {
       this.cam = this.camOrigin();
     } else {
       const target = clamp(p.x - W / 2 + Math.cos(p.aim) * 60, 0, this.worldW - W);
@@ -2555,33 +2572,20 @@ export class Engine {
       this.obstacles.push({ x: ox });
       ox += R(420, 650);
     }
-    // exploration stages route through a "building" — a tinted, calmer-combat
-    // band along the same corridor (not a separate world/level) with the
-    // stage's guaranteed intel doc inside it; the Terminal Defense stage skips this
+    // exploration stages route through a small building along the corridor —
+    // a single entrance point; the Terminal Defense stage skips this entirely.
+    // Shrinks its margins to fit a short corridor rather than clamping past the
+    // checkpoint — an entrance placed at/after the checkpoint would never fire
+    // (the checkpoint check runs first), silently skipping the guaranteed intel
+    // doc, which only ever spawns inside the building now
     if (!this.stageDef.fixedCamera) {
-      // shrink to fit when the corridor is short (e.g. stage 1 starts at world-center,
-      // not the left edge, leaving less room than stages 2-3) rather than clamping
-      // into a degenerate near-zero-width range that hugs the checkpoint
       const corridorLen = this.campaignCheckpointX - this.pl.x;
-      const bLen = Math.min(R(750, 950), Math.max(400, corridorLen - 600));
-      const earliestStart = this.pl.x + 300;
-      const latestStart = this.campaignCheckpointX - bLen - 300;
-      this.buildingStartX = latestStart > earliestStart ? R(earliestStart, latestStart) : earliestStart;
-      this.buildingEndX = this.buildingStartX + bLen;
+      const margin = Math.min(400, Math.max(60, corridorLen * 0.25));
+      const earliestX = this.pl.x + margin;
+      const latestX = this.campaignCheckpointX - margin;
+      this.buildingEntranceX = latestX > earliestX ? R(earliestX, latestX) : (this.pl.x + this.campaignCheckpointX) / 2;
     } else {
-      this.buildingStartX = 0;
-      this.buildingEndX = 0;
-    }
-    this.wasInBuilding = false;
-    // one guaranteed intel document per exploration stage — never RNG-gated,
-    // per enhancement-1.md's "found in Stages 1-3" (never the Terminal Defense) —
-    // placed inside the building, since that's where the player is meant to find it
-    if (!this.stageDef.fixedCamera) {
-      const docId = docIdFor(this.stageDef.actId, this.stageDef.indexInAct as 0 | 1 | 2);
-      if (docId && !this.docsFound.includes(docId)) {
-        const dx = R(this.buildingStartX + 60, this.buildingEndX - 60);
-        this.crates.push({ x: dx, y: GROUND, tier: 1, opened: false, docId });
-      }
+      this.buildingEntranceX = 0;
     }
     this.announce(
       !this.stageDef.fixedCamera ? "MOVE OUT" : this.campaignArenaCleared ? "SECTOR SECURE" : "APPROACHING THE TERMINAL",
@@ -2609,29 +2613,110 @@ export class Engine {
       }
     }
 
-    // no discrete waves — zombies keep coming from both sides until the checkpoint,
-    // except inside the building, which is deliberately calmer: sparser and slower
-    const inBuilding = this.buildingStartX < this.buildingEndX && p.x >= this.buildingStartX && p.x <= this.buildingEndX;
-    const cap = inBuilding ? 4 : Math.min(14, 5 + this.power * 0.7);
-    if (inBuilding && !this.wasInBuilding) {
-      // a horde that formed outdoors doesn't cram in with you — thins to the
-      // calmer indoor cap on the way in, keeping whatever's already closest
-      if (this.zombies.length > cap) {
-        this.zombies.sort((a, b) => Math.abs(a.x - p.x) - Math.abs(b.x - p.x));
-        this.zombies.length = cap;
-      }
-      // also don't let a near-zero outdoor spawn timer fire on indoor rules
-      // the instant you cross the threshold — start the calm cadence fresh
-      this.campaignSpawnT = R(1.5, 2.5);
+    // the building is a single trigger point, not a zone — stepping past it
+    // hands off to its own small self-contained floors entirely
+    if (this.buildingEntranceX > 0 && p.x >= this.buildingEntranceX) {
+      this.enterBuilding();
+      return;
     }
-    this.wasInBuilding = inBuilding;
+
+    // no discrete waves — zombies keep coming from both sides until the checkpoint
     this.campaignSpawnT -= dt;
+    const cap = Math.min(14, 5 + this.power * 0.7);
     if (this.campaignSpawnT <= 0 && this.zombies.length < cap) {
-      this.campaignSpawnT = inBuilding ? R(2.5, 4) : Math.max(0.45, 1.5 - this.power * 0.045);
+      this.campaignSpawnT = Math.max(0.45, 1.5 - this.power * 0.045);
       this.spawnZombie({ type: rollEnemy(this.zombieWeights(this.power)) as ZType });
     }
 
     if (p.x >= this.campaignCheckpointX - 26) this.reachCampaignCheckpoint();
+  }
+
+  /** Campaign only — steps off the outdoor corridor into the building's own
+   * small self-contained floors. Real rooms, not a band on the same corridor —
+   * see the Hideout's mode split for the precedent this follows. */
+  private enterBuilding() {
+    this.outdoorWorldW = this.worldW;
+    this.phase = "building";
+    this.campaignFloor = 0;
+    const docId = docIdFor(this.stageDef.actId, this.stageDef.indexInAct as 0 | 1 | 2);
+    this.buildingDocFloor = docId && !this.docsFound.includes(docId) ? RI(0, this.campaignFloorCount - 1) : -1;
+    this.buildingResumeX = this.buildingEntranceX + 80;
+    // one-shot trigger — consume it now so exiting back onto the corridor
+    // (which resumes past this same x) can't immediately re-enter the building
+    this.buildingEntranceX = 0;
+    this.announce("ENTERING THE BUILDING", "clear a path to the stairwell", 2.4);
+    this.generateFloor(0);
+  }
+
+  /** Campaign only — (re)builds the current floor's room: repositions the player
+   * at its entrance, spawns a small fixed set of zombies (calmer than the
+   * outdoor continuous spawner — "scripted", not a wave), and places the
+   * stage's intel doc if this is its designated floor. */
+  private generateFloor(floorIndex: number) {
+    this.worldW = this.buildingRoomW;
+    this.cam = 0;
+    this.pl.x = 60;
+    this.pl.vx = 0;
+    this.zombies = [];
+    this.bullets = [];
+    this.eshots = [];
+    this.gems = [];
+    this.stairsX = this.buildingRoomW - 90;
+    // deliberately gentler than the outdoor scaling: the room is much smaller
+    // than the corridor, so there's proportionally less space to kite in —
+    // the same power-scaled stats that were fine outdoors hit much harder here
+    const count = RI(1, 3);
+    for (let i = 0; i < count; i++) {
+      const type = rollEnemy(this.zombieWeights(this.power)) as ZType;
+      const x = R(280, this.stairsX - 80);
+      const hpMul = 1 + (this.power - 1) * 0.12;
+      const z = this.mkZombie(type, x, hpMul, 0.85);
+      z.face = chance(0.5) ? 1 : -1;
+      this.zombies.push(z);
+    }
+    if (floorIndex === this.buildingDocFloor) {
+      const docId = docIdFor(this.stageDef.actId, this.stageDef.indexInAct as 0 | 1 | 2)!;
+      this.crates.push({ x: this.stairsX - 130, y: GROUND, tier: 1, opened: false, docId });
+    }
+    const isLast = floorIndex === this.campaignFloorCount - 1;
+    this.announce(
+      `FLOOR ${floorIndex + 1}`,
+      isLast ? "clear it and find the exit" : "find the stairwell up",
+      2.2
+    );
+  }
+
+  /** Campaign only — checked every tick while phase === "building": reaching the
+   * stairwell either advances a floor or, on the last one, exits back outdoors. */
+  private updateBuildingLogic() {
+    if (this.pl.x < this.stairsX - 26) return;
+    if (this.campaignFloor + 1 < this.campaignFloorCount) {
+      this.campaignFloor++;
+      this.generateFloor(this.campaignFloor);
+    } else {
+      this.exitBuilding();
+    }
+  }
+
+  /** Campaign only — leaves the building, resuming the outdoor corridor just past
+   * where it was entered, exactly like a fresh stretch of continuous travel. */
+  private exitBuilding() {
+    // the intel doc is guaranteed, never missable — if it's still sitting there
+    // unopened (player rushed past it), grant it now rather than either losing
+    // it or leaving a stray indoor crate stranded at a meaningless outdoor x
+    for (const cr of this.crates) if (!cr.opened && cr.docId) this.openCrate(cr);
+    this.crates = [];
+    this.worldW = this.outdoorWorldW;
+    this.phase = "travel";
+    this.zombies = [];
+    this.bullets = [];
+    this.eshots = [];
+    this.gems = [];
+    this.pl.x = this.buildingResumeX;
+    this.pl.vx = 0;
+    this.cam = clamp(this.pl.x - W / 2, 0, this.worldW - W);
+    this.campaignSpawnT = 1;
+    this.announce("BACK OUTSIDE", "push on to the safe house", 2.4);
   }
 
   /** Campaign only — checkpoint reached: the Terminal Defense stage flips into its
@@ -2809,6 +2894,8 @@ export class Engine {
       waveTotal: this.waveTotal,
       remaining: this.queue.length + this.zombies.length,
       phase: this.phase,
+      floor: this.campaignFloor,
+      floorCount: this.campaignFloorCount,
       travelDistance: this.phase === "travel"
         ? clamp(
             (this.pl.x - this.travelStartX) /
@@ -2902,6 +2989,175 @@ export class Engine {
   }
 
   /** A small crimson-lit basement room with a terminal — the campaign's actual starting point. */
+  /** Shared by the outdoor render and the building floor's — gems/crates/zombies/
+   * player/bullets/grenades/enemy-shots/particles/float-texts, cam-relative. */
+  private drawEntities(cam: number, camY: number, t: number) {
+    const c = this.ctx;
+    c.save();
+    c.translate(-cam, camY);
+    for (const g of this.gems) this.drawGem(g, t);
+    for (const cr of this.crates) if (!cr.opened) this.drawCrate(cr, t);
+    c.restore();
+
+    for (const z of this.zombies) this.drawZombie(z, cam, camY, t);
+    if (this.boss && !this.boss.dead) this.drawBoss(this.boss, cam, camY, t);
+    if (this.mode === "play" && !this.over) this.drawPlayer(cam, camY, t);
+
+    c.save();
+    c.translate(-cam, camY);
+    // bullets (additive tracers)
+    c.globalCompositeOperation = "lighter";
+    for (const b of this.bullets) {
+      c.strokeStyle = b.crit ? "rgba(251,191,36,0.95)" : "rgba(253,230,138,0.85)";
+      c.lineWidth = b.crit ? 3.4 : 2.4;
+      c.beginPath();
+      c.moveTo(b.x - b.vx * 0.016, b.y - b.vy * 0.016);
+      c.lineTo(b.x, b.y);
+      c.stroke();
+      c.fillStyle = "#fff7d6";
+      c.beginPath();
+      c.arc(b.x, b.y, b.crit ? 2.6 : 1.8, 0, TAU);
+      c.fill();
+    }
+    c.globalCompositeOperation = "source-over";
+    // thrown grenades
+    for (const g of this.grenades) {
+      const spin = t * 14;
+      c.save();
+      c.translate(g.x, g.y);
+      c.rotate(spin);
+      c.fillStyle = g.fuse < 0.35 ? (Math.sin(t * 40) > 0 ? "#f87171" : "#7f1d1d") : "#3f6212";
+      c.beginPath();
+      c.arc(0, 0, 4, 0, TAU);
+      c.fill();
+      c.restore();
+    }
+    // enemy shots
+    for (const s of this.eshots) {
+      const gr = c.createRadialGradient(s.x, s.y, 0, s.x, s.y, 12);
+      gr.addColorStop(0, "rgba(190,242,100,0.95)");
+      gr.addColorStop(0.4, "rgba(132,204,22,0.5)");
+      gr.addColorStop(1, "rgba(132,204,22,0)");
+      c.fillStyle = gr;
+      c.fillRect(s.x - 12, s.y - 12, 24, 24);
+      c.fillStyle = "#d9f99d";
+      c.beginPath();
+      c.arc(s.x, s.y, 3.4, 0, TAU);
+      c.fill();
+    }
+    c.restore();
+
+    /* --- particles --- */
+    c.save();
+    c.translate(-cam, camY);
+    let additive = false;
+    for (const q of this.particles) {
+      if (q.add !== additive) {
+        c.globalCompositeOperation = q.add ? "lighter" : "source-over";
+        additive = q.add;
+      }
+      const a = clamp(q.life / q.max, 0, 1);
+      c.globalAlpha = a * (q.add ? 0.8 : 1);
+      c.fillStyle = q.color;
+      c.beginPath();
+      c.arc(q.x, q.y, q.size * (0.5 + 0.5 * a), 0, TAU);
+      c.fill();
+    }
+    c.globalAlpha = 1;
+    c.globalCompositeOperation = "source-over";
+    c.restore();
+
+    /* --- float texts --- */
+    c.save();
+    c.translate(-cam, camY);
+    c.textAlign = "center";
+    for (const ft of this.texts) {
+      const a = clamp(ft.life / ft.max, 0, 1);
+      c.globalAlpha = a;
+      c.font = `700 ${ft.size}px "Space Grotesk", sans-serif`;
+      c.fillStyle = ft.color;
+      c.fillText(ft.text, ft.x, ft.y);
+    }
+    c.restore();
+  }
+
+  /** Campaign only — a small, self-contained combat room for the current floor
+   * of the building entered from the exploration corridor (see enterBuilding()).
+   * this.worldW is temporarily the room's width while phase === "building". */
+  private renderBuildingFloor() {
+    const c = this.ctx;
+    const t = this.tGlobal;
+    const camY = this.shakeY;
+    c.clearRect(0, 0, W, H);
+
+    const sky = c.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, "#0c0e14");
+    sky.addColorStop(0.6, "#15181f");
+    sky.addColorStop(1, "#08090c");
+    c.fillStyle = sky;
+    c.fillRect(0, 0, W, H);
+
+    // back wall
+    c.fillStyle = "#1b1d24";
+    c.fillRect(0, 0, W, GROUND);
+
+    // a window letting the crimson Redshift glow in — the world outside hasn't gone anywhere
+    const winX = this.worldW * 0.32;
+    c.fillStyle = "#0e0f13";
+    this.rr(winX - 60, 90, 120, 160, 4);
+    c.fill();
+    c.globalCompositeOperation = "lighter";
+    const winGlow = c.createRadialGradient(winX, 170, 4, winX, 170, 220);
+    winGlow.addColorStop(0, "rgba(239,68,68,0.22)");
+    winGlow.addColorStop(1, "rgba(239,68,68,0)");
+    c.fillStyle = winGlow;
+    c.fillRect(winX - 220, 40, 440, 340);
+    c.globalCompositeOperation = "source-over";
+    c.strokeStyle = "rgba(0,0,0,0.5)";
+    c.lineWidth = 3;
+    c.beginPath(); c.moveTo(winX, 90); c.lineTo(winX, 250); c.stroke();
+    c.beginPath(); c.moveTo(winX - 60, 170); c.lineTo(winX + 60, 170); c.stroke();
+
+    // panel seams
+    c.strokeStyle = "rgba(255,255,255,0.05)";
+    c.lineWidth = 1;
+    for (let x = 60; x < W; x += 130) {
+      c.beginPath(); c.moveTo(x, 0); c.lineTo(x, GROUND); c.stroke();
+    }
+
+    // floor
+    const floorGrad = c.createLinearGradient(0, GROUND, 0, H);
+    floorGrad.addColorStop(0, "#14161b");
+    floorGrad.addColorStop(1, "#08090b");
+    c.fillStyle = floorGrad;
+    c.fillRect(0, GROUND, W, H - GROUND);
+
+    // stairwell up, or the exit door on the last floor
+    const isLast = this.campaignFloor === this.campaignFloorCount - 1;
+    c.fillStyle = "#241512";
+    this.rr(this.stairsX - 30, GROUND - 96, 60, 96, 4);
+    c.fill();
+    c.globalCompositeOperation = "lighter";
+    const doorGlow = c.createRadialGradient(this.stairsX, GROUND - 60, 4, this.stairsX, GROUND - 60, 100);
+    doorGlow.addColorStop(0, isLast ? "rgba(74,222,128,0.4)" : "rgba(217,119,6,0.4)");
+    doorGlow.addColorStop(1, "rgba(0,0,0,0)");
+    c.fillStyle = doorGlow;
+    c.fillRect(this.stairsX - 100, GROUND - 160, 200, 160);
+    c.globalCompositeOperation = "source-over";
+    c.textAlign = "center";
+    c.font = '700 10px "Space Grotesk", sans-serif';
+    c.fillStyle = isLast ? "rgba(74,222,128,0.85)" : "rgba(217,119,6,0.85)";
+    c.fillText(isLast ? "EXIT" : "STAIRS UP", this.stairsX, GROUND - 108);
+
+    // floor header
+    c.textAlign = "center";
+    c.font = '700 14px "Space Grotesk", sans-serif';
+    c.fillStyle = "rgba(255,255,255,0.5)";
+    c.fillText(`FLOOR ${this.campaignFloor + 1} / ${this.campaignFloorCount}`, this.worldW / 2, 40);
+
+    this.drawEntities(0, camY, t);
+  }
+
   private renderHideout() {
     const c = this.ctx;
     const t = this.tGlobal;
@@ -2971,6 +3227,7 @@ export class Engine {
 
   private render() {
     if (this.mode === "hideout") { this.renderHideout(); return; }
+    if (this.phase === "building") { this.renderBuildingFloor(); return; }
     const c = this.ctx;
     const t = this.tGlobal;
     const cam = this.cam + this.shakeX;
@@ -3103,24 +3360,24 @@ export class Engine {
           c.fillText("[W] JUMP", ob.x, GROUND - 42);
         }
       }
-      // building interior — a tinted band with floor signage along the same
-      // corridor, not a separate world; see startCampaignTravel()'s comment
-      if (this.buildingStartX < this.buildingEndX && this.buildingEndX > cam - 80 && this.buildingStartX < cam + W + 80) {
-        const bx0 = this.buildingStartX, bx1 = this.buildingEndX;
-        c.fillStyle = "rgba(8,6,10,0.45)";
-        c.fillRect(bx0, 0, bx1 - bx0, H);
-        c.fillStyle = "rgba(120,113,108,0.5)";
-        c.fillRect(bx0 - 6, 0, 6, H);
-        c.fillRect(bx1, 0, 6, H);
+      // building entrance — a single doorway trigger, not a zone; stepping
+      // past it hands off entirely to renderBuildingFloor()'s own small rooms
+      if (this.buildingEntranceX > 0 && this.buildingEntranceX > cam - 80 && this.buildingEntranceX < cam + W + 80) {
+        const ex = this.buildingEntranceX;
+        c.fillStyle = "#241512";
+        this.rr(ex - 34, GROUND - 96, 68, 96, 4);
+        c.fill();
+        c.globalCompositeOperation = "lighter";
+        const doorGlow = c.createRadialGradient(ex, GROUND - 60, 4, ex, GROUND - 60, 100);
+        doorGlow.addColorStop(0, "rgba(217,119,6,0.35)");
+        doorGlow.addColorStop(1, "rgba(217,119,6,0)");
+        c.fillStyle = doorGlow;
+        c.fillRect(ex - 100, GROUND - 160, 200, 160);
+        c.globalCompositeOperation = "source-over";
         c.textAlign = "center";
         c.font = '700 10px "Space Grotesk", sans-serif';
-        c.fillStyle = "rgba(217,119,6,0.75)";
-        const floors = 3;
-        for (let i = 0; i < floors; i++) {
-          const fx = bx0 + ((i + 0.5) * (bx1 - bx0)) / floors;
-          if (fx < cam - 40 || fx > cam + W + 40) continue;
-          c.fillText(`FLOOR ${i + 1}`, fx, 40);
-        }
+        c.fillStyle = "rgba(217,119,6,0.85)";
+        c.fillText("BUILDING AHEAD", ex, GROUND - 108);
       }
 
       // checkpoint marker — the stage's end, not a safe house
@@ -3233,92 +3490,7 @@ export class Engine {
     }
 
     /* --- gems / crates / zombies / player / projectiles --- */
-    c.save();
-    c.translate(-cam, camY);
-    for (const g of this.gems) this.drawGem(g, t);
-    for (const cr of this.crates) if (!cr.opened) this.drawCrate(cr, t);
-    c.restore();
-
-    for (const z of this.zombies) this.drawZombie(z, cam, camY, t);
-    if (this.boss && !this.boss.dead) this.drawBoss(this.boss, cam, camY, t);
-    if (this.mode === "play" && !this.over) this.drawPlayer(cam, camY, t);
-
-    c.save();
-    c.translate(-cam, camY);
-    // bullets (additive tracers)
-    c.globalCompositeOperation = "lighter";
-    for (const b of this.bullets) {
-      c.strokeStyle = b.crit ? "rgba(251,191,36,0.95)" : "rgba(253,230,138,0.85)";
-      c.lineWidth = b.crit ? 3.4 : 2.4;
-      c.beginPath();
-      c.moveTo(b.x - b.vx * 0.016, b.y - b.vy * 0.016);
-      c.lineTo(b.x, b.y);
-      c.stroke();
-      c.fillStyle = "#fff7d6";
-      c.beginPath();
-      c.arc(b.x, b.y, b.crit ? 2.6 : 1.8, 0, TAU);
-      c.fill();
-    }
-    c.globalCompositeOperation = "source-over";
-    // thrown grenades
-    for (const g of this.grenades) {
-      const spin = t * 14;
-      c.save();
-      c.translate(g.x, g.y);
-      c.rotate(spin);
-      c.fillStyle = g.fuse < 0.35 ? (Math.sin(t * 40) > 0 ? "#f87171" : "#7f1d1d") : "#3f6212";
-      c.beginPath();
-      c.arc(0, 0, 4, 0, TAU);
-      c.fill();
-      c.restore();
-    }
-    // enemy shots
-    for (const s of this.eshots) {
-      const gr = c.createRadialGradient(s.x, s.y, 0, s.x, s.y, 12);
-      gr.addColorStop(0, "rgba(190,242,100,0.95)");
-      gr.addColorStop(0.4, "rgba(132,204,22,0.5)");
-      gr.addColorStop(1, "rgba(132,204,22,0)");
-      c.fillStyle = gr;
-      c.fillRect(s.x - 12, s.y - 12, 24, 24);
-      c.fillStyle = "#d9f99d";
-      c.beginPath();
-      c.arc(s.x, s.y, 3.4, 0, TAU);
-      c.fill();
-    }
-    c.restore();
-
-    /* --- particles --- */
-    c.save();
-    c.translate(-cam, camY);
-    let additive = false;
-    for (const q of this.particles) {
-      if (q.add !== additive) {
-        c.globalCompositeOperation = q.add ? "lighter" : "source-over";
-        additive = q.add;
-      }
-      const a = clamp(q.life / q.max, 0, 1);
-      c.globalAlpha = a * (q.add ? 0.8 : 1);
-      c.fillStyle = q.color;
-      c.beginPath();
-      c.arc(q.x, q.y, q.size * (0.5 + 0.5 * a), 0, TAU);
-      c.fill();
-    }
-    c.globalAlpha = 1;
-    c.globalCompositeOperation = "source-over";
-    c.restore();
-
-    /* --- float texts --- */
-    c.save();
-    c.translate(-cam, camY);
-    c.textAlign = "center";
-    for (const ft of this.texts) {
-      const a = clamp(ft.life / ft.max, 0, 1);
-      c.globalAlpha = a;
-      c.font = `700 ${ft.size}px "Space Grotesk", sans-serif`;
-      c.fillStyle = ft.color;
-      c.fillText(ft.text, ft.x, ft.y);
-    }
-    c.restore();
+    this.drawEntities(cam, camY, t);
 
     /* --- foreground fog wisps --- */
     for (let i = 0; i < 2; i++) {

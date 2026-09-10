@@ -33,7 +33,10 @@ export interface HudState {
   isBossWave: boolean;
   remaining: number;
   waveTotal: number;
-  phase: "break" | "active" | "travel" | "prep";
+  phase: "break" | "active" | "travel" | "prep" | "building";
+  /** campaign only — the building's current floor and total, while phase === "building" */
+  floor: number;
+  floorCount: number;
   /** 0..1 progress from where travel started to the safe house door */
   travelDistance: number;
   travelGatesTotal: number;

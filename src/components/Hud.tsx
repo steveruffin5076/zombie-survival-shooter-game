@@ -128,6 +128,15 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
               })}
             </div>
           </>
+        ) : hud.phase === "building" ? (
+          <>
+            <div className="font-display text-2xl tracking-[0.18em] text-amber-300 drop-shadow-[0_0_14px_rgba(245,158,11,0.45)]">
+              FLOOR {hud.floor + 1} / {hud.floorCount}
+            </div>
+            <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[11px] font-semibold tracking-widest text-white/55">
+              clear it, find the {hud.floor + 1 >= hud.floorCount ? "exit" : "stairs up"}
+            </div>
+          </>
         ) : hud.phase === "travel" ? (
           <>
             <div className="font-display text-2xl tracking-[0.18em] text-cyan-300 drop-shadow-[0_0_14px_rgba(103,232,249,0.45)]">
@@ -140,8 +149,14 @@ export default function Hud({ hud, onMute, onPause, onSwitch, onFireMode, onSele
               />
             </div>
             <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[11px] font-semibold tracking-widest text-white/55">
-              <DoorOpen className="h-3.5 w-3.5" />
-              {hud.travelGatesOpened}/{hud.travelGatesTotal} GATES · SAFE HOUSE AHEAD
+              {hud.campaignMode ? (
+                "PUSH ON — CHECKPOINT AHEAD"
+              ) : (
+                <>
+                  <DoorOpen className="h-3.5 w-3.5" />
+                  {hud.travelGatesOpened}/{hud.travelGatesTotal} GATES · SAFE HOUSE AHEAD
+                </>
+              )}
             </div>
           </>
         ) : (
