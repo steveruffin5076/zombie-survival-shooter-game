@@ -44,38 +44,38 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
   // panel here is pointer-events-none, so touch input elsewhere still
   // reaches TouchControls.
   return (
-    <div className="pointer-events-none absolute inset-0 z-40 p-6 font-sans">
+    <div className="pointer-events-none absolute inset-0 z-40 p-3 font-sans md:p-6">
       {/* top-left: vitals */}
-      <div className="absolute left-6 top-6 flex flex-col gap-2.5">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-black/50 backdrop-blur-sm">
-            <Heart className={`h-4.5 w-4.5 ${hpPct > 0.25 ? "text-red-400" : "text-red-500 animate-pulse"}`} fill="currentColor" />
+      <div className="absolute left-3 top-3 flex flex-col gap-1.5 md:left-6 md:top-6 md:gap-2.5">
+        <div className="flex items-center gap-2 md:gap-3">
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-black/50 backdrop-blur-sm md:h-9 md:w-9">
+            <Heart className={`h-3 w-3 md:h-4.5 md:w-4.5 ${hpPct > 0.25 ? "text-red-400" : "text-red-500 animate-pulse"}`} fill="currentColor" />
           </div>
           <div>
-            <div className="h-3.5 w-56 overflow-hidden rounded-full border border-white/10 bg-black/60">
+            <div className="h-2 w-40 overflow-hidden rounded-full border border-white/10 bg-black/60 md:h-3.5 md:w-56">
               <div
                 className={`h-full rounded-full bg-gradient-to-r ${hpColor} transition-[width] duration-200`}
                 style={{ width: `${hpPct * 100}%` }}
               />
             </div>
-            <div className="mt-1 text-[10px] font-semibold tracking-widest text-white/50">
+            <div className="mt-0.5 text-[8px] font-semibold tracking-widest text-white/50 md:mt-1 md:text-[10px]">
               {hud.hp} / {hud.maxHp}
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-violet-400/25 bg-black/50 text-[10px] font-bold text-violet-300 backdrop-blur-sm">
+        <div className="flex items-center gap-2 md:gap-3">
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-violet-400/25 bg-black/50 text-[8px] font-bold text-violet-300 backdrop-blur-sm md:h-9 md:w-9 md:text-[10px]">
             {hud.level}
           </div>
           <div>
-            <div className="h-2 w-56 overflow-hidden rounded-full border border-white/10 bg-black/60">
+            <div className="h-1.5 w-40 overflow-hidden rounded-full border border-white/10 bg-black/60 md:h-2 md:w-56">
               <div
                 className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-400 transition-[width] duration-200"
                 style={{ width: `${xpPct * 100}%` }}
               />
             </div>
-            <div className="mt-1 text-[10px] font-semibold tracking-widest text-white/50">
+            <div className="mt-0.5 text-[7px] font-semibold tracking-widest text-white/50 md:mt-1 md:text-[10px]">
               LEVEL {hud.level}
             </div>
           </div>
@@ -229,58 +229,58 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
       )}
 
       {/* top-right: score + controls */}
-      <div className="absolute right-6 top-6 flex items-start gap-4">
+      <div className="absolute right-3 top-3 flex items-start gap-2 md:right-6 md:top-6 md:gap-4">
         <div className="text-right">
-          <div className="font-display text-3xl leading-none tracking-wider text-zinc-100 tabular-nums">
+          <div className="font-display text-2xl leading-none tracking-wider text-zinc-100 tabular-nums md:text-3xl">
             {hud.score.toLocaleString()}
           </div>
-          <div className="mt-1.5 flex items-center justify-end gap-3 text-[11px] font-semibold tracking-widest text-white/50">
-            <span className="flex items-center gap-1">
-              <Skull className="h-3.5 w-3.5" /> {hud.kills}
+          <div className="mt-0.5 flex items-center justify-end gap-1.5 text-[8px] font-semibold tracking-widest text-white/50 md:mt-1.5 md:gap-3 md:text-[11px]">
+            <span className="flex items-center gap-0.5 md:gap-1">
+              <Skull className="h-2.5 w-2.5 md:h-3.5 md:w-3.5" /> {hud.kills}
             </span>
-            <span className="flex items-center gap-1">
-              <Trophy className="h-3.5 w-3.5 text-amber-400/80" /> {hud.high.toLocaleString()}
+            <span className="hidden gap-0.5 md:flex md:gap-1">
+              <Trophy className="h-2.5 w-2.5 text-amber-400/80 md:h-3.5 md:w-3.5" /> {hud.high.toLocaleString()}
             </span>
             {hud.arena && (
-              <span className="flex items-center gap-1 text-slate-300">
-                <Gem className="h-3.5 w-3.5 text-slate-400" /> {hud.scrap}
+              <span className="hidden gap-0.5 text-slate-300 md:flex md:gap-1">
+                <Gem className="h-2.5 w-2.5 text-slate-400 md:h-3.5 md:w-3.5" /> {hud.scrap}
               </span>
             )}
           </div>
         </div>
-        <div className="pointer-events-auto flex flex-col gap-2">
+        <div className="pointer-events-auto flex flex-col gap-1 md:gap-2">
           <button
             onClick={onPause}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white"
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white md:h-9 md:w-9"
             aria-label="Pause"
           >
-            <Pause className="h-4 w-4" />
+            <Pause className="h-3 w-3 md:h-4 md:w-4" />
           </button>
           <button
             onClick={onMute}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white"
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white md:h-9 md:w-9"
             aria-label="Mute"
           >
-            {hud.muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+            {hud.muted ? <VolumeX className="h-3 w-3 md:h-4 md:w-4" /> : <Volume2 className="h-3 w-3 md:h-4 md:w-4" />}
           </button>
         </div>
       </div>
 
       {/* bottom-left: weapon inventory + ammo */}
-      <div className="absolute bottom-6 left-6">
-        <div className="mb-2 flex items-end gap-3">
+      <div className="absolute bottom-3 left-3 md:bottom-6 md:left-6">
+        <div className="mb-1 flex items-end gap-2 md:mb-2 md:gap-3">
           <div>
-            <div className="flex items-center gap-2 text-[11px] font-bold tracking-[0.2em] text-amber-300">
-              <Crosshair className="h-4 w-4" />
+            <div className="flex items-center gap-1 text-[8px] font-bold tracking-[0.2em] text-amber-300 md:gap-2 md:text-[11px]">
+              <Crosshair className="h-3 w-3 md:h-4 md:w-4" />
               {hud.weapon.toUpperCase()}
-              <span className="rounded bg-white/10 px-1.5 py-0.5 text-[8px] tracking-[0.15em] text-white/55">
+              <span className="rounded bg-white/10 px-1 py-0.5 text-[6px] tracking-[0.15em] text-white/55 md:px-1.5 md:text-[8px]">
                 {hud.weaponRole}
               </span>
             </div>
             {/* big ammo readout */}
-            <div className="mt-1 flex items-baseline gap-1.5 font-display tabular-nums leading-none">
+            <div className="mt-0.5 flex items-baseline gap-1 font-display tabular-nums leading-none md:mt-1 md:gap-1.5">
               <span
-                className={`text-4xl tracking-wider transition-colors ${
+                className={`text-2xl tracking-wider transition-colors md:text-4xl ${
                   hud.reloading
                     ? "text-amber-400"
                     : hud.ammo === 0
@@ -292,9 +292,9 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
               >
                 {String(hud.ammo).padStart(2, "0")}
               </span>
-              <span className="text-lg text-white/35">/ {hud.mag}</span>
+              <span className="text-sm text-white/35 md:text-lg">/ {hud.mag}</span>
               <span
-                className={`ml-1 text-xs font-semibold ${
+                className={`ml-0.5 text-[10px] font-semibold md:ml-1 md:text-xs ${
                   hud.reserve < 0
                     ? "text-emerald-400"
                     : hud.reserve === 0
@@ -306,7 +306,7 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
               </span>
             </div>
             {/* reload progress / ammo bar */}
-            <div className="mt-1.5 h-1.5 w-40 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
+            <div className="mt-1 h-1 w-32 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10 md:mt-1.5 md:h-1.5 md:w-40">
               {hud.reloading ? (
                 <div
                   className="h-full rounded-full bg-gradient-to-r from-amber-500 to-yellow-300 transition-[width] duration-75"
@@ -321,18 +321,18 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
                 />
               )}
             </div>
-            <div className="mt-1 h-3 text-[9px] font-bold tracking-[0.25em] text-amber-400/80">
+            <div className="mt-0.5 h-2 text-[7px] font-bold tracking-[0.25em] text-amber-400/80 md:mt-1 md:h-3 md:text-[9px]">
               {hud.reloading ? "RELOADING…" : hud.ammo === 0 ? "PRESS R" : ""}
             </div>
           </div>
         </div>
-        <div className="pointer-events-auto flex gap-2">
+        <div className="pointer-events-auto flex gap-1 md:gap-2">
           {hud.weapons.map((w) => (
             <button
               key={w.cls}
               onClick={() => w.owned && onSwitch(w.cls)}
               disabled={!w.owned}
-              className={`relative flex h-16 w-[4.2rem] flex-col items-center justify-center rounded-lg border transition-all duration-150 ${
+              className={`relative flex h-12 w-14 flex-col items-center justify-center rounded-lg border text-[8px] transition-all duration-150 md:h-16 md:w-[4.2rem] md:text-[9px] ${
                 w.active
                   ? "border-amber-400/70 bg-amber-400/15 shadow-[0_0_20px_rgba(245,158,11,0.3)]"
                   : w.owned
@@ -340,15 +340,15 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
                     : "border-white/5 bg-black/40 opacity-35"
               }`}
             >
-              <span className={`absolute left-1 top-0.5 text-[9px] font-bold ${w.active ? "text-amber-300" : "text-white/35"}`}>
+              <span className={`absolute left-0.5 top-0 text-[7px] font-bold md:left-1 md:top-0.5 ${w.active ? "text-amber-300" : "text-white/35"}`}>
                 {w.key}
               </span>
               {w.owned ? (
                 <>
-                  <span className="text-[7px] font-bold tracking-[0.15em] text-white/35">
+                  <span className="text-[6px] font-bold tracking-[0.15em] text-white/35 md:text-[7px]">
                     {w.label}
                   </span>
-                  <span className={`text-[9px] font-bold tracking-wide ${w.active ? "text-amber-200" : "text-zinc-300"}`}>
+                  <span className={`text-[7px] font-bold tracking-wide md:text-[9px] ${w.active ? "text-amber-200" : "text-zinc-300"}`}>
                     {w.short}
                   </span>
                   <span
@@ -379,7 +379,7 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
       </div>
 
       {/* right column: consumable slots + fire mode */}
-      <div className="absolute bottom-28 right-6 flex flex-col items-end gap-3">
+      <div className="absolute bottom-16 right-3 flex flex-col items-end gap-1.5 md:bottom-28 md:right-6 md:gap-3">
         {/* CONSUMABLE SLOTS — hidden on mobile, visible on desktop */}
         <div className="pointer-events-auto hidden gap-2 md:flex w-44 justify-end">
           {CONSUMABLE_ITEMS.map((id) => {
@@ -410,46 +410,46 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
         {/* FIRE MODE TOGGLE */}
         <button
           onClick={onFireMode}
-          className={`pointer-events-auto flex w-44 items-center gap-2.5 rounded-xl border px-3 py-2.5 backdrop-blur-sm transition-all active:scale-[0.97] ${
+          className={`pointer-events-auto flex w-40 items-center gap-1.5 rounded-xl border px-2 py-1.5 text-[9px] backdrop-blur-sm transition-all active:scale-[0.97] md:w-44 md:gap-2.5 md:px-3 md:py-2.5 md:text-[11px] ${
             hud.autoFire
               ? "border-emerald-400/50 bg-emerald-500/10 hover:bg-emerald-500/20"
               : "border-amber-400/50 bg-amber-500/10 hover:bg-amber-500/20"
           }`}
         >
           {hud.autoFire ? (
-            <Bot className="h-5 w-5 text-emerald-300" />
+            <Bot className="h-4 w-4 md:h-5 md:w-5 text-emerald-300" />
           ) : (
-            <Hand className="h-5 w-5 text-amber-300" />
+            <Hand className="h-4 w-4 md:h-5 md:w-5 text-amber-300" />
           )}
           <div className="text-left">
             <div
-              className={`text-[11px] font-bold tracking-[0.14em] ${
+              className={`hidden font-bold tracking-[0.14em] md:block ${
                 hud.autoFire ? "text-emerald-200" : "text-amber-200"
               }`}
             >
               {hud.autoFire ? "AUTO-FIRE" : "MANUAL"}
             </div>
-            <div className="text-[8px] tracking-[0.12em] text-white/40">
-              {hud.autoFire ? "FIRES ON LASER CONTACT" : "CLICK TO SHOOT"}
+            <div className="text-[7px] tracking-[0.12em] text-white/40 md:text-[8px]">
+              {hud.autoFire ? "FIRES ON LASER" : "CLICK TO SHOOT"}
             </div>
           </div>
-          <span className="kbd ml-auto text-[8px]">F</span>
+          <span className="kbd ml-auto text-[7px] md:text-[8px]">F</span>
         </button>
       </div>
 
       {/* bottom-right: dash */}
-      <div className="absolute bottom-6 right-6">
+      <div className="absolute bottom-3 right-3 md:bottom-6 md:right-6">
         <div
-          className={`flex items-center gap-3 rounded-xl border px-4 py-2.5 backdrop-blur-sm transition-colors ${
+          className={`flex items-center gap-2 rounded-xl border px-2 py-1.5 text-[8px] backdrop-blur-sm transition-colors md:gap-3 md:px-4 md:py-2.5 md:text-[10px] ${
             dashPct >= 1 ? "border-cyan-300/30 bg-cyan-950/40" : "border-white/10 bg-black/50"
           }`}
         >
-          <Zap className={`h-5 w-5 ${dashPct >= 1 ? "text-cyan-300" : "text-white/30"}`} />
+          <Zap className={`h-4 w-4 md:h-5 md:w-5 ${dashPct >= 1 ? "text-cyan-300" : "text-white/30"}`} />
           <div>
-            <div className={`text-[10px] font-bold tracking-[0.2em] ${dashPct >= 1 ? "text-cyan-200" : "text-white/40"}`}>
+            <div className={`font-bold tracking-[0.2em] ${dashPct >= 1 ? "text-cyan-200" : "text-white/40"}`}>
               {dashPct >= 1 ? "DASH READY" : "DASH"}
             </div>
-            <div className="mt-1 h-1.5 w-24 overflow-hidden rounded-full bg-white/10">
+            <div className="mt-0.5 h-1 w-16 overflow-hidden rounded-full bg-white/10 md:mt-1 md:h-1.5 md:w-24">
               <div
                 className={`h-full rounded-full ${dashPct >= 1 ? "bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.8)]" : "bg-white/40"}`}
                 style={{ width: `${dashPct * 100}%` }}
@@ -461,13 +461,13 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
 
       {/* bottom-center: crate interact prompt */}
       {hud.crateNear && (
-        <div className="absolute bottom-40 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
-          <div className="flex items-center gap-2 rounded-full border border-white/15 bg-black/60 px-4 py-1.5 text-[11px] font-bold tracking-[0.15em] backdrop-blur-sm text-zinc-200">
+        <div className="absolute bottom-32 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1 md:bottom-40 md:gap-1.5">
+          <div className="flex items-center gap-1 rounded-full border border-white/15 bg-black/60 px-2 py-1 text-[8px] font-bold tracking-[0.15em] backdrop-blur-sm text-zinc-200 md:gap-2 md:px-4 md:py-1.5 md:text-[11px]">
             <span className="kbd">E</span> HOLD TO OPEN
             <span className="text-white/40">· TIER {hud.crateTier}</span>
           </div>
           {hud.crateOpenPct > 0 && (
-            <div className="h-1 w-32 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
+            <div className="h-0.5 w-24 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10 md:h-1 md:w-32">
               <div
                 className="h-full rounded-full bg-amber-400 transition-[width] duration-75"
                 style={{ width: `${hud.crateOpenPct * 100}%` }}
