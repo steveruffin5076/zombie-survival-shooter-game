@@ -322,6 +322,7 @@ export default function App() {
             next={stageClear.next}
             actId={hud.actId}
             inv={inv}
+            campaignMode={hud.campaignMode}
             onMove={moveBackpackItem}
             onDepositAll={depositAll}
             onContinue={confirmSafeHouse}

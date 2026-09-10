@@ -9,13 +9,14 @@ interface Props {
   next: number;
   actId: number;
   inv: InventorySnapshot;
+  campaignMode: boolean;
   onMove: (id: string, x: number, y: number) => boolean;
   onDepositAll: () => void;
   onContinue: () => void;
 }
 
 /** Shown after StageClear, before advanceStage() — resupply + backpack logistics + the Hideout board. */
-export default function SafeHouseOverlay({ next, actId, inv, onMove, onDepositAll, onContinue }: Props) {
+export default function SafeHouseOverlay({ next, actId, inv, campaignMode, onMove, onDepositAll, onContinue }: Props) {
   const [openDoc, setOpenDoc] = useState<DocDef | null>(null);
   const docs = docsForAct(actId);
   return (
@@ -32,7 +33,7 @@ export default function SafeHouseOverlay({ next, actId, inv, onMove, onDepositAl
 
         <div className="anim-rise mt-4 flex items-center gap-4 text-[11px] font-bold tracking-[0.15em] text-cyan-300/90" style={{ animationDelay: "110ms" }}>
           <span className="flex items-center gap-1.5 rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1">
-            <ShieldCheck className="h-3.5 w-3.5" /> RESERVE +50% · SUPPRESSORS RESTORED
+            <ShieldCheck className="h-3.5 w-3.5" /> RESERVE +50%{!campaignMode && " · SUPPRESSORS RESTORED"}
           </span>
         </div>
 
