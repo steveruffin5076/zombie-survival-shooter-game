@@ -2264,13 +2264,23 @@ export class Engine {
     return worldXToSlot(this.cam + this.mouse.x, centerX);
   }
 
-  /** Places the currently-selected tool at the cursor's slot, if it's free. */
+  /** Places the currently-selected tool at the cursor's slot, if it's free and affordable. */
   private tryPlaceDeployable() {
     if (!this.placingKind) return;
+    const centerX = this.worldW / 2;
     const { lane, slot } = this.ghostSlot();
-    if (!canPlaceAt(this.deployables, lane, slot)) return;
+    const x = slotToWorldX(lane, slot, centerX);
+    if (!canPlaceAt(this.deployables, lane, slot)) {
+      this.sfx.dryFire();
+      this.texts.push({ x, y: GROUND - 90, vy: -46, life: 0.8, max: 0.8, text: "SLOT TAKEN", color: "#f87171", size: 12 });
+      return;
+    }
     const def = DEPLOYABLE_DEFS[this.placingKind];
-    if (this.scrap < def.buildCost) return;
+    if (this.scrap < def.buildCost) {
+      this.sfx.dryFire();
+      this.texts.push({ x, y: GROUND - 90, vy: -46, life: 0.8, max: 0.8, text: `NEED ${def.buildCost} SCRAP`, color: "#f87171", size: 12 });
+      return;
+    }
     this.scrap -= def.buildCost;
     this.deployables.push({
       id: `dep-${this.nextDeployableSeq++}`,
