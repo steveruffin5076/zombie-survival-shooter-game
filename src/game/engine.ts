@@ -2297,6 +2297,7 @@ export class Engine {
     this.sfx.levelup();
     this.onEvent({
       type: "stageclear", stage: cleared, next: cleared + 1,
+      stageName: this.stageDef.name, stageSub: this.stageDef.sub,
       wavesPerStage: this.stageDef.wavesPerStage,
     });
   }

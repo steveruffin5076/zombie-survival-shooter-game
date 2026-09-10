@@ -156,8 +156,8 @@ export function PauseMenu({
 /* ------------------------------------------------------------------ */
 
 export function StageClear({
-  stage, next, wavesPerStage, onContinue,
-}: { stage: number; next: number; wavesPerStage: number; onContinue: () => void }) {
+  stage, next, stageName, wavesPerStage, onContinue,
+}: { stage: number; next: number; stageName: string; wavesPerStage: number; onContinue: () => void }) {
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-gradient-to-b from-emerald-950/30 via-black/80 to-black/90 backdrop-blur-[5px]">
       <div className="anim-pop flex w-full max-w-lg flex-col items-center px-8 text-center">
@@ -172,6 +172,9 @@ export function StageClear({
         >
           STAGE {stage} CLEAR
         </h2>
+        <p className="anim-rise mt-2 text-base font-semibold text-white" style={{ animationDelay: "90ms" }}>
+          {stageName}
+        </p>
         <p className="anim-rise mt-3 max-w-sm text-sm leading-relaxed text-zinc-400" style={{ animationDelay: "120ms" }}>
           You held the line. Wounds patched, ammo scavenged — but the horde grows
           hungrier the deeper you go.
