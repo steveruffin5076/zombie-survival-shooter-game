@@ -89,7 +89,7 @@ export default function HideoutTerminal({ inv, onClose, onStartMission, onSelect
 
           {tab === "loadout" && (
             <div className="flex flex-col items-center gap-5">
-              <div className="text-[10px] font-bold tracking-[0.3em] text-zinc-500">CHOOSE YOUR SIDEARM</div>
+              <div className="text-[10px] font-bold tracking-[0.3em] text-zinc-500">CHOOSE YOUR LOADOUT</div>
               <div className="flex gap-3">
                 {CAMPAIGN_ARSENAL.map((wid) => {
                   const w = WEAPONS[wid];

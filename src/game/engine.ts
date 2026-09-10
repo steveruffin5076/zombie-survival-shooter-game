@@ -273,6 +273,9 @@ export class Engine {
   private obstacles: Obstacle[] = [];
   private campaignCheckpointX = 0;
   private campaignSpawnT = 0;
+  /** Terminal Defense only — false while walking in, set once the fight is won so
+   * the next checkpoint is treated as the exit walk, not a second entry into the arena */
+  private campaignArenaCleared = false;
 
   /* --- inventory: fixed 4x4 backpack, a persistent safe-house stash, loot crates --- */
   private backpack: PlacedItem[] = [];
@@ -520,6 +523,7 @@ export class Engine {
     this.obstacles = [];
     this.campaignCheckpointX = 0;
     this.campaignSpawnT = 0;
+    this.campaignArenaCleared = false;
     this.backpack = [];
     this.deposit = [];
     this.intel = 0;
@@ -960,12 +964,12 @@ export class Engine {
       if (this.queue.length === 0 && this.zombies.length === 0 && (!this.boss || this.boss.dead)) {
         this.score += 50 * this.power;
         if (this.waveInStage >= this.stageDef.wavesPerStage) {
-          // campaign has no post-arena travel corridor — clearing the Terminal
-          // Defense fight (the only stage that still reaches "active" here in
-          // campaign) goes straight to the stage-clear/mission-complete screen
+          // campaign: clearing the Terminal Defense fight (the only stage that
+          // still reaches "active" here) doesn't end the stage on the spot —
+          // it opens a short walk back out, mirroring the walk in
           if (this.runMode === "mission") {
-            if (this.stage >= STAGES.length) this.missionComplete();
-            else this.completeStage();
+            this.campaignArenaCleared = true;
+            this.startCampaignTravel();
           } else {
             this.startTravel();
           }
@@ -2535,8 +2539,12 @@ export class Engine {
       }
     }
     this.announce(
-      this.stageDef.fixedCamera ? "APPROACHING THE TERMINAL" : "MOVE OUT",
-      this.stageDef.fixedCamera ? "clear the path to the defense line" : "push east — they're closing from both sides",
+      !this.stageDef.fixedCamera ? "MOVE OUT" : this.campaignArenaCleared ? "SECTOR SECURE" : "APPROACHING THE TERMINAL",
+      !this.stageDef.fixedCamera
+        ? "push east — they're closing from both sides"
+        : this.campaignArenaCleared
+          ? "fall back to the extraction point"
+          : "clear the path to the defense line",
       2.6
     );
     this.sfx.wave();
@@ -2568,10 +2576,11 @@ export class Engine {
   }
 
   /** Campaign only — checkpoint reached: the Terminal Defense stage flips into its
-   * fixed-camera arena fight; every other stage just clears normally. */
+   * fixed-camera arena fight on the way in; every other checkpoint (including the
+   * walk back out once that fight is won) just clears the stage normally. */
   private reachCampaignCheckpoint() {
     if (this.phase !== "travel") return;
-    if (this.stageDef.fixedCamera) {
+    if (this.stageDef.fixedCamera && !this.campaignArenaCleared) {
       // any zombies still alive from the walk in don't carry into the arena —
       // its own wave 1 shouldn't start already outnumbered
       this.zombies = [];
@@ -2646,7 +2655,12 @@ export class Engine {
     this.modals.delete("stageclear");
     this.bullets = [];
     this.eshots = [];
+    // full reload on every weapon when moving on — no carrying a half-empty mag into the next stage
+    for (const id of WEAPON_IDS) this.ammo[id] = WDEF[id].mag;
+    this.reloading = false;
+    this.reloadT = 0;
     if (this.runMode === "mission") {
+      this.campaignArenaCleared = false;
       this.startCampaignTravel();
     } else {
       this.beginRest(2.6);
@@ -3032,15 +3046,16 @@ export class Engine {
       }
       // checkpoint marker — the stage's end, not a safe house
       const cx = this.campaignCheckpointX;
+      const enteringArena = this.stageDef.fixedCamera && !this.campaignArenaCleared;
       const glow = c.createRadialGradient(cx, GROUND - 60, 4, cx, GROUND - 60, 130);
-      glow.addColorStop(0, this.stageDef.fixedCamera ? "rgba(248,113,113,0.28)" : "rgba(74,222,128,0.28)");
+      glow.addColorStop(0, enteringArena ? "rgba(248,113,113,0.28)" : "rgba(74,222,128,0.28)");
       glow.addColorStop(1, "rgba(0,0,0,0)");
       c.fillStyle = glow;
       c.fillRect(cx - 130, GROUND - 190, 260, 260);
       c.textAlign = "center";
       c.font = '700 10px "Space Grotesk", sans-serif';
-      c.fillStyle = this.stageDef.fixedCamera ? "rgba(248,113,113,0.85)" : "rgba(74,222,128,0.85)";
-      c.fillText(this.stageDef.fixedCamera ? "TERMINAL DEFENSE" : "CHECKPOINT", cx, GROUND - 118);
+      c.fillStyle = enteringArena ? "rgba(248,113,113,0.85)" : "rgba(74,222,128,0.85)";
+      c.fillText(enteringArena ? "TERMINAL DEFENSE" : this.campaignArenaCleared ? "EXTRACTION POINT" : "CHECKPOINT", cx, GROUND - 118);
       c.restore();
     }
 
