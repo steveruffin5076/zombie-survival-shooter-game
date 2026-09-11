@@ -19,10 +19,10 @@ export default function RepairPanel({ deployables, scrap, windowT, windowMax, on
     <div className="pointer-events-none absolute right-6 top-40 z-40 w-56">
       <div className="pointer-events-auto rounded-xl border border-amber-400/30 bg-black/60 p-3 backdrop-blur-sm">
         <div className="mb-2 flex items-center justify-between">
-          <div className="flex items-center gap-1.5 text-[10px] font-bold tracking-[0.2em] text-amber-300">
+          <div className="flex items-center gap-1.5 text-[12px] font-bold tracking-[0.2em] text-amber-300">
             <Wrench className="h-3.5 w-3.5" /> REPAIR WINDOW
           </div>
-          <div className="text-[10px] font-bold tabular-nums text-white/50">{Math.ceil(windowT)}s</div>
+          <div className="text-[12px] font-bold tabular-nums text-white/50">{Math.ceil(windowT)}s</div>
         </div>
         <div className="mb-2 h-1 overflow-hidden rounded-full bg-black/60 ring-1 ring-white/10">
           <div
@@ -39,7 +39,7 @@ export default function RepairPanel({ deployables, scrap, windowT, windowMax, on
                 key={d.id}
                 onClick={() => affordable && onRepair(d.id)}
                 disabled={!affordable}
-                className={`flex items-center justify-between rounded-lg border px-2.5 py-1.5 text-[10px] font-bold tracking-wide transition ${
+                className={`flex items-center justify-between rounded-lg border px-2.5 py-1.5 text-[12px] font-bold tracking-wide transition ${
                   affordable
                     ? "border-white/15 bg-white/5 text-zinc-200 hover:border-amber-400/50 hover:bg-amber-400/10"
                     : "border-white/5 bg-black/40 text-white/30"

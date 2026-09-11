@@ -22,7 +22,7 @@ export function MenuButton({
   return (
     <button
       onClick={onClick}
-      className={`flex items-center justify-center gap-2.5 rounded-xl px-6 py-3 text-sm font-bold tracking-[0.2em] transition-all duration-150 active:scale-[0.98] ${
+      className={`flex items-center justify-center gap-2.5 rounded-xl px-6 py-3 text-base font-bold tracking-[0.2em] transition-all duration-150 active:scale-[0.98] ${
         primary
           ? "bg-gradient-to-b from-amber-400 to-amber-600 text-amber-950 shadow-[0_0_30px_rgba(245,158,11,0.3)] hover:scale-[1.02]"
           : "border border-white/10 bg-white/5 text-zinc-200 hover:border-white/25 hover:bg-white/10"
@@ -42,8 +42,8 @@ export function StatBox({
       accent ? "border-amber-400/30 bg-amber-400/5" : "border-white/10 bg-white/[0.03]"
     }`}>
       <div className={accent ? "text-amber-300" : "text-zinc-500"}>{icon}</div>
-      <div className={`font-display text-xl tracking-wider tabular-nums ${accent ? "text-amber-300" : "text-zinc-100"}`}>{value}</div>
-      <div className="text-[9px] font-bold tracking-[0.25em] text-zinc-500">{label}</div>
+      <div className={`font-display text-2xl tracking-wider tabular-nums ${accent ? "text-amber-300" : "text-zinc-100"}`}>{value}</div>
+      <div className="text-[11px] font-bold tracking-[0.25em] text-zinc-500">{label}</div>
     </div>
   );
 }

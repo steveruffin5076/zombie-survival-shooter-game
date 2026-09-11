@@ -15,9 +15,9 @@ export default function InventoryOverlay({ inv, onMove, onClose }: Props) {
   return (
     <div className="pointer-events-auto absolute right-6 top-24 z-40 w-80 rounded-2xl border border-white/10 bg-black/80 p-4 backdrop-blur-md">
       <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-[11px] font-bold tracking-[0.25em] text-zinc-300">
+        <div className="flex items-center gap-2 text-[13px] font-bold tracking-[0.25em] text-zinc-300">
           BACKPACK
-          <span className="text-[9px] font-semibold text-zinc-500">4×4</span>
+          <span className="text-[11px] font-semibold text-zinc-500">4×4</span>
         </div>
         <button
           onClick={onClose}
@@ -32,7 +32,7 @@ export default function InventoryOverlay({ inv, onMove, onClose }: Props) {
         <GridPanel items={inv.backpack} size={inv.backpackSize} onMove={onMove} cell={52} />
       </div>
 
-      <div className="mt-3 flex items-center justify-end text-[10px] font-semibold text-zinc-500">
+      <div className="mt-3 flex items-center justify-end text-[12px] font-semibold text-zinc-500">
         <span>{inv.deposit.length} IN STASH</span>
       </div>
 
@@ -50,8 +50,8 @@ export default function InventoryOverlay({ inv, onMove, onClose }: Props) {
               title={def.desc}
             >
               <Icon className="h-3.5 w-3.5 text-cyan-200" />
-              <span className="kbd text-[8px]">{def.hotkey}</span>
-              <span className="text-[9px] font-bold tabular-nums text-zinc-300">{count}</span>
+              <span className="kbd text-[10px]">{def.hotkey}</span>
+              <span className="text-[11px] font-bold tabular-nums text-zinc-300">{count}</span>
             </div>
           );
         })}

@@ -32,6 +32,9 @@ export interface HudState {
   isBossWave: boolean;
   remaining: number;
   waveTotal: number;
+  /** seconds left in a stage-5/10 horde finale; 0 when none is running */
+  hordeT: number;
+  hordeTotal: number;
   phase: "break" | "active" | "prep";
   score: number;
   kills: number;

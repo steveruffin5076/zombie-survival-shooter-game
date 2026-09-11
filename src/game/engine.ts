@@ -69,6 +69,12 @@ const ZCONF: Record<ZType, ZConf> = {
  * base roster, so she stays a fixed low-probability spice pick, never fodder. */
 const SCREAMER_WEIGHT = 0.18;
 
+/** Stages whose final wave is a horde finale instead of a normal wave — a
+ * sustained swarm with a boss-tier zombie mixed in, capping the stage with a
+ * real set piece rather than just another wave-sized batch. */
+const HORDE_STAGES = [5, 10];
+const HORDE_DURATION = 60;
+
 const WAVE_SUBS = [
   "they see your light",
   "hold the line",
@@ -205,7 +211,7 @@ export class Engine {
   private autoFire = true;
   /** lane the player is locked to */
   private facing: 1 | -1 = 1;
-  /** current auto-aim target — a Zombie or the Boss, whichever wins acquireTarget()'s priority */
+  /** whatever the laser ray is currently crossing — a Zombie or the Boss, see acquireRayTarget() */
   private target: AimTarget | null = null;
   private onTarget = false;
   private laserFlash = 0;
@@ -240,6 +246,9 @@ export class Engine {
   private spawnT = 0;
   private queue: SpawnItem[] = [];
   private waveTotal = 0;
+  /** >0 while a stage-5/10 horde finale is running — see HORDE_STAGES/HORDE_DURATION */
+  private hordeT = 0;
+  private hordeTotal = 0;
 
   /* --- inventory: fixed 4x4 backpack, a persistent safe-house stash, loot crates --- */
   private backpack: PlacedItem[] = [];
@@ -684,7 +693,7 @@ export class Engine {
   }
 
   /** KeyE (or its touch interact-button equivalent) while a boss is alive forces
-   * auto-aim onto it over a close add — see acquireTarget()'s boss lock rule. */
+   * the boss to win the laser-ray tie-break over a zombie — see acquireRayTarget(). */
   toggleBossForceTarget() {
     if (!this.boss || this.boss.dead) return;
     this.bossForceTarget = !this.bossForceTarget;
@@ -818,16 +827,14 @@ export class Engine {
     if (vel > 26) {
       p.face = Math.cos(Math.atan2(p.vy, p.vx)) > 0 ? 1 : -1;
     }
-    // Auto-fire: lock onto and aim at the nearest in-range target, hands-free.
-    // Manual: the mouse always drives the aim — a target is only "hot" (for
-    // the reticle + onTarget flag) if that exact laser ray crosses one.
-    if (this.autoFire) {
-      this.acquireTarget();
-      p.aim = this.aimAngle();
-    } else {
-      p.aim = this.mouseAimAngle();
-      this.acquireRayTarget(p.aim);
-    }
+    // The mouse always drives the aim, in both fire modes — the flashlight
+    // cone and laser sight point wherever the player points them, so a
+    // zombie is only ever "detected" by actually being looked at, not by
+    // the game snapping the gun onto the nearest one for you. Auto-fire and
+    // manual-fire differ only in the trigger, not the aim: see the fire
+    // check below (this.autoFire ? this.onTarget : this.mouse.down).
+    p.aim = this.mouseAimAngle();
+    this.acquireRayTarget(p.aim);
     if (this.laserFlash > 0) this.laserFlash -= dt;
 
     // reload + auto-fire (all weapons are full-auto; rate differs per weapon)
@@ -864,13 +871,21 @@ export class Engine {
     } else if (this.phase === "active") {
       if (this.spawnSuppressT > 0) this.spawnSuppressT -= dt;
       this.spawnT -= dt;
-      const cap = Math.min(26, 8 + this.power);
-      if (this.spawnSuppressT <= 0 && this.spawnT <= 0 && this.queue.length > 0 && this.zombies.length < cap) {
-        this.spawnT = Math.max(0.3, 1.5 - this.power * 0.07);
+      const cap = Math.min(30, 8 + this.power);
+      if (this.hordeT > 0) {
+        // continuously refilled stream instead of a fixed queue — the horde
+        // doesn't run out until its timer does, not when a batch is dead
+        this.hordeT = Math.max(0, this.hordeT - dt);
+        if (this.spawnSuppressT <= 0 && this.spawnT <= 0 && this.zombies.length < cap + 6) {
+          this.spawnT = Math.max(0.22, 1.1 - this.power * 0.06);
+          this.spawnZombie({ type: rollEnemy(this.zombieWeights(this.power)) as ZType });
+        }
+      } else if (this.spawnSuppressT <= 0 && this.spawnT <= 0 && this.queue.length > 0 && this.zombies.length < cap) {
+        this.spawnT = Math.max(0.3, 1.3 - this.power * 0.07);
         const n = this.power >= 6 && this.queue.length > 2 && chance(0.4) ? 2 : 1;
         for (let i = 0; i < n && this.queue.length > 0; i++) this.spawnZombie(this.queue.shift()!);
       }
-      if (this.queue.length === 0 && this.zombies.length === 0 && (!this.boss || this.boss.dead)) {
+      if (this.hordeT <= 0 && this.queue.length === 0 && this.zombies.length === 0 && (!this.boss || this.boss.dead)) {
         this.score += 50 * this.power;
         if (this.waveInStage >= this.stageDef.wavesPerStage) {
           // clearing the last wave finishes the stage directly — no more
@@ -879,7 +894,7 @@ export class Engine {
           this.completeStage();
         } else {
           const boss = this.stageDef.bossWaves.includes(this.waveInStage);
-          this.beginRest(3.4);
+          this.beginRest(1.4);
           if (this.stageDef.fixedCamera) this.awardSupply(0.18, 0.6);
           else p.hp = Math.min(this.st.maxHp, p.hp + 12);
           this.spawnCrate(boss ? (chance(0.5) ? 3 : 2) : 1);
@@ -919,62 +934,9 @@ export class Engine {
     this.shakeY = R(-this.shakeMag, this.shakeMag) * 0.7;
   }
 
-  /* ============ TARGETING: directional lock auto-aim ============ */
+  /* ============ TARGETING: mouse-directed aim ============ */
 
-  /** Nearest zombie in the faced lane, within the weapon's effective range — plus the
-   * boss lock rule: with the Juggernaut alive, it wins the lock unless a regular zombie
-   * ("add") is within 130px, or the player forced it with KeyE (`bossForceTarget`). */
-  private acquireTarget() {
-    const p = this.pl;
-    const w = WDEF[this.kind];
-    const range = w.range * (1 + 0.12 * (this.stacks["velo"] || 0));
-    let best: AimTarget | null = null;
-    let bestD = Infinity;
-
-    // Omnidirectional targeting: find closest zombie within range
-    for (const z of this.zombies) {
-      if (z.dead) continue;
-      const dx = z.x - p.x;
-      const dy = z.y - p.y;
-      const d = Math.hypot(dx, dy);
-      if (d > range) continue;
-      if (d < bestD) { bestD = d; best = z; }
-    }
-
-    // Boss targeting
-    const boss = this.boss;
-    if (boss && !boss.dead) {
-      const dx = boss.x - p.x;
-      const dy = boss.y - p.y;
-      const d = Math.hypot(dx, dy);
-      if (d <= range) {
-        const addIsClose = best !== null && bestD < 130;
-        if (!addIsClose || this.bossForceTarget) best = boss;
-      }
-    }
-
-    const had = this.onTarget;
-    this.target = best;
-    this.onTarget = best !== null;
-    if (this.onTarget && !had) this.laserFlash = 0.25;
-  }
-
-  /** Angle toward the locked auto-fire target, or toward the mouse if none. */
-  private aimAngle() {
-    const p = this.pl;
-    if (this.target && !this.target.dead) {
-      // the boss keeps its old tall side-view body (arena-only, deliberately
-      // unconverted), so it still needs the "aim above the feet" offset;
-      // the top-down zombie body is centered at its own y directly
-      const isBoss = this.target === this.boss;
-      const tx = this.target.x;
-      const ty = isBoss ? this.target.y - 36 * this.target.scale : this.target.y;
-      return Math.atan2(ty - p.y, tx - p.x);
-    }
-    return this.mouseAimAngle();
-  }
-
-  /** Pure mouse-directed aim angle, ignoring any locked target. */
+  /** Pure mouse-directed aim angle. */
   private mouseAimAngle() {
     const p = this.pl;
     // mouse.x/y are canvas (screen-space) pixels, so add the camera's
@@ -1012,7 +974,10 @@ export class Engine {
       const proj = dx * dirX + dy * dirY;
       if (proj > 0 && proj <= range) {
         const perp = Math.abs(dx * dirY - dy * dirX);
-        if (perp <= boss.r + 10 && proj < bestProj) { bestProj = proj; best = boss; }
+        // KeyE forces the boss to win over a zombie on the same ray, even
+        // one nearer along it, instead of only stealing the lock when it's
+        // strictly closest.
+        if (perp <= boss.r + 10 && (this.bossForceTarget || proj < bestProj)) { bestProj = proj; best = boss; }
       }
     }
 
@@ -1941,16 +1906,28 @@ export class Engine {
   /* ---------------- inventory: crates, backpack, consumables ---------------- */
 
   private spawnCrate(tier: CrateTier) {
+    // the arena is a fixed side-view lane (constant GROUND height, x-only
+    // movement); open stages are full 2D, so a crate needs to scatter near
+    // the player's actual position on both axes or it can land somewhere
+    // they're nowhere near and never visibly reach
+    const arena = this.stageDef.fixedCamera;
     const x = clamp(this.pl.x + R(-160, 160), 30, this.worldW - 30);
-    this.crates.push({ x, y: GROUND, tier, opened: false });
+    const y = arena ? GROUND : clamp(this.pl.y + R(-140, 140), 30, WORLD_H - 30);
+    this.crates.push({ x, y, tier, opened: false });
+  }
+
+  private isNearCrate(cr: Crate): boolean {
+    const p = this.pl;
+    return this.stageDef.fixedCamera
+      ? Math.abs(cr.x - p.x) < 40
+      : Math.hypot(cr.x - p.x, cr.y - p.y) < 40;
   }
 
   private updateCrates(dt: number) {
-    const p = this.pl;
     let near: Crate | null = null;
     for (const cr of this.crates) {
       if (cr.opened) continue;
-      if (Math.abs(cr.x - p.x) < 40) { near = cr; break; }
+      if (this.isNearCrate(cr)) { near = cr; break; }
     }
     if (near && this.keys.has("KeyE")) {
       this.crateOpenT += dt;
@@ -1966,24 +1943,40 @@ export class Engine {
   private openCrate(cr: Crate) {
     cr.opened = true;
     const drops = rollLoot(cr.tier);
-    let gained = 0, lost = 0;
+    const gainedCounts = new Map<string, number>();
+    let lost = 0;
     for (const d of drops) {
       const placed = placeItem(BACKPACK_SIZE, this.backpack, shapeOfItem, {
         id: `it${this.nextItemSeq++}`, itemId: d.itemId,
       });
-      if (placed) { this.backpack = placed; gained++; } else lost++;
+      if (placed) {
+        this.backpack = placed;
+        gainedCounts.set(d.itemId, (gainedCounts.get(d.itemId) ?? 0) + 1);
+      } else lost++;
     }
     this.invVer++;
     this.sfx.levelup();
     this.shake(2);
+    // name the actual items collected instead of a bare count, so opening a
+    // crate tells you what you got, not just how many things happened —
+    // capped at 2 named entries since the banner draws this as one
+    // non-wrapping line (see drawBanner)
+    const gainedEntries = [...gainedCounts.entries()]
+      .map(([itemId, n]) => `${ITEMS[itemId]?.name ?? itemId}${n > 1 ? ` x${n}` : ""}`);
+    const gainedList = gainedEntries.length > 2
+      ? `${gainedEntries.slice(0, 2).join(", ")} +${gainedEntries.length - 2} more`
+      : gainedEntries.join(", ");
     this.announce(
       "CRATE OPENED",
-      lost > 0 ? `+${gained} item(s) — backpack full, ${lost} left behind` : `+${gained} item(s)`,
-      1.8
+      gainedList
+        ? lost > 0 ? `${gainedList} — backpack full, ${lost} left behind` : gainedList
+        : "nothing usable inside",
+      2.2
     );
+    const arena = this.stageDef.fixedCamera;
     for (let i = 0; i < 14; i++)
       this.particles.push({
-        x: cr.x, y: GROUND - 10, vx: R(-90, 90), vy: R(-220, -60),
+        x: cr.x, y: (arena ? GROUND : cr.y) - 10, vx: R(-90, 90), vy: R(-220, -60),
         life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#fbbf24", grav: 700, add: true,
       });
   }
@@ -2111,12 +2104,16 @@ export class Engine {
   /* ---------------- waves ---------------- */
 
   /** Shared enemy weight table for the wave spawner. */
+  // Continuous ramps instead of hard power gates — the old thresholds (power
+  // >=2/3/4) meant a player saw nothing but walkers for most of stage 1 and
+  // into stage 2, since power only reaches ~1.7 by the end of a 10-wave
+  // stage 1. Every type now has some presence from wave 1, growing with power.
   private zombieWeights(power: number): Partial<Record<string, number>> {
     return {
       walker: 1,
-      runner: power >= 2 ? 0.42 + power * 0.02 : 0,
-      spitter: power >= 4 ? 0.3 : 0,
-      brute: power >= 3 ? 0.14 + power * 0.015 : 0,
+      runner: Math.min(0.6, 0.16 + power * 0.05),
+      spitter: Math.max(0, Math.min(0.4, (power - 0.5) * 0.08)),
+      brute: Math.max(0, Math.min(0.35, (power - 0.8) * 0.06)),
       screamer: SCREAMER_WEIGHT,
     };
   }
@@ -2268,18 +2265,34 @@ export class Engine {
     this.waveInStage = inStage;
     this.waveIndex = cumulativeWaveIndex(this.stage, inStage);
     this.power = difficultyFor(this.stage, inStage);
-    this.queue = this.buildWave(this.power, inStage);
-    this.waveTotal = this.queue.length;
+    const finalWave = inStage === this.stageDef.wavesPerStage;
+    // stage 5 and 10 cap their final wave with a horde finale instead of a
+    // normal fixed-size batch — a sustained, continuously-refilled swarm
+    // with a boss-tier zombie, see HORDE_STAGES and the "active" phase update
+    const hordeFinale = !this.stageDef.fixedCamera && finalWave && HORDE_STAGES.includes(this.stage);
+    if (hordeFinale) {
+      this.queue = [];
+      this.waveTotal = 0;
+      this.hordeT = HORDE_DURATION;
+      this.hordeTotal = HORDE_DURATION;
+    } else {
+      this.queue = this.buildWave(this.power, inStage);
+      this.waveTotal = this.queue.length;
+      this.hordeT = 0;
+      this.hordeTotal = 0;
+    }
     this.phase = "active";
     this.spawnT = 0.6;
     this.boss = null;
     this.bossForceTarget = false;
-    const finalWave = inStage === this.stageDef.wavesPerStage;
     // exploration stages carry no bossId, so they never spawn a boss even if
     // their bossWaves array still marks a wave for the finale-swarm treatment
     const bossWave = this.stageDef.bossId != null && this.stageDef.bossWaves.includes(inStage);
     if (bossWave && !finalWave) this.spawnBoss();
-    if (bossWave) {
+    if (hordeFinale) {
+      this.announce("THE HORDE IS HERE", `survive ${HORDE_DURATION}s — something big is coming`, 3);
+      this.spawnZombie({ type: "brute", boss: true });
+    } else if (bossWave) {
       const def = BOSS_DEFS[this.stageDef.bossId!] ?? BOSS_DEFS.juggernaut;
       this.announce(
         finalWave ? "FINAL WAVE" : def.tellName,
@@ -2441,7 +2454,7 @@ export class Engine {
 
   getHud(): HudState {
     const p = this.pl;
-    const nearCrate = this.crates.find((c) => !c.opened && Math.abs(c.x - p.x) < 40) ?? null;
+    const nearCrate = this.crates.find((c) => !c.opened && this.isNearCrate(c)) ?? null;
     return {
       hp: Math.max(0, Math.ceil(p.hp)),
       maxHp: this.st.maxHp,
@@ -2456,6 +2469,8 @@ export class Engine {
       isBossWave: this.stageDef.bossWaves.includes(this.waveInStage),
       waveTotal: this.waveTotal,
       remaining: this.queue.length + this.zombies.length,
+      hordeT: Math.max(0, this.hordeT),
+      hordeTotal: this.hordeTotal,
       phase: this.phase,
       score: this.score,
       kills: this.kills,
@@ -2856,7 +2871,7 @@ export class Engine {
       c.arc(rx, ry, 13, -Math.PI / 2, -Math.PI / 2 + TAU * pct);
       c.stroke();
       c.textAlign = "center";
-      c.font = '700 9px "Space Grotesk", sans-serif';
+      c.font = '700 11px "Space Grotesk", sans-serif';
       c.fillStyle = "#fde68a";
       c.fillText("RELOAD", rx, ry + 25);
       c.restore();
@@ -2870,7 +2885,7 @@ export class Engine {
         c.save();
         c.textAlign = "center";
         c.globalAlpha = 0.6 + 0.4 * Math.sin(t * 9);
-        c.font = '700 13px "Space Grotesk", sans-serif';
+        c.font = '700 15px "Space Grotesk", sans-serif';
         c.fillStyle = "#f87171";
         (c as unknown as { letterSpacing: string }).letterSpacing = "3px";
         c.fillText("PRESS R TO RELOAD", this.pl.x - cam, this.pl.y - 96 + camY);
@@ -2880,7 +2895,7 @@ export class Engine {
         c.save();
         c.textAlign = "center";
         c.globalAlpha = 0.45 + 0.3 * Math.sin(t * 6);
-        c.font = '700 11px "Space Grotesk", sans-serif';
+        c.font = '700 13px "Space Grotesk", sans-serif';
         c.fillStyle = "#fbbf24";
         c.fillText("LOW AMMO", this.pl.x - cam, this.pl.y - 96 + camY);
         c.restore();
@@ -2893,7 +2908,7 @@ export class Engine {
     /* --- next wave countdown --- */
     if (this.mode === "play" && !this.over && this.phase === "break" && !this.stageIntermission && this.waveIndex > 0) {
       c.textAlign = "center";
-      c.font = '600 13px "Space Grotesk", sans-serif';
+      c.font = '600 15px "Space Grotesk", sans-serif';
       c.fillStyle = "rgba(226,232,240,0.55)";
       (c as unknown as { letterSpacing: string }).letterSpacing = "4px";
       c.fillText(`NEXT WAVE IN ${Math.max(1, Math.ceil(this.breakT))}`, W / 2, H - 48);
@@ -2951,7 +2966,7 @@ export class Engine {
     c.fillStyle = "#f4efe6";
     c.fillText(b.text, 0, 0);
     c.shadowBlur = 0;
-    c.font = '600 15px "Space Grotesk", sans-serif';
+    c.font = '600 17px "Space Grotesk", sans-serif';
     (c as unknown as { letterSpacing: string }).letterSpacing = "5px";
     c.fillStyle = "#f59e0b";
     c.fillText(b.sub.toUpperCase(), 0, 36);

@@ -105,7 +105,7 @@ export default function GridPanel({ items, size, onMove, cell = 56 }: Props) {
             title={`${def.name} — ${def.desc}`}
           >
             <Icon className="h-4 w-4 text-zinc-200" />
-            <span className="text-[7px] font-bold tracking-wide text-zinc-400">{def.short}</span>
+            <span className="text-[9px] font-bold tracking-wide text-zinc-400">{def.short}</span>
           </div>
         );
       })}
