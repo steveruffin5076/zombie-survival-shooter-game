@@ -16,9 +16,8 @@ const POOLS: Record<CrateTier, Pool> = {
   1: {
     count: [1, 2],
     weights: [
-      { itemId: "ammo_pistol", weight: 5 },
-      { itemId: "bandage", weight: 4 },
-      { itemId: "ammo_smg", weight: 2 },
+      { itemId: "bandage", weight: 5 },
+      { itemId: "ammo_smg", weight: 3 },
     ],
   },
   2: {

@@ -160,7 +160,11 @@ export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoad
 function ClassRow({
   cls, metaLevel, active, onPick,
 }: { cls: WeaponClass; metaLevel: number; active: string | undefined; onPick: (id: string) => void }) {
-  const ids = byClass(cls);
+  // byClass() returns declaration order, not unlock order — sort so the
+  // row reads left-to-right as a progression the way the level number implies
+  const ids = [...byClass(cls)].sort(
+    (a, b) => (WEAPON_UNLOCK_LEVEL[a] ?? Infinity) - (WEAPON_UNLOCK_LEVEL[b] ?? Infinity)
+  );
   return (
     <div className="flex w-full flex-col items-center gap-2">
       <div className="text-[11px] font-bold tracking-[0.25em] text-zinc-600">{CLASS_LABEL[cls]}</div>

@@ -23,11 +23,10 @@ export interface ItemDef extends ItemShape {
 }
 
 export const ITEMS: Record<string, ItemDef> = {
-  ammo_pistol: {
-    id: "ammo_pistol", name: "Pistol Ammo Box", short: "9MM BOX", kind: "ammo", rarity: "common",
-    icon: "Crosshair", w: 1, h: 1, ammoClass: "pistol", ammoAmount: 24,
-    desc: "24 rounds of 9mm. Auto-loads when a pistol runs dry.",
-  },
+  // no ammo_pistol — every pistol has unlimited reserve by design (see
+  // weapons.ts's "PISTOLS — unlimited reserve" section), so a pistol ammo
+  // box could never actually be used; it used to drop from crates anyway
+  // and just sat dead in the backpack.
   ammo_smg: {
     id: "ammo_smg", name: "SMG Ammo Box", short: "SMG BOX", kind: "ammo", rarity: "common",
     icon: "Wind", w: 1, h: 1, ammoClass: "smg", ammoAmount: 60,

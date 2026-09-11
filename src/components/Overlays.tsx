@@ -1,15 +1,15 @@
 import type { GameStats, UpgradeChoice } from "../game/types";
 import {
   Play, RotateCcw, Home, Trophy, Timer, Skull, TrendingUp, Volume2, VolumeX,
-  Crosshair, Gauge, ChevronsRight, HeartPulse, Infinity as InfinityIcon,
+  Crosshair, Gauge, ChevronsRight, HeartPulse, Infinity as InfinityIcon, BookOpen,
 } from "lucide-react";
 import { ICONS, RARITY_STYLE, MenuButton, StatBox } from "./ui";
 
 /* ------------------------------------------------------------------ */
 
 export function Menu({
-  onEndless, high, muted, onMute,
-}: { onEndless: () => void; high: number; muted: boolean; onMute: () => void }) {
+  onEndless, onTutorial, high, muted, onMute,
+}: { onEndless: () => void; onTutorial: () => void; high: number; muted: boolean; onMute: () => void }) {
   return (
     <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-gradient-to-b from-black/60 via-transparent to-black/85">
       <button
@@ -48,6 +48,15 @@ export function Menu({
       >
         <InfinityIcon className="h-5 w-5 transition-transform group-hover:translate-x-0.5" />
         ENDLESS MODE
+      </button>
+
+      <button
+        onClick={onTutorial}
+        className="anim-rise mt-3 flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-5 py-2 text-sm font-bold tracking-[0.18em] text-zinc-300 transition hover:border-white/25 hover:bg-white/10"
+        style={{ animationDelay: "210ms" }}
+      >
+        <BookOpen className="h-4 w-4" />
+        HOW TO PLAY
       </button>
 
       {high > 0 && (

@@ -12,6 +12,7 @@ import SafeHouseOverlay from "./components/SafeHouseOverlay";
 import RepairPanel from "./components/RepairPanel";
 import TouchControls from "./components/TouchControls";
 import LoadoutProfile from "./components/LoadoutProfile";
+import Tutorial from "./components/Tutorial";
 import { isTouchCapable } from "./game/input";
 
 export default function App() {
@@ -20,6 +21,7 @@ export default function App() {
 
   const [screen, setScreen] = useState<"menu" | "game">("menu");
   const [showLoadout, setShowLoadout] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
   const [hud, setHud] = useState<HudState | null>(null);
   const [profile, setProfile] = useState<ProfileSnapshot | null>(null);
   const [choices, setChoices] = useState<UpgradeChoice[] | null>(null);
@@ -97,6 +99,7 @@ export default function App() {
     engineRef.current?.startGame();
     setScreen("game");
     setShowLoadout(false);
+    setShowTutorial(false);
     setOver(null);
     setChoices(null);
     setStageClear(null);
@@ -108,6 +111,8 @@ export default function App() {
 
   const openLoadout = useCallback(() => setShowLoadout(true), []);
   const closeLoadout = useCallback(() => setShowLoadout(false), []);
+  const openTutorial = useCallback(() => setShowTutorial(true), []);
+  const closeTutorial = useCallback(() => setShowTutorial(false), []);
   const selectLoadout = useCallback((weaponId: string) => {
     engineRef.current?.setLoadout(weaponId);
     setProfile(engineRef.current?.getProfile() ?? null);
@@ -117,6 +122,7 @@ export default function App() {
     engineRef.current?.toMenu();
     setScreen("menu");
     setShowLoadout(false);
+    setShowTutorial(false);
     setOver(null);
     setChoices(null);
     setStageClear(null);
@@ -251,14 +257,17 @@ export default function App() {
           />
         )}
 
-        {screen === "menu" && !showLoadout && (
+        {screen === "menu" && !showLoadout && !showTutorial && (
           <Menu
             onEndless={openLoadout}
+            onTutorial={openTutorial}
             high={hud?.high ?? 0}
             muted={hud?.muted ?? false}
             onMute={toggleMute}
           />
         )}
+
+        {screen === "menu" && showTutorial && <Tutorial onClose={closeTutorial} />}
 
         {showLoadout && profile && (
           <LoadoutProfile

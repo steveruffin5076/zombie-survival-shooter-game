@@ -75,6 +75,11 @@ const SCREAMER_WEIGHT = 0.18;
 const HORDE_STAGES = [5, 10];
 const HORDE_DURATION = 60;
 
+/** Half-angle of the flashlight's fully-lit cone (see render()'s darkenOutside
+ * calls) — also the field auto-fire scans for a target, so "in the flashlight"
+ * means the same thing visually and mechanically. */
+const FLASHLIGHT_HALF_ANGLE = 0.55;
+
 const WAVE_SUBS = [
   "they see your light",
   "hold the line",
@@ -208,7 +213,7 @@ export class Engine {
 
   /* --- targeting / fire mode --- */
   /** true = Automated Engagement, false = Manual Trigger */
-  private autoFire = true;
+  private autoFire = false;
   /** lane the player is locked to */
   private facing: 1 | -1 = 1;
   /** whatever the laser ray is currently crossing — a Zombie or the Boss, see acquireRayTarget() */
@@ -438,7 +443,7 @@ export class Engine {
     this.reloading = false;
     this.reloadT = 0;
     this.reloadDur = 0;
-    this.autoFire = true;
+    this.autoFire = false;
     this.facing = 1;
     this.target = null;
     this.onTarget = false;
@@ -827,14 +832,30 @@ export class Engine {
     if (vel > 26) {
       p.face = Math.cos(Math.atan2(p.vy, p.vx)) > 0 ? 1 : -1;
     }
-    // The mouse always drives the aim, in both fire modes — the flashlight
-    // cone and laser sight point wherever the player points them, so a
-    // zombie is only ever "detected" by actually being looked at, not by
-    // the game snapping the gun onto the nearest one for you. Auto-fire and
-    // manual-fire differ only in the trigger, not the aim: see the fire
-    // check below (this.autoFire ? this.onTarget : this.mouse.down).
-    p.aim = this.mouseAimAngle();
-    this.acquireRayTarget(p.aim);
+    // The mouse always points the flashlight/cone — you still have to look
+    // toward a zombie to find it, in both fire modes. Auto-fire then snaps
+    // the laser onto the nearest zombie inside that lit cone and fires by
+    // itself; manual fire keeps the raw mouse direction and only "acquires"
+    // a target if the exact ray crosses one (see acquireRayTarget), firing
+    // only on click.
+    const mouseAim = this.mouseAimAngle();
+    if (this.autoFire) {
+      const target = this.acquireConeTarget(mouseAim, FLASHLIGHT_HALF_ANGLE);
+      const had = this.onTarget;
+      if (target) {
+        const isBoss = target === this.boss;
+        const ty = isBoss ? target.y - 36 * target.scale : target.y;
+        p.aim = Math.atan2(ty - p.y, target.x - p.x);
+      } else {
+        p.aim = mouseAim;
+      }
+      this.target = target;
+      this.onTarget = target !== null;
+      if (this.onTarget && !had) this.laserFlash = 0.25;
+    } else {
+      p.aim = mouseAim;
+      this.acquireRayTarget(p.aim);
+    }
     if (this.laserFlash > 0) this.laserFlash -= dt;
 
     // reload + auto-fire (all weapons are full-auto; rate differs per weapon)
@@ -871,18 +892,18 @@ export class Engine {
     } else if (this.phase === "active") {
       if (this.spawnSuppressT > 0) this.spawnSuppressT -= dt;
       this.spawnT -= dt;
-      const cap = Math.min(30, 8 + this.power);
+      const cap = Math.min(36, 10 + this.power * 1.1);
       if (this.hordeT > 0) {
         // continuously refilled stream instead of a fixed queue — the horde
         // doesn't run out until its timer does, not when a batch is dead
         this.hordeT = Math.max(0, this.hordeT - dt);
-        if (this.spawnSuppressT <= 0 && this.spawnT <= 0 && this.zombies.length < cap + 6) {
-          this.spawnT = Math.max(0.22, 1.1 - this.power * 0.06);
+        if (this.spawnSuppressT <= 0 && this.spawnT <= 0 && this.zombies.length < cap + 8) {
+          this.spawnT = Math.max(0.16, 1.0 - this.power * 0.07);
           this.spawnZombie({ type: rollEnemy(this.zombieWeights(this.power)) as ZType });
         }
       } else if (this.spawnSuppressT <= 0 && this.spawnT <= 0 && this.queue.length > 0 && this.zombies.length < cap) {
-        this.spawnT = Math.max(0.3, 1.3 - this.power * 0.07);
-        const n = this.power >= 6 && this.queue.length > 2 && chance(0.4) ? 2 : 1;
+        this.spawnT = Math.max(0.2, 1.15 - this.power * 0.08);
+        const n = this.power >= 4 && this.queue.length > 2 && chance(0.45) ? 2 : 1;
         for (let i = 0; i < n && this.queue.length > 0; i++) this.spawnZombie(this.queue.shift()!);
       }
       if (this.hordeT <= 0 && this.queue.length === 0 && this.zombies.length === 0 && (!this.boss || this.boss.dead)) {
@@ -946,6 +967,42 @@ export class Engine {
     const mx = this.mouse.x + this.cam;
     const my = this.mouse.y + this.camY;
     return Math.atan2(my - p.y, mx - p.x);
+  }
+
+  /** Auto-fire mode: nearest zombie within range AND inside the flashlight
+   * cone around `aim` (the raw mouse direction) — the player still has to
+   * look roughly toward a target to find it, but doesn't need to line up
+   * an exact ray once it's in view. The boss can steal the pick via
+   * bossForceTarget, same idea as acquireRayTarget's tie-break. */
+  private acquireConeTarget(aim: number, halfAngle: number): AimTarget | null {
+    const p = this.pl;
+    const w = WDEF[this.kind];
+    const range = w.range * (1 + 0.12 * (this.stacks["velo"] || 0));
+    const angleDiff = (a: number) => {
+      let d = Math.abs(a - aim) % TAU;
+      if (d > Math.PI) d = TAU - d;
+      return d;
+    };
+    let best: AimTarget | null = null;
+    let bestD = Infinity;
+
+    for (const z of this.zombies) {
+      if (z.dead) continue;
+      const dx = z.x - p.x, dy = z.y - p.y;
+      const d = Math.hypot(dx, dy);
+      if (d > range || angleDiff(Math.atan2(dy, dx)) > halfAngle) continue;
+      if (d < bestD) { bestD = d; best = z; }
+    }
+
+    const boss = this.boss;
+    if (boss && !boss.dead) {
+      const dx = boss.x - p.x, dy = boss.y - p.y;
+      const d = Math.hypot(dx, dy);
+      if (d <= range && angleDiff(Math.atan2(dy, dx)) <= halfAngle && (this.bossForceTarget || d < bestD)) {
+        best = boss;
+      }
+    }
+    return best;
   }
 
   /** Manual-fire mode: the laser is wherever the mouse points, and a target
@@ -2122,8 +2179,8 @@ export class Engine {
     const items: SpawnItem[] = [];
     const boss = this.stageDef.bossWaves.includes(inStage);
     const count = boss
-      ? Math.min(30, Math.round(6 + power * 1.3))
-      : Math.min(52, Math.round(5 + power * 2.6 + power * power * 0.1));
+      ? Math.min(36, Math.round(6 + power * 1.5))
+      : Math.min(64, Math.round(6 + power * 3.0 + power * power * 0.12));
     const weights = this.zombieWeights(power);
     for (let i = 0; i < count; i++) items.push({ type: rollEnemy(weights) as ZType });
     // shuffle the fodder
@@ -2749,7 +2806,7 @@ export class Engine {
         c.restore();
       };
       darkenOutside(0.95, 0.18);
-      darkenOutside(0.55, 0.22);
+      darkenOutside(FLASHLIGHT_HALF_ANGLE, 0.22);
     }
 
     /* --- arena: deployables + placement ghost --- */
