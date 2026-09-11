@@ -2711,6 +2711,29 @@ export class Engine {
     c.fillStyle = vg;
     c.fillRect(0, 0, W, H);
 
+    // flashlight-style vision cone, aimed with the player — the arena stays
+    // on the old omnidirectional pool above since it's a fixed side-view lane,
+    // not a direction the player actually turns to look around
+    if (!this.stageDef.fixedCamera) {
+      const cx = W / 2, cy = H / 2;
+      const aim = this.pl.aim;
+      const coneR = Math.hypot(W, H);
+      const darkenOutside = (half: number, alpha: number) => {
+        c.save();
+        c.beginPath();
+        c.rect(0, 0, W, H);
+        c.moveTo(cx, cy);
+        c.arc(cx, cy, coneR, aim - half, aim + half);
+        c.closePath();
+        c.clip("evenodd");
+        c.fillStyle = `rgba(0,0,0,${alpha})`;
+        c.fillRect(0, 0, W, H);
+        c.restore();
+      };
+      darkenOutside(0.95, 0.18);
+      darkenOutside(0.55, 0.22);
+    }
+
     /* --- arena: deployables + placement ghost --- */
     if (this.stageDef.fixedCamera) {
       c.save();
@@ -2748,7 +2771,7 @@ export class Engine {
       // dash ghost cooldown glow at player feet
       if (this.pl.dashCd <= 0 && this.paused === false && this.modalOpen === false) {
         c.save();
-        c.translate(this.pl.x - cam, GROUND + 6);
+        c.translate(this.pl.x - cam, this.pl.y + 16 + camY);
         c.globalAlpha = 0.12 + 0.08 * Math.sin(t * 4);
         c.fillStyle = "#67e8f9";
         c.beginPath();
