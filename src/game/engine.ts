@@ -915,10 +915,14 @@ export class Engine {
           this.completeStage();
         } else {
           const boss = this.stageDef.bossWaves.includes(this.waveInStage);
+          // exploration stages carry no bossWaves at all, so without this,
+          // every mid-stage crate there would be stuck at tier 1 forever —
+          // grenades (tier 2+) and stims (tier 3) need a periodic step up too
+          const milestone = this.waveInStage % 5 === 0;
           this.beginRest(1.4);
           if (this.stageDef.fixedCamera) this.awardSupply(0.18, 0.6);
           else p.hp = Math.min(this.st.maxHp, p.hp + 12);
-          this.spawnCrate(boss ? (chance(0.5) ? 3 : 2) : 1);
+          this.spawnCrate(boss ? (chance(0.5) ? 3 : 2) : milestone ? 2 : 1);
           this.announce(
             `WAVE ${this.waveInStage} CLEARED`,
             `${this.stageDef.wavesPerStage - this.waveInStage} to go — breathe while you can`
@@ -1997,9 +2001,13 @@ export class Engine {
     }
   }
 
-  private openCrate(cr: Crate) {
-    cr.opened = true;
-    const drops = rollLoot(cr.tier);
+  /** Rolls a loot tier straight into the backpack and returns a human summary
+   * ("Field Bandage x2, Frag Grenade" / "nothing usable inside") — shared by
+   * an in-world crate open and any loot granted with no physical crate
+   * (stage-clear supplies, which would otherwise spawn a crate in a world
+   * about to be torn down for the next stage, unreachable). */
+  private grantLoot(tier: CrateTier): string {
+    const drops = rollLoot(tier);
     const gainedCounts = new Map<string, number>();
     let lost = 0;
     for (const d of drops) {
@@ -2012,24 +2020,25 @@ export class Engine {
       } else lost++;
     }
     this.invVer++;
-    this.sfx.levelup();
-    this.shake(2);
-    // name the actual items collected instead of a bare count, so opening a
-    // crate tells you what you got, not just how many things happened —
-    // capped at 2 named entries since the banner draws this as one
-    // non-wrapping line (see drawBanner)
+    // name the actual items collected instead of a bare count — capped at 2
+    // named entries since the banner draws this as one non-wrapping line
+    // (see drawBanner)
     const gainedEntries = [...gainedCounts.entries()]
       .map(([itemId, n]) => `${ITEMS[itemId]?.name ?? itemId}${n > 1 ? ` x${n}` : ""}`);
     const gainedList = gainedEntries.length > 2
       ? `${gainedEntries.slice(0, 2).join(", ")} +${gainedEntries.length - 2} more`
       : gainedEntries.join(", ");
-    this.announce(
-      "CRATE OPENED",
-      gainedList
-        ? lost > 0 ? `${gainedList} — backpack full, ${lost} left behind` : gainedList
-        : "nothing usable inside",
-      2.2
-    );
+    return gainedList
+      ? lost > 0 ? `${gainedList} — backpack full, ${lost} left behind` : gainedList
+      : "nothing usable inside";
+  }
+
+  private openCrate(cr: Crate) {
+    cr.opened = true;
+    const summary = this.grantLoot(cr.tier);
+    this.sfx.levelup();
+    this.shake(2);
+    this.announce("CRATE OPENED", summary, 2.2);
     const arena = this.stageDef.fixedCamera;
     for (let i = 0; i < 14; i++)
       this.particles.push({
@@ -2400,6 +2409,11 @@ export class Engine {
     for (const id of WEAPON_IDS) {
       if (this.reserve[id] >= 0) this.reserve[id] = Math.max(this.reserve[id], Math.round(WDEF[id].reserve * 0.5));
     }
+    // a clear stage deserves a real supply drop — a physical crate spawned
+    // here would be left behind in a world about to be replaced, so grant it
+    // straight into the backpack instead (the Safe House screen right after
+    // is exactly where the player will see it)
+    this.grantLoot(HORDE_STAGES.includes(cleared) ? 3 : 2);
     this.writeCheckpoint(cleared + 1);
     this.sfx.levelup();
     this.onEvent({
