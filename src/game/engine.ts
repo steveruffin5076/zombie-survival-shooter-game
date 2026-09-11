@@ -1068,7 +1068,7 @@ export class Engine {
     p.flash = 0.07;
     // eject a spent casing
     this.particles.push({
-      x: p.x - Math.cos(p.aim) * 4, y: p.y - 42,
+      x: p.x - Math.cos(p.aim) * 4, y: p.y,
       vx: -p.face * R(60, 150), vy: R(-210, -150),
       life: 0.6, max: 0.6, size: 1.8, color: "#fbbf24", grav: 1500, add: false,
     });
@@ -1076,8 +1076,10 @@ export class Engine {
     const base = p.aim;
     const wc = WDEF[this.kind].cls;
     const muzzle = wc === "carbine" ? 58 : wc === "smg" ? 48 : 46;
+    // no more "-40 shoulder height" — bullets spawn from the player's real
+    // top-down position, same origin the laser sight and the drawn gun use
     const mzx = p.x + Math.cos(base) * muzzle;
-    const mzy = p.y - 40 + Math.sin(base) * muzzle;
+    const mzy = p.y + Math.sin(base) * muzzle;
     const spread = st.projSpread;
     const jit = st.jitter;
     for (let i = 0; i < n; i++) {
@@ -1097,8 +1099,10 @@ export class Engine {
     }
     for (let i = 0; i < 5; i++)
       this.particles.push({ x: mzx, y: mzy, vx: Math.cos(base + R(-0.5, 0.5)) * R(120, 420), vy: Math.sin(base + R(-0.5, 0.5)) * R(120, 420), life: R(0.08, 0.16), max: 0.16, size: R(1.5, 3.5), color: chance(0.5) ? "#fde68a" : "#f59e0b", grav: 0, add: true });
-    this.particles.push({ x: p.x - Math.cos(base) * 4, y: p.y - 42, vx: -p.face * R(50, 130), vy: R(-190, -140), life: 0.55, max: 0.55, size: 2, color: "#fbbf24", grav: 1500, add: false });
+    this.particles.push({ x: p.x - Math.cos(base) * 4, y: p.y, vx: -p.face * R(50, 130), vy: R(-190, -140), life: 0.55, max: 0.55, size: 2, color: "#fbbf24", grav: 1500, add: false });
+    // recoil pushes back along the full 2D aim direction now, not just x
     p.vx -= Math.cos(base) * (w.recoil * 0.55);
+    p.vy -= Math.sin(base) * (w.recoil * 0.55);
     this.shake(w.shake);
     this.sfx.shoot();
   }
