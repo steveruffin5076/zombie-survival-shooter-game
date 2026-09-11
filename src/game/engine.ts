@@ -208,8 +208,10 @@ export class Engine {
 
   private keys = new Set<string>();
   private mouse = { x: W / 2, y: 300, down: false };
-  /** touch joystick deflection, -1..1 per axis — see setMoveVector() */
+  /** left touch joystick deflection, -1..1 per axis — see setMoveVector() */
   private stick = { x: 0, y: 0 };
+  /** right touch joystick deflection, -1..1 per axis — see setAimVector() */
+  private aimStick = { x: 0, y: 0 };
 
   // world state
   private cam = 0;
@@ -562,6 +564,8 @@ export class Engine {
     this.keys.clear();
     this.stick.x = 0;
     this.stick.y = 0;
+    this.aimStick.x = 0;
+    this.aimStick.y = 0;
     this.mouse.down = false;
   }
 
@@ -677,6 +681,8 @@ export class Engine {
     this.keys.clear();
     this.stick.x = 0;
     this.stick.y = 0;
+    this.aimStick.x = 0;
+    this.aimStick.y = 0;
     this.mouse.down = false;
   };
 
@@ -743,6 +749,14 @@ export class Engine {
   setMoveVector(x: number, y: number) {
     this.stick.x = clamp(x, -1, 1);
     this.stick.y = clamp(y, -1, 1);
+  }
+
+  /** Analog aim from the right touch joystick, each component -1..1. While
+   * it's deflected it points the flashlight cone instead of the pointer;
+   * pass (0, 0) on release to hand aiming back to the mouse. */
+  setAimVector(x: number, y: number) {
+    this.aimStick.x = clamp(x, -1, 1);
+    this.aimStick.y = clamp(y, -1, 1);
   }
 
   /** Starts/stops continuous fire — same effect as holding/releasing the mouse button.
@@ -1036,6 +1050,11 @@ export class Engine {
 
   /** Pure mouse-directed aim angle. */
   private mouseAimAngle() {
+    // the right stick, while deflected, overrides the pointer direction —
+    // it's the only aim input on touch (see setAimVector)
+    if (this.aimStick.x !== 0 || this.aimStick.y !== 0) {
+      return Math.atan2(this.aimStick.y, this.aimStick.x);
+    }
     const p = this.pl;
     // mouse.x/y are canvas (screen-space) pixels, so add the camera's
     // world-space top-left corner to convert to world coordinates. No extra

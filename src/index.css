@@ -121,3 +121,21 @@ body {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
+
+/* ---------- viewport fit ----------
+ * Mobile browsers size 100vh (and `position: fixed` insets) to the viewport
+ * WITHOUT the retractable URL bar, so a full-height layout runs off the bottom
+ * of what you can actually see while that bar is up. dvh tracks the visible
+ * height instead; the vh line above it is the fallback for older browsers. */
+.viewport-fit {
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* 16:9 play area, as large as fits the *visible* viewport */
+.game-box {
+  width: min(100vw, 177.78vh);
+  width: min(100vw, 177.78dvh);
+  aspect-ratio: 16 / 9;
+}

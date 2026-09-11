@@ -213,6 +213,9 @@ export default function App() {
   const move = useCallback((x: number, y: number) => {
     engineRef.current?.setMoveVector(x, y);
   }, []);
+  const aim = useCallback((x: number, y: number) => {
+    engineRef.current?.setAimVector(x, y);
+  }, []);
   const triggerDash = useCallback(() => engineRef.current?.triggerDash(), []);
   const tap = useCallback((x: number, y: number) => engineRef.current?.triggerTap(x, y), []);
   const fireStart = useCallback(() => engineRef.current?.setFiring(true), []);
@@ -245,8 +248,8 @@ export default function App() {
   }, [screen]);
 
   return (
-    <div className="fixed inset-0 grid place-items-center overflow-hidden bg-black select-none">
-      <div ref={boxRef} className="relative" style={{ width: "min(100vw, 177.78vh)", aspectRatio: "16 / 9" }}>
+    <div className="viewport-fit fixed left-0 top-0 grid place-items-center overflow-hidden bg-black select-none">
+      <div ref={boxRef} className="game-box relative">
         <canvas
           ref={canvasRef}
           className="absolute inset-0 h-full w-full cursor-none"
@@ -293,6 +296,7 @@ export default function App() {
         {screen === "game" && touch && !paused && !choices && !over && !stageClear && !showInventory && (
           <TouchControls
             onMove={move}
+            onAim={aim}
             onDash={triggerDash}
             onTap={tap}
             onFireStart={fireStart}
