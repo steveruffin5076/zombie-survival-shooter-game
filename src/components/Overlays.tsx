@@ -2,6 +2,7 @@ import type { GameStats, UpgradeChoice } from "../game/types";
 import {
   Play, RotateCcw, Home, Trophy, Timer, Skull, TrendingUp, Volume2, VolumeX,
   Crosshair, Gauge, ChevronsRight, HeartPulse, Infinity as InfinityIcon, BookOpen, Settings as SettingsIcon,
+  Maximize, Minimize,
 } from "lucide-react";
 import { ICONS, RARITY_STYLE, MenuButton, StatBox } from "./ui";
 
@@ -9,15 +10,30 @@ import { ICONS, RARITY_STYLE, MenuButton, StatBox } from "./ui";
 
 export function Menu({
   onEndless, onTutorial, onSettings, high, muted, onMute, touch = false,
+  canFullscreen = false, fullscreen = false, onFullscreen,
 }: {
   onEndless: () => void; onTutorial: () => void; onSettings: () => void;
   high: number; muted: boolean; onMute: () => void;
   /** swaps the keyboard hint row for the on-screen control equivalents */
   touch?: boolean;
+  /** hidden where the Fullscreen API isn't available (notably iPhone Safari) */
+  canFullscreen?: boolean;
+  fullscreen?: boolean;
+  onFullscreen?: () => void;
 }) {
   return (
     <div className="pointer-events-auto absolute inset-0 z-30 flex flex-col items-center justify-center overflow-y-auto bg-gradient-to-b from-black/60 via-transparent to-black/85 px-4 py-4">
       <div className="absolute flex items-center gap-2 right-6 top-6">
+        {canFullscreen && (
+          <button
+            onClick={onFullscreen}
+            className="flex items-center justify-center rounded-lg border border-amber-400/30 bg-amber-500/10 text-amber-200 backdrop-blur-sm transition hover:border-amber-400/60 hover:text-white h-10 w-10"
+            aria-label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+            title={fullscreen ? "Exit fullscreen" : "Fullscreen — bigger play area on a phone"}
+          >
+            {fullscreen ? <Minimize className="h-4.5 w-4.5" /> : <Maximize className="h-4.5 w-4.5" />}
+          </button>
+        )}
         <button
           onClick={onSettings}
           className="flex items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white h-10 w-10"

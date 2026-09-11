@@ -5,7 +5,7 @@ import { CONSUMABLE_ITEMS, ITEMS, type ConsumableKey } from "../game/items";
 import { ICONS } from "./ui";
 import {
   Heart, Skull, Pause, Volume2, VolumeX, Crosshair, Zap, Trophy, Lock,
-  Bot, Hand, Gem,
+  Bot, Hand, Gem, Maximize, Minimize,
 } from "lucide-react";
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -26,9 +26,16 @@ interface Props {
   onSelectTool: (kind: DeployableKind) => void;
   onUseItem: (key: ConsumableKey) => void;
   touch?: boolean;
+  /** hidden where the Fullscreen API isn't available (notably iPhone Safari) */
+  canFullscreen?: boolean;
+  fullscreen?: boolean;
+  onFullscreen?: () => void;
 }
 
-export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, onSelectTool, onUseItem, touch = false }: Props) {
+export default function Hud({
+  hud, inv, onMute, onPause, onSwitch, onFireMode, onSelectTool, onUseItem, touch = false,
+  canFullscreen = false, fullscreen = false, onFullscreen,
+}: Props) {
   const hpPct = Math.max(0, Math.min(1, hud.hp / hud.maxHp));
   const xpPct = Math.max(0, Math.min(1, hud.xp / hud.xpNext));
   const dashPct = hud.dashMax > 0 ? 1 - Math.max(0, hud.dashT) / hud.dashMax : 1;
@@ -243,6 +250,15 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
           >
             <Pause className="h-4 w-4" />
           </button>
+          {canFullscreen && (
+            <button
+              onClick={onFullscreen}
+              className="flex items-center justify-center rounded-lg border border-amber-400/30 bg-amber-500/10 text-amber-200 backdrop-blur-sm transition hover:border-amber-400/60 hover:text-white h-9 w-9"
+              aria-label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+            >
+              {fullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
+            </button>
+          )}
           <button
             onClick={onMute}
             className="flex items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white h-9 w-9"

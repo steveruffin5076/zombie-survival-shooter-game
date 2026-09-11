@@ -17,6 +17,7 @@ import Tutorial from "./components/Tutorial";
 import Settings from "./components/Settings";
 import { isTouchCapable } from "./game/input";
 import { loadSettings, saveSettings } from "./game/settings";
+import { isFullscreen, supportsFullscreen, toggleFullscreen } from "./game/fullscreen";
 
 /** the canvas's own coordinate space — the UI layer is authored at this size
  * and scaled to the box, so HUD and canvas art stay in proportion everywhere */
@@ -43,6 +44,19 @@ export default function App() {
   const [touch] = useState(() =>
     isTouchCapable(navigator.maxTouchPoints, window.matchMedia("(pointer: coarse)").matches)
   );
+  const [canFullscreen] = useState(supportsFullscreen);
+  const [fullscreen, setFullscreen] = useState(false);
+  // track the real state, not just our own clicks — Esc and the system back
+  // gesture both leave fullscreen without going through the button
+  useEffect(() => {
+    const sync = () => setFullscreen(isFullscreen());
+    document.addEventListener("fullscreenchange", sync);
+    document.addEventListener("webkitfullscreenchange", sync);
+    return () => {
+      document.removeEventListener("fullscreenchange", sync);
+      document.removeEventListener("webkitfullscreenchange", sync);
+    };
+  }, []);
   // Measured rather than computed in CSS: scale() needs a unitless number, and
   // CSS can't divide a length down to one (calc(100vw / 1280) is still a length).
   useEffect(() => {
@@ -143,6 +157,7 @@ export default function App() {
     setBrightness(v);
     saveSettings({ ...loadSettings(), brightness: v });
   }, []);
+  const goFullscreen = useCallback(() => { void toggleFullscreen(); }, []);
   const changeVolume = useCallback((v: number) => {
     setVolumeState(v);
     engineRef.current?.setVolume(v);
@@ -282,6 +297,9 @@ export default function App() {
             onSelectTool={selectTool}
             onUseItem={useItem}
             touch={touch}
+            canFullscreen={canFullscreen}
+            fullscreen={fullscreen}
+            onFullscreen={goFullscreen}
           />
         )}
         {screen === "game" && hud && hud.repairWindowT > 0 && (
@@ -319,6 +337,9 @@ export default function App() {
             muted={hud?.muted ?? false}
             onMute={toggleMute}
             touch={touch}
+            canFullscreen={canFullscreen}
+            fullscreen={fullscreen}
+            onFullscreen={goFullscreen}
           />
         )}
 
