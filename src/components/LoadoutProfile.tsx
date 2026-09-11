@@ -12,11 +12,14 @@ interface Props {
   onClose: () => void;
   onStart: () => void;
   onSelectLoadout: (weaponId: string) => void;
+  /** button label + icon context — "START" before a run, "CONTINUE" between stages */
+  ctaLabel?: string;
 }
 
-/** Opened from the Menu before an Endless run starts — no more campaign, no walkable
+/** Opened from the Menu before an Endless run starts, and again between stages so
+ * a level-up mid-run can actually be put to use — no more campaign, no walkable
  * hideout: just the weapon loadout (gated by lifetime meta level) and lifetime stats. */
-export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoadout }: Props) {
+export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoadout, ctaLabel = "START" }: Props) {
   const [tab, setTab] = useState<Tab>("loadout");
   const xpPct = Math.max(0, Math.min(1, profile.metaXp / profile.metaXpNext));
 
@@ -102,7 +105,7 @@ export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoad
             className="flex items-center gap-3 rounded-xl bg-gradient-to-b from-amber-400 to-amber-600 px-11 py-3.5 text-sm font-bold tracking-[0.22em] text-amber-950 shadow-[0_0_40px_rgba(245,158,11,0.35)] transition-all hover:scale-[1.03] active:scale-[0.98]"
           >
             <Play className="h-4 w-4" fill="currentColor" />
-            START
+            {ctaLabel}
           </button>
         </div>
       </div>

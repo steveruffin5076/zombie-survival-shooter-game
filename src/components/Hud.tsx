@@ -5,7 +5,7 @@ import { CONSUMABLE_ITEMS, ITEMS, type ConsumableKey } from "../game/items";
 import { ICONS } from "./ui";
 import {
   Heart, Skull, Pause, Volume2, VolumeX, Crosshair, Zap, Trophy, Lock,
-  Bot, Hand, DoorOpen, Gem,
+  Bot, Hand, Gem,
 } from "lucide-react";
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
@@ -128,22 +128,6 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
                   </button>
                 );
               })}
-            </div>
-          </>
-        ) : hud.phase === "travel" ? (
-          <>
-            <div className="font-display text-2xl tracking-[0.18em] text-cyan-300 drop-shadow-[0_0_14px_rgba(103,232,249,0.45)]">
-              MOVE OUT
-            </div>
-            <div className="mx-auto mt-1.5 h-1.5 w-56 overflow-hidden rounded-full border border-white/10 bg-black/60">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-cyan-600 to-cyan-300 transition-[width] duration-200"
-                style={{ width: `${hud.travelDistance * 100}%` }}
-              />
-            </div>
-            <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[11px] font-semibold tracking-widest text-white/55">
-              <DoorOpen className="h-3.5 w-3.5" />
-              {hud.travelGatesOpened}/{hud.travelGatesTotal} GATES · SAFE HOUSE AHEAD
             </div>
           </>
         ) : (

@@ -29,6 +29,7 @@ export default function App() {
     isTouchCapable(navigator.maxTouchPoints, window.matchMedia("(pointer: coarse)").matches)
   );
   const [stageClear, setStageClear] = useState<{ stage: number; next: number; stageName: string; wavesPerStage: number } | null>(null);
+  const [stageLoadout, setStageLoadout] = useState(false);
   const [safeHouse, setSafeHouse] = useState(false);
   const [inv, setInv] = useState<InventorySnapshot | null>(null);
   const [showInventory, setShowInventory] = useState(false);
@@ -54,6 +55,7 @@ export default function App() {
           break;
         case "stageclear":
           setStageClear({ stage: e.stage, next: e.next, stageName: e.stageName, wavesPerStage: e.wavesPerStage });
+          setStageLoadout(false);
           setSafeHouse(false);
           break;
         case "pause":
@@ -98,6 +100,7 @@ export default function App() {
     setOver(null);
     setChoices(null);
     setStageClear(null);
+    setStageLoadout(false);
     setSafeHouse(false);
     setShowInventory(false);
     setPaused(false);
@@ -117,15 +120,21 @@ export default function App() {
     setOver(null);
     setChoices(null);
     setStageClear(null);
+    setStageLoadout(false);
     setSafeHouse(false);
     setShowInventory(false);
     setPaused(false);
   }, []);
 
-  // StageClear's "CONTINUE" opens the safe house's resupply/backpack screen
-  // instead of advancing immediately; SafeHouseOverlay's own continue button
-  // is what actually calls advanceStage().
-  const openSafeHouse = useCallback(() => setSafeHouse(true), []);
+  // StageClear's "CONTINUE" opens the loadout screen first — a level gained
+  // mid-stage can actually be spent on a new weapon before the next stage —
+  // then the safe house's resupply/backpack screen; SafeHouseOverlay's own
+  // continue button is what actually calls advanceStage().
+  const openStageLoadout = useCallback(() => setStageLoadout(true), []);
+  const confirmStageLoadout = useCallback(() => {
+    setStageLoadout(false);
+    setSafeHouse(true);
+  }, []);
   const confirmSafeHouse = useCallback(() => {
     engineRef.current?.advanceStage();
     setSafeHouse(false);
@@ -262,13 +271,23 @@ export default function App() {
 
         {choices && <LevelUpModal choices={choices} level={hud?.level ?? 1} onPick={choose} />}
 
-        {stageClear && !safeHouse && !choices && !over && (
+        {stageClear && !stageLoadout && !safeHouse && !choices && !over && (
           <StageClear
             stage={stageClear.stage}
             next={stageClear.next}
             stageName={stageClear.stageName}
             wavesPerStage={stageClear.wavesPerStage}
-            onContinue={openSafeHouse}
+            onContinue={openStageLoadout}
+          />
+        )}
+
+        {stageClear && stageLoadout && !safeHouse && !choices && !over && profile && (
+          <LoadoutProfile
+            profile={profile}
+            onClose={confirmStageLoadout}
+            onStart={confirmStageLoadout}
+            onSelectLoadout={selectLoadout}
+            ctaLabel="CONTINUE"
           />
         )}
 

@@ -138,11 +138,11 @@ interface SpawnItem { type: ZType; boss?: boolean }
 interface Banner { text: string; sub: string; t: number; dur: number }
 // kind 0 stone-a 1 stone-b 2 tree 3 lamp 4 wrecked car 5 barrier 6 rubble pile
 interface Decor { x: number; y: number; kind: number; s: number; ph: number }
-interface Gate { x: number; opened: boolean }
+/** Solid-collision radius per decor kind (world units, scaled by the decor's own `s`).
+ * 0 means walk-through — just the lamp post's thin light pole. */
+const DECOR_SOLID_R = [11, 13, 16, 0, 18, 14, 16];
 interface Crate { x: number; y: number; tier: CrateTier; opened: boolean }
 interface GrenadeProj { x: number; y: number; vx: number; vy: number; fuse: number }
-type HazardKind = "alarm" | "glass" | "flare";
-interface Hazard { x: number; y: number; kind: HazardKind; triggered: boolean }
 
 /* ------------------------------------------------------------------ */
 /* engine                                                              */
@@ -235,21 +235,11 @@ export class Engine {
   private stage = 1;
   private waveInStage = 0;       // 1..stageDef.wavesPerStage
   private stageIntermission = false;
-  private phase: "break" | "active" | "travel" | "prep" = "break";
+  private phase: "break" | "active" | "prep" = "break";
   private breakT = 0;
   private spawnT = 0;
   private queue: SpawnItem[] = [];
   private waveTotal = 0;
-
-  /* --- travel: the walk from "waves cleared" to the safe house door --- */
-  private gates: Gate[] = [];
-  private safeHouseX = 0;
-  private travelStartX = 0;
-  /** left clamp during travel; ratchets right as gates open, never loosens */
-  private travelMinX = 26;
-  private travelProgressX = 0;
-  private travelIdleT = 0;
-  private hazards: Hazard[] = [];
 
   /* --- inventory: fixed 4x4 backpack, a persistent safe-house stash, loot crates --- */
   private backpack: PlacedItem[] = [];
@@ -459,13 +449,6 @@ export class Engine {
     this.stageIntermission = false;
     this.waveTotal = 0;
     this.queue = [];
-    this.gates = [];
-    this.safeHouseX = 0;
-    this.travelStartX = 0;
-    this.travelMinX = 26;
-    this.travelProgressX = 0;
-    this.travelIdleT = 0;
-    this.hazards = [];
     this.backpack = [];
     this.deposit = [];
     this.invVer++;
@@ -516,22 +499,51 @@ export class Engine {
     const wTotal = weights.reduce((a, b) => a + b, 0) || 1;
     const area = worldW * WORLD_H;
     const decorCount = Math.round(area / 42000);
+    // keep a clear patch around the stage's own spawn point (worldW/2, WORLD_H/2)
+    // so a solid obstacle can never spawn on top of the player at stage start
+    const spawnX = worldW / 2, spawnY = WORLD_H / 2;
     for (let i = 0; i < decorCount; i++) {
       let roll = Math.random() * wTotal;
       let kind = 0;
       for (let k = 0; k < weights.length; k++) {
         if ((roll -= weights[k]) < 0) { kind = k; break; }
       }
-      this.decor.push({
-        x: R(40, worldW - 40), y: R(40, WORLD_H - 40),
-        kind, s: R(0.7, 1.25), ph: R(0, TAU),
-      });
+      let x = 0, y = 0;
+      for (let tries = 0; tries < 5; tries++) {
+        x = R(40, worldW - 40);
+        y = R(40, WORLD_H - 40);
+        if (Math.hypot(x - spawnX, y - spawnY) > 120) break;
+      }
+      this.decor.push({ x, y, kind, s: R(0.7, 1.25), ph: R(0, TAU) });
     }
     // ground tufts, scattered the same way (world coords, no parallax)
     const tuftCount = Math.round(area / 9000);
     for (let i = 0; i < tuftCount; i++) {
       this.tufts.push({ x: R(0, worldW), y: R(0, WORLD_H), h: R(5, 14), s: R(0.6, 1.3) });
     }
+  }
+
+  /** Solid decor (gravestones, wrecks, barriers, rubble, tree trunks) blocks
+   * the player — pushes them back out along the shortest escape direction
+   * instead of letting them walk straight through. Purely cosmetic decor
+   * (the lamp post's thin pole) is excluded via a 0 radius in DECOR_SOLID_R. */
+  private resolvePlayerObstacles() {
+    const p = this.pl;
+    const playerR = 13;
+    for (const d of this.decor) {
+      const solidR = DECOR_SOLID_R[d.kind] * d.s;
+      if (solidR <= 0) continue;
+      const dx = p.x - d.x, dy = p.y - d.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      const min = solidR + playerR;
+      if (dist < min) {
+        const push = min - dist;
+        p.x += (dx / dist) * push;
+        p.y += (dy / dist) * push;
+      }
+    }
+    p.x = clamp(p.x, 26, this.worldW - 26);
+    p.y = clamp(p.y, 26, WORLD_H - 26);
   }
 
   /* ---------------- input ---------------- */
@@ -796,6 +808,7 @@ export class Engine {
     // Update position (no gravity in top-down)
     p.x = clamp(p.x + p.vx * dt, 26, this.worldW - 26);
     p.y = clamp(p.y + p.vy * dt, 26, WORLD_H - 26);
+    this.resolvePlayerObstacles();
 
     // Animation: walk cycle based on velocity magnitude
     const vel = Math.hypot(p.vx, p.vy);
@@ -805,8 +818,16 @@ export class Engine {
     if (vel > 26) {
       p.face = Math.cos(Math.atan2(p.vy, p.vx)) > 0 ? 1 : -1;
     }
-    this.acquireTarget();
-    p.aim = this.aimAngle();
+    // Auto-fire: lock onto and aim at the nearest in-range target, hands-free.
+    // Manual: the mouse always drives the aim — a target is only "hot" (for
+    // the reticle + onTarget flag) if that exact laser ray crosses one.
+    if (this.autoFire) {
+      this.acquireTarget();
+      p.aim = this.aimAngle();
+    } else {
+      p.aim = this.mouseAimAngle();
+      this.acquireRayTarget(p.aim);
+    }
     if (this.laserFlash > 0) this.laserFlash -= dt;
 
     // reload + auto-fire (all weapons are full-auto; rate differs per weapon)
@@ -852,7 +873,10 @@ export class Engine {
       if (this.queue.length === 0 && this.zombies.length === 0 && (!this.boss || this.boss.dead)) {
         this.score += 50 * this.power;
         if (this.waveInStage >= this.stageDef.wavesPerStage) {
-          this.startTravel();
+          // clearing the last wave finishes the stage directly — no more
+          // walk-to-the-safe-house corridor with gates to clear; that was a
+          // side-scroller-era mechanic that doesn't fit open 2D exploration
+          this.completeStage();
         } else {
           const boss = this.stageDef.bossWaves.includes(this.waveInStage);
           this.beginRest(3.4);
@@ -865,8 +889,6 @@ export class Engine {
           );
         }
       }
-    } else {
-      this.updateTravel(dt);
     }
     this.updateDeployables();
 
@@ -883,7 +905,7 @@ export class Engine {
     this.decals = this.decals.filter((d) => d.a > 0.05);
 
     // camera — top-down follows player position in 2D
-    if (this.stageDef.fixedCamera && this.phase !== "travel") {
+    if (this.stageDef.fixedCamera) {
       this.cam = this.camOrigin();
       this.camY = 0;
     } else {
@@ -937,22 +959,67 @@ export class Engine {
     if (this.onTarget && !had) this.laserFlash = 0.25;
   }
 
-  /** Angle toward the target, or toward mouse position if no target */
+  /** Angle toward the locked auto-fire target, or toward the mouse if none. */
   private aimAngle() {
     const p = this.pl;
     if (this.target && !this.target.dead) {
+      // the boss keeps its old tall side-view body (arena-only, deliberately
+      // unconverted), so it still needs the "aim above the feet" offset;
+      // the top-down zombie body is centered at its own y directly
+      const isBoss = this.target === this.boss;
       const tx = this.target.x;
-      const ty = this.target.y - 36 * this.target.scale;
+      const ty = isBoss ? this.target.y - 36 * this.target.scale : this.target.y;
       return Math.atan2(ty - p.y, tx - p.x);
     }
-    // Aim toward mouse position relative to player — mouse.x/y are canvas
-    // (screen-space) pixels, so add the camera's world-space top-left corner
-    // to convert to world coordinates. No extra -W/2/-H/2: that would only
-    // be correct if cam/camY always sat exactly at worldW/2-ish, which they
-    // don't (they clamp at world edges).
+    return this.mouseAimAngle();
+  }
+
+  /** Pure mouse-directed aim angle, ignoring any locked target. */
+  private mouseAimAngle() {
+    const p = this.pl;
+    // mouse.x/y are canvas (screen-space) pixels, so add the camera's
+    // world-space top-left corner to convert to world coordinates. No extra
+    // -W/2/-H/2: that would only be correct if cam/camY always sat exactly
+    // at worldW/2-ish, which they don't (they clamp at world edges).
     const mx = this.mouse.x + this.cam;
     const my = this.mouse.y + this.camY;
     return Math.atan2(my - p.y, mx - p.x);
+  }
+
+  /** Manual-fire mode: the laser is wherever the mouse points, and a target
+   * is only "acquired" (for the hot-reticle highlight) if that exact ray
+   * actually crosses a zombie or the boss — no auto-snap to the nearest one. */
+  private acquireRayTarget(aim: number) {
+    const p = this.pl;
+    const w = WDEF[this.kind];
+    const range = w.range * (1 + 0.12 * (this.stacks["velo"] || 0));
+    const dirX = Math.cos(aim), dirY = Math.sin(aim);
+    let best: AimTarget | null = null;
+    let bestProj = Infinity;
+
+    for (const z of this.zombies) {
+      if (z.dead) continue;
+      const dx = z.x - p.x, dy = z.y - p.y;
+      const proj = dx * dirX + dy * dirY; // distance along the aim ray
+      if (proj <= 0 || proj > range) continue;
+      const perp = Math.abs(dx * dirY - dy * dirX); // distance off the ray
+      if (perp <= z.r + 10 && proj < bestProj) { bestProj = proj; best = z; }
+    }
+
+    const boss = this.boss;
+    if (boss && !boss.dead) {
+      const dx = boss.x - p.x, dy = boss.y - p.y;
+      const proj = dx * dirX + dy * dirY;
+      if (proj > 0 && proj <= range) {
+        const perp = Math.abs(dx * dirY - dy * dirX);
+        if (perp <= boss.r + 10 && proj < bestProj) { bestProj = proj; best = boss; }
+      }
+    }
+
+    const had = this.onTarget;
+    this.target = best;
+    this.onTarget = best !== null;
+    if (this.onTarget && !had) this.laserFlash = 0.25;
   }
 
   /* ============ AMBUSH ============ */
@@ -1449,7 +1516,9 @@ export class Engine {
       }
       for (const z of this.zombies) {
         if (z.dead || b.hits.has(z)) continue;
-        const cy = z.y - 36 * z.scale;
+        // top-down zombie body is centered at z.y directly now — no more
+        // "chest height above feet" offset from the old standing side-view body
+        const cy = z.y;
         const rr = z.r + 7;
         const dx = b.x - z.x, dy = b.y - cy;
         if (dx * dx + dy * dy < rr * rr * 1.25) {
@@ -1883,8 +1952,7 @@ export class Engine {
       if (cr.opened) continue;
       if (Math.abs(cr.x - p.x) < 40) { near = cr; break; }
     }
-    // crates only ever spawn during active combat, never travel
-    if (near && this.keys.has("KeyE") && this.phase !== "travel") {
+    if (near && this.keys.has("KeyE")) {
       this.crateOpenT += dt;
       if (this.crateOpenT >= 1.2) {
         this.openCrate(near);
@@ -2245,107 +2313,10 @@ export class Engine {
     this.shake(9);
   }
 
-  /** Called once the stage's last wave is cleared — walk to the safe house. */
-  private startTravel() {
-    this.phase = "travel";
-    this.travelStartX = this.pl.x;
-    this.travelProgressX = this.pl.x;
-    this.travelIdleT = 0;
-    this.travelMinX = 26;
-    // always reachable: never past the world's hard right clamp, even if
-    // combat left the player already near the edge (degrades to ~0 gates)
-    this.safeHouseX = Math.min(this.worldW - 60, this.pl.x + R(1500, 1950));
-    this.gates = [];
-    let gx = this.pl.x + R(520, 660);
-    while (gx < this.safeHouseX - 280) {
-      this.gates.push({ x: gx, opened: false });
-      // a sleeper or two guarding most checkpoints — the whole reason to bypass quiet
-      if (chance(0.7)) {
-        const sx = clamp(gx + R(-110, 110), this.pl.x + 80, this.safeHouseX - 80);
-        const z = this.mkZombie("walker", sx, GROUND, 1 + (this.power - 1) * 0.15, 1);
-        z.dormant = true;
-        this.zombies.push(z);
-      }
-      gx += R(520, 720); // gates ≥500px apart
-    }
-    // hazards scattered along the corridor — safe to walk past, dangerous to run through
-    this.hazards = [];
-    const kinds: HazardKind[] = ["alarm", "glass", "flare"];
-    let hx = this.pl.x + R(300, 480);
-    while (hx < this.safeHouseX - 150) {
-      this.hazards.push({ x: hx, y: GROUND, kind: kinds[RI(0, kinds.length - 1)], triggered: false });
-      hx += R(400, 650);
-    }
-    this.announce("SECTOR CLEAR", "move out — reach the safe house", 2.6);
-    this.sfx.wave();
-  }
-
-  private updateTravel(dt: number) {
-    const p = this.pl;
-    const movingFast = Math.abs(p.vx) > 220;
-    // gates: two verbs. Walk straight into one and it gives — wakes nearby
-    // sleepers, always available. Hold E from just outside contact range and
-    for (const g of this.gates) {
-      if (g.opened) continue;
-      const d = Math.abs(g.x - p.x);
-      if (d < 30) {
-        g.opened = true;
-        this.travelMinX = Math.max(this.travelMinX, g.x - 34);
-        if (p.dashT > 0) { p.dashT = 0; p.vx *= 0.25; }
-        this.shake(3);
-        this.sfx.click();
-        this.texts.push({
-          x: p.x, y: p.y - 92, vy: -46, life: 0.7, max: 0.7,
-          text: "GATE CLEARED", color: "#67e8f9", size: 12,
-        });
-        for (let i = 0; i < 10; i++)
-          this.particles.push({
-            x: g.x, y: GROUND - R(10, 60), vx: R(-60, 60), vy: R(-90, 10),
-            life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#94a3b8", grav: 500, add: false,
-          });
-        for (const z of this.zombies) if (z.dormant && Math.abs(z.x - g.x) < 240) this.wakeZombie(z);
-      }
-    }
-
-    // hazards: alarms/glass/flares only trip if you're running/dashing through
-    // them — walking calmly by is always safe, no roll or check needed. Wakes
-    // nearby sleepers directly instead of building a meter.
-    for (const hz of this.hazards) {
-      if (hz.triggered || Math.abs(hz.x - p.x) >= 26 || !movingFast) continue;
-      hz.triggered = true;
-      for (const z of this.zombies) if (z.dormant && Math.abs(z.x - hz.x) < 260) this.wakeZombie(z);
-      this.shake(4);
-      this.sfx.hurt();
-      const label = hz.kind === "alarm" ? "ALARM TRIPPED" : hz.kind === "glass" ? "GLASS CRUNCHES" : "FLARE HISSES";
-      this.texts.push({ x: p.x, y: p.y - 92, vy: -46, life: 1, max: 1, text: label, color: "#f87171", size: 12 });
-      for (let i = 0; i < 10; i++)
-        this.particles.push({
-          x: hz.x, y: GROUND - R(4, 20), vx: R(-70, 70), vy: R(-90, -10),
-          life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#f87171", grav: 600, add: true,
-        });
-    }
-
-    // anti-camping: no rightward progress for 40s triggers an ambush directly
-    if (p.x > this.travelProgressX + 3) {
-      this.travelProgressX = p.x;
-      this.travelIdleT = 0;
-    } else {
-      this.travelIdleT += dt;
-      if (this.travelIdleT > 40 && this.ambushT <= 0) {
-        this.travelIdleT = 0;
-        this.triggerAmbush(3);
-      }
-    }
-    if (p.x >= this.safeHouseX - 26) this.reachSafeHouse();
-  }
-
-  /** Player reached the safe house door at the end of travel. */
-  private reachSafeHouse() {
-    if (this.phase !== "travel") return;
-    this.completeStage();
-  }
-
-  /** Called after the safe house door is reached — freezes the sim for the stage-clear screen. */
+  /** Called after the stage's last wave is cleared — freezes the sim for the stage-clear screen.
+   * Used to require walking a gated corridor to a safe house first; that was a side-scroller-era
+   * mechanic (fixed "GROUND" y, gates you "clear" by walking into) that doesn't fit open 2D
+   * exploration, so clearing the last wave now finishes the stage directly. */
   private completeStage() {
     const cleared = this.stage;
     this.stageIntermission = true;
@@ -2486,11 +2457,6 @@ export class Engine {
       waveTotal: this.waveTotal,
       remaining: this.queue.length + this.zombies.length,
       phase: this.phase,
-      travelDistance: this.phase === "travel"
-        ? clamp((this.pl.x - this.travelStartX) / Math.max(1, this.safeHouseX - this.travelStartX), 0, 1)
-        : 0,
-      travelGatesTotal: this.gates.length,
-      travelGatesOpened: this.gates.filter((g) => g.opened).length,
       score: this.score,
       kills: this.kills,
       high: this.high,
@@ -2745,91 +2711,6 @@ export class Engine {
     c.fillStyle = vg;
     c.fillRect(0, 0, W, H);
 
-    /* --- travel: gates + safe house door --- */
-    if (this.phase === "travel") {
-      c.save();
-      c.translate(-cam, camY);
-      for (const g of this.gates) {
-        if (g.x < cam - 80 || g.x > cam + W + 80) continue;
-        const pulse = g.opened ? 0.12 : 0.55 + 0.25 * Math.sin(t * 3);
-        c.strokeStyle = g.opened ? "rgba(103,232,249,0.25)" : `rgba(248,113,113,${pulse})`;
-        c.lineWidth = 4;
-        c.beginPath();
-        c.moveTo(g.x, GROUND + 2);
-        c.lineTo(g.x, GROUND - 118);
-        c.stroke();
-        c.fillStyle = g.opened ? "rgba(103,232,249,0.5)" : `rgba(248,113,113,${0.6 + 0.3 * Math.sin(t * 5)})`;
-        c.beginPath();
-        c.arc(g.x, GROUND - 118, 5, 0, TAU);
-        c.fill();
-        c.strokeStyle = "rgba(148,163,184,0.35)";
-        c.lineWidth = 1.6;
-        for (let i = 1; i <= 4; i++) {
-          c.beginPath();
-          c.moveTo(g.x - 3, GROUND - i * 24);
-          c.lineTo(g.x + 3, GROUND - i * 24 - 10);
-          c.stroke();
-        }
-      }
-      // hazards — noise traps, avoidable at a walk
-      for (const hz of this.hazards) {
-        if (hz.triggered || hz.x < cam - 60 || hz.x > cam + W + 60) continue;
-        const flick = 0.6 + 0.4 * Math.sin(t * (hz.kind === "flare" ? 8 : 4) + hz.x);
-        if (hz.kind === "alarm") {
-          c.fillStyle = "#3f2a18";
-          c.fillRect(hz.x - 6, GROUND - 20, 12, 20);
-          c.fillStyle = `rgba(248,113,113,${flick})`;
-          c.beginPath(); c.arc(hz.x, GROUND - 24, 3.5, 0, TAU); c.fill();
-        } else if (hz.kind === "glass") {
-          c.fillStyle = `rgba(148,197,224,${0.35 + 0.2 * flick})`;
-          for (let i = -2; i <= 2; i++) {
-            c.beginPath();
-            c.moveTo(hz.x + i * 5, GROUND - 1);
-            c.lineTo(hz.x + i * 5 + 2.5, GROUND - 6 - R(0, 3));
-            c.lineTo(hz.x + i * 5 + 5, GROUND - 1);
-            c.closePath();
-            c.fill();
-          }
-        } else {
-          c.globalCompositeOperation = "lighter";
-          const fg = c.createRadialGradient(hz.x, GROUND - 14, 1, hz.x, GROUND - 14, 26 * flick);
-          fg.addColorStop(0, "rgba(248,113,113,0.5)");
-          fg.addColorStop(1, "rgba(248,113,113,0)");
-          c.fillStyle = fg;
-          c.fillRect(hz.x - 26, GROUND - 40, 52, 52);
-          c.globalCompositeOperation = "source-over";
-          c.fillStyle = "#7f1d1d";
-          c.fillRect(hz.x - 2, GROUND - 20, 4, 20);
-          c.fillStyle = `rgba(251,146,60,${flick})`;
-          c.beginPath(); c.arc(hz.x, GROUND - 22, 3, 0, TAU); c.fill();
-        }
-      }
-      // safe house door
-      const dx = this.safeHouseX;
-      const bob = Math.sin(t * 2.4) * 3;
-      const doorGlow = c.createRadialGradient(dx, GROUND - 60, 4, dx, GROUND - 60, 130);
-      doorGlow.addColorStop(0, "rgba(74,222,128,0.28)");
-      doorGlow.addColorStop(1, "rgba(74,222,128,0)");
-      c.fillStyle = doorGlow;
-      c.fillRect(dx - 130, GROUND - 190, 260, 260);
-      c.fillStyle = "#0c2418";
-      this.rr(dx - 22, GROUND - 108, 44, 108, 4);
-      c.fill();
-      c.strokeStyle = "#4ade80";
-      c.lineWidth = 2;
-      this.rr(dx - 22, GROUND - 108, 44, 108, 4);
-      c.stroke();
-      c.fillStyle = `rgba(74,222,128,${0.7 + 0.3 * Math.sin(t * 4)})`;
-      c.beginPath();
-      c.arc(dx, GROUND - 54 + bob, 3, 0, TAU);
-      c.fill();
-      c.textAlign = "center";
-      c.font = '700 10px "Space Grotesk", sans-serif';
-      c.fillStyle = "rgba(74,222,128,0.85)";
-      c.fillText("SAFE HOUSE", dx, GROUND - 118);
-      c.restore();
-    }
-
     /* --- arena: deployables + placement ghost --- */
     if (this.stageDef.fixedCamera) {
       c.save();
@@ -2915,8 +2796,9 @@ export class Engine {
       c.stroke();
       // dot on the locked target
       if (hot && this.target) {
+        const isBoss = this.target === this.boss;
         const tx = this.target.x - cam;
-        const ty = this.target.y - 36 * this.target.scale + camY;
+        const ty = (isBoss ? this.target.y - 36 * this.target.scale : this.target.y) + camY;
         c.fillStyle = "rgba(255,70,70,0.9)";
         c.beginPath();
         c.arc(tx, ty, 3.5 + Math.sin(t * 20) * 1.2, 0, TAU);
@@ -3018,9 +2900,8 @@ export class Engine {
       c.textAlign = "left";
       c.font = '600 11px monospace';
       c.fillStyle = "#4ade80";
-      const travel = this.phase === "travel" ? ` gates:${this.gates.filter((g) => g.opened).length}/${this.gates.length}` : "";
       c.fillText(
-        `stage:${this.stage} phase:${this.phase} wave:${this.waveInStage}/${this.stageDef.wavesPerStage} power:${this.power.toFixed(1)} idx:${this.waveIndex}${travel} metaLv:${this.profile.metaLevel}`,
+        `stage:${this.stage} phase:${this.phase} wave:${this.waveInStage}/${this.stageDef.wavesPerStage} power:${this.power.toFixed(1)} idx:${this.waveIndex} metaLv:${this.profile.metaLevel}`,
         8, H - 8
       );
       c.restore();
