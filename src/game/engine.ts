@@ -2635,15 +2635,19 @@ export class Engine {
 
     c.clearRect(0, 0, W, H);
 
+    // the player's actual screen position — usually screen-centered, but the
+    // camera clamps at world edges (see cam/camY assignments), so anything
+    // meant to track the player (light pool, vignette, flashlight cone) has
+    // to use this, not a hardcoded W/2,H/2, or it visibly detaches near edges
+    const px = this.pl.x - cam, py = this.pl.y + camY;
+
     /* --- top-down ground (per-stage theme, no sky/horizon) --- */
     const theme = this.theme;
     c.fillStyle = theme.groundDeep;
     c.fillRect(0, 0, W, H);
 
-    // soft pool of light around the player — camera keeps them screen-centered,
-    // so an anchored screen-space gradient reads as "visibility around you"
-    // without needing to track world position
-    const pool = c.createRadialGradient(W / 2, H / 2, 40, W / 2, H / 2, H * 0.62);
+    // soft pool of light around the player, anchored to their real screen position
+    const pool = c.createRadialGradient(px, py, 40, px, py, H * 0.62);
     pool.addColorStop(0, theme.groundTop);
     pool.addColorStop(1, theme.groundMid);
     c.fillStyle = pool;
@@ -2705,25 +2709,24 @@ export class Engine {
     c.restore();
 
     /* --- vignette (darkness beyond the player's light) --- */
-    const vg = c.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.74);
+    const vg = c.createRadialGradient(px, py, H * 0.3, px, py, H * 0.74);
     vg.addColorStop(0, "rgba(0,0,0,0)");
     vg.addColorStop(1, "rgba(0,0,0,0.55)");
     c.fillStyle = vg;
     c.fillRect(0, 0, W, H);
 
-    // flashlight-style vision cone, aimed with the player — the arena stays
-    // on the old omnidirectional pool above since it's a fixed side-view lane,
-    // not a direction the player actually turns to look around
+    // flashlight-style vision cone, anchored to the player's real screen
+    // position and aimed with them — the arena stays on the old omnidirectional
+    // pool above since it's a fixed side-view lane, not a direction you turn to look
     if (!this.stageDef.fixedCamera) {
-      const cx = W / 2, cy = H / 2;
       const aim = this.pl.aim;
-      const coneR = Math.hypot(W, H);
+      const coneR = Math.hypot(W, H) * 1.5;
       const darkenOutside = (half: number, alpha: number) => {
         c.save();
         c.beginPath();
         c.rect(0, 0, W, H);
-        c.moveTo(cx, cy);
-        c.arc(cx, cy, coneR, aim - half, aim + half);
+        c.moveTo(px, py);
+        c.arc(px, py, coneR, aim - half, aim + half);
         c.closePath();
         c.clip("evenodd");
         c.fillStyle = `rgba(0,0,0,${alpha})`;
@@ -2762,7 +2765,7 @@ export class Engine {
       const lowHp = pct < 0.32 ? (0.32 - pct) * (1.4 + 0.5 * Math.sin(t * 5.5)) : 0;
       const a = clamp(this.pl.hurtT * 0.3 + lowHp, 0, 0.5);
       if (a > 0.01) {
-        const hg = c.createRadialGradient(W / 2, H / 2, H * 0.32, W / 2, H / 2, H * 0.72);
+        const hg = c.createRadialGradient(px, py, H * 0.32, px, py, H * 0.72);
         hg.addColorStop(0, "rgba(153,27,27,0)");
         hg.addColorStop(1, `rgba(127,20,20,${a})`);
         c.fillStyle = hg;
