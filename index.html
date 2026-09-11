@@ -8,6 +8,16 @@
     />
     <meta name="theme-color" content="#04060d" />
     <title>Graveyard Shift — Zombie Survival</title>
+    <!-- Installed to the home screen, the manifest's fullscreen display mode
+         launches the game with no browser UI at all — and so without Chrome's
+         "to exit full screen…" toast, which a page can't suppress on its own. -->
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Graveyard Shift" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
