@@ -195,7 +195,6 @@ export default function App() {
     engineRef.current?.releaseKey("KeyA");
     engineRef.current?.releaseKey("KeyD");
   }, []);
-  const triggerJump = useCallback(() => engineRef.current?.triggerJump(), []);
   const triggerDash = useCallback(() => engineRef.current?.triggerDash(), []);
   const tap = useCallback((x: number, y: number) => engineRef.current?.triggerTap(x, y), []);
   const fireStart = useCallback(() => engineRef.current?.setFiring(true), []);
@@ -267,7 +266,6 @@ export default function App() {
           <TouchControls
             onMoveStart={moveStart}
             onMoveEnd={moveEnd}
-            onJump={triggerJump}
             onDash={triggerDash}
             onTap={tap}
             onFireStart={fireStart}
@@ -289,7 +287,7 @@ export default function App() {
           />
         )}
 
-        {screen === "menu" && showSettings && (
+        {showSettings && (screen === "menu" || (screen === "game" && paused)) && (
           <Settings
             volume={volume}
             brightness={brightness}
@@ -346,13 +344,14 @@ export default function App() {
           <InventoryOverlay inv={inv} onMove={moveBackpackItem} onClose={() => setShowInventory(false)} />
         )}
 
-        {paused && screen === "game" && !over && !choices && (
+        {paused && screen === "game" && !over && !choices && !showSettings && (
           <PauseMenu
             onResume={resume}
             onRestart={start}
             onQuit={quit}
             muted={hud?.muted ?? false}
             onMute={toggleMute}
+            onSettings={openSettings}
           />
         )}
 

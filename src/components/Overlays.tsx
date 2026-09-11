@@ -79,8 +79,8 @@ export function Menu({
       )}
 
       <div className="anim-rise mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-[12px] font-semibold tracking-wider text-white/40" style={{ animationDelay: "260ms" }}>
-        <span className="flex items-center gap-1.5"><span className="kbd">A</span><span className="kbd">D</span> MOVE · PIVOT LANE</span>
-        <span className="flex items-center gap-1.5"><span className="kbd">W</span> JUMP</span>
+        <span className="flex items-center gap-1.5"><span className="kbd">W</span><span className="kbd">A</span><span className="kbd">S</span><span className="kbd">D</span> MOVE</span>
+        <span className="flex items-center gap-1.5"><span className="kbd">MOUSE</span> AIM</span>
         <span className="flex items-center gap-1.5"><span className="kbd">SHIFT</span> DASH</span>
         <span className="flex items-center gap-1.5"><span className="kbd">1</span>-<span className="kbd">4</span> WEAPON CLASS</span>
         <span className="flex items-center gap-1.5"><span className="kbd">R</span> RELOAD</span>
@@ -153,8 +153,11 @@ export function LevelUpModal({
 /* ------------------------------------------------------------------ */
 
 export function PauseMenu({
-  onResume, onRestart, onQuit, muted, onMute,
-}: { onResume: () => void; onRestart: () => void; onQuit: () => void; muted: boolean; onMute: () => void }) {
+  onResume, onRestart, onQuit, muted, onMute, onSettings,
+}: {
+  onResume: () => void; onRestart: () => void; onQuit: () => void;
+  muted: boolean; onMute: () => void; onSettings: () => void;
+}) {
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-[6px]">
       <div className="anim-pop flex w-72 flex-col items-stretch gap-3">
@@ -163,6 +166,7 @@ export function PauseMenu({
         </h2>
         <MenuButton primary onClick={onResume} icon={<Play className="h-4 w-4" fill="currentColor" />} label="RESUME" />
         <MenuButton onClick={onRestart} icon={<RotateCcw className="h-4 w-4" />} label="RESTART" />
+        <MenuButton onClick={onSettings} icon={<SettingsIcon className="h-4 w-4" />} label="SETTINGS" />
         <MenuButton onClick={onQuit} icon={<Home className="h-4 w-4" />} label="MAIN MENU" />
         <MenuButton
           onClick={onMute}

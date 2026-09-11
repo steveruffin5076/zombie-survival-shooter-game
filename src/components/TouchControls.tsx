@@ -1,10 +1,9 @@
 import { useEffect } from "react";
-import { ChevronLeft, ChevronRight, ArrowUp, Zap, Crosshair, Hand } from "lucide-react";
+import { ChevronLeft, ChevronRight, Zap, Crosshair, Hand } from "lucide-react";
 
 interface Props {
   onMoveStart: (dir: -1 | 1) => void;
   onMoveEnd: () => void;
-  onJump: () => void;
   onDash: () => void;
   /** tap-to-act: pivots the lane, or places the selected deployable during prep */
   onTap: (clientX: number, clientY: number) => void;
@@ -22,7 +21,6 @@ const btnClass =
 export default function TouchControls({
   onMoveStart,
   onMoveEnd,
-  onJump,
   onDash,
   onTap,
   onFireStart,
@@ -127,16 +125,6 @@ export default function TouchControls({
           aria-label="Dash"
         >
           <Zap className="h-7 w-7" />
-        </button>
-        <button
-          className={btnClass}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            onJump();
-          }}
-          aria-label="Jump"
-        >
-          <ArrowUp className="h-7 w-7" />
         </button>
       </div>
     </div>

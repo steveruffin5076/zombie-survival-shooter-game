@@ -85,6 +85,11 @@ const FLASHLIGHT_HALF_ANGLE = 0.55;
  * invulnerable and inert — before the fight actually starts. */
 const BOSS_EMERGE_DURATION = 1.6;
 
+/** Seconds an uncollected XP/scrap gem sits before despawning — long enough
+ * that mid-fight drops aren't lost, short enough that gems don't pile up
+ * forever if you never backtrack for them. Fades out over the last 2s. */
+const GEM_LIFETIME = 12;
+
 const WAVE_SUBS = [
   "they see your light",
   "hold the line",
@@ -151,7 +156,14 @@ interface Particle {
   life: number; max: number; size: number; color: string; grav: number; add: boolean;
 }
 
-interface Gem { x: number; y: number; vx: number; vy: number; val: number; t: number; rest: boolean; kind: "xp" | "scrap" }
+interface Gem {
+  x: number; y: number; vx: number; vy: number; val: number;
+  /** bob-animation phase, randomized at spawn — not an age, see `age` for that */
+  t: number;
+  /** seconds since spawn — despawns at GEM_LIFETIME if never collected */
+  age: number;
+  rest: boolean; kind: "xp" | "scrap";
+}
 interface FloatText { x: number; y: number; vy: number; life: number; max: number; text: string; color: string; size: number }
 interface Decal { x: number; y: number; s: number; a: number }
 interface SpawnItem { type: ZType; boss?: boolean }
@@ -597,7 +609,6 @@ export class Engine {
       return;
     }
     if (this.paused || this.modalOpen) return;
-    if (c === "Space" || c === "KeyW" || c === "ArrowUp") this.jump();
     if (c === "ShiftLeft" || c === "ShiftRight") this.dash();
     // during arena prep, 1/2/3 pick a deployable tool instead of a weapon class
     if (c === "Enter" && this.phase === "prep") this.prepT = 0; // READY — skip the rest of prep
@@ -691,13 +702,6 @@ export class Engine {
     this.mouse.down = down;
   }
 
-  /** Triggers a jump, respecting the same game-state guards as the keyboard handler. */
-  triggerJump() {
-    if (this.mode !== "play" || this.over || this.paused || this.modalOpen) return;
-    this.sfx.ensure();
-    this.jump();
-  }
-
   /** Triggers a dash, respecting the same game-state guards as the keyboard handler. */
   triggerDash() {
     if (this.mode !== "play" || this.over || this.paused || this.modalOpen) return;
@@ -748,11 +752,6 @@ export class Engine {
     const dy = d - u;
     // Return both X and Y components
     return { x: dx, y: dy };
-  }
-
-  private jump() {
-    // Jump removed in top-down mode
-    // Kept as no-op for compatibility
   }
 
   private dash() {
@@ -1652,6 +1651,7 @@ export class Engine {
     const mr = 110 * this.st.magnet;
     for (const g of this.gems) {
       g.t += dt;
+      g.age += dt;
       // no more -34 head offset — p.y is the player's own top-down center now,
       // not a feet position with the body drawn 34px above it
       const dx = p.x - g.x, dy = p.y - g.y;
@@ -1690,7 +1690,7 @@ export class Engine {
         this.sfx.gem();
       }
     }
-    this.gems = this.gems.filter((g) => g.val > 0);
+    this.gems = this.gems.filter((g) => g.val > 0 && g.age < GEM_LIFETIME);
   }
 
   private updateParticles(dt: number) {
@@ -1772,12 +1772,12 @@ export class Engine {
         x: cx + R(-10, 10), y: cy,
         vx: arena ? R(-90, 90) : Math.cos(ang) * R(60, 150),
         vy: arena ? R(-220, -80) : Math.sin(ang) * R(60, 150),
-        val: total / n, t: R(0, 9), rest: false, kind: "xp",
+        val: total / n, t: R(0, 9), age: 0, rest: false, kind: "xp",
       });
     }
     // scrap — feeds building/repairing deployables in the arena; endless only ever sees it there
     if (this.stageDef.fixedCamera && chance(0.22)) {
-      this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: 1, t: R(0, 9), rest: false, kind: "scrap" });
+      this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: 1, t: R(0, 9), age: 0, rest: false, kind: "scrap" });
     }
   }
 
@@ -3347,6 +3347,11 @@ export class Engine {
     const y = g.rest || g.vy === 0 ? g.y + bob : g.y;
     const s = 3.5 + Math.min(3, g.val);
     const [glowA, glowB, fill, core] = Engine.GEM_PALETTE[g.kind];
+    // fade out over the last 2s before it despawns, so vanishing never looks
+    // like a pop — same idea as any other timed-life effect in this file
+    const fadeStart = GEM_LIFETIME - 2;
+    c.save();
+    if (g.age > fadeStart) c.globalAlpha = Math.max(0, 1 - (g.age - fadeStart) / 2);
     c.globalCompositeOperation = "lighter";
     const gr = c.createRadialGradient(g.x, y, 0, g.x, y, s * 4);
     gr.addColorStop(0, glowA);
@@ -3370,6 +3375,7 @@ export class Engine {
     c.lineTo(g.x - s * 0.35, y);
     c.closePath();
     c.fill();
+    c.restore();
   }
 
   private drawCrate(cr: Crate, t: number) {

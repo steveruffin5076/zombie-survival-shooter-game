@@ -467,8 +467,7 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
       {/* bottom-center: controls hint */}
       {!touch && hud.stage === 1 && hud.waveInStage <= 1 && (
         <div className="absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-4 text-[12px] font-semibold tracking-wider text-white/35">
-          <span><span className="kbd">A</span> <span className="kbd">D</span> MOVE + PIVOT LANE</span>
-          <span><span className="kbd">W</span> JUMP</span>
+          <span><span className="kbd">W</span> <span className="kbd">A</span> <span className="kbd">S</span> <span className="kbd">D</span> MOVE</span>
           <span><span className="kbd">SHIFT</span> DASH</span>
           <span><span className="kbd">1</span>-<span className="kbd">4</span> CLASS</span>
           <span><span className="kbd">R</span> RELOAD</span>
