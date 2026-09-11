@@ -208,6 +208,8 @@ export class Engine {
 
   private keys = new Set<string>();
   private mouse = { x: W / 2, y: 300, down: false };
+  /** touch joystick deflection, -1..1 per axis — see setMoveVector() */
+  private stick = { x: 0, y: 0 };
 
   // world state
   private cam = 0;
@@ -558,6 +560,8 @@ export class Engine {
     // Clear held input so a key/fire state stuck by a touch gesture that never
     // saw its pointerup can't be inherited by a fresh run (death -> Restart).
     this.keys.clear();
+    this.stick.x = 0;
+    this.stick.y = 0;
     this.mouse.down = false;
   }
 
@@ -671,6 +675,8 @@ export class Engine {
 
   private onBlur = () => {
     this.keys.clear();
+    this.stick.x = 0;
+    this.stick.y = 0;
     this.mouse.down = false;
   };
 
@@ -730,6 +736,15 @@ export class Engine {
     this.keys.delete(code);
   }
 
+  /** Analog movement from the touch joystick, each component -1..1. Added on
+   * top of the movement keys rather than replacing them, so a touch laptop
+   * can use either. Partial deflection moves slower — see the throttle in
+   * updatePlayer(). Pass (0, 0) on release. */
+  setMoveVector(x: number, y: number) {
+    this.stick.x = clamp(x, -1, 1);
+    this.stick.y = clamp(y, -1, 1);
+  }
+
   /** Starts/stops continuous fire — same effect as holding/releasing the mouse button.
    * Only matters in manual-fire mode; auto-fire already engages on laser contact. */
   setFiring(down: boolean) {
@@ -778,15 +793,13 @@ export class Engine {
   }
 
   private inputDir() {
-    // Returns normalized direction in 2D for top-down movement
+    // Returns direction in 2D for top-down movement. Magnitude can exceed 1
+    // (diagonals, or keys plus stick) — the mover normalizes and throttles.
     const r = this.keys.has("KeyD") || this.keys.has("ArrowRight") ? 1 : 0;
     const l = this.keys.has("KeyA") || this.keys.has("ArrowLeft") ? 1 : 0;
     const d = this.keys.has("KeyS") || this.keys.has("ArrowDown") ? 1 : 0;
     const u = this.keys.has("KeyW") || this.keys.has("ArrowUp") ? 1 : 0;
-    const dx = r - l;
-    const dy = d - u;
-    // Return both X and Y components
-    return { x: dx, y: dy };
+    return { x: r - l + this.stick.x, y: d - u + this.stick.y };
   }
 
   private dash() {
@@ -867,7 +880,10 @@ export class Engine {
       const speed = this.st.speed * (this.stimT > 0 ? 1.35 : 1);
       const mag = Math.hypot(mov.x, mov.y);
       if (mag > 0) {
-        const speedMul = speed / mag;
+        // dividing by mag normalizes the direction (so diagonals aren't fast);
+        // the clamped magnitude then throttles it, which is what makes a
+        // half-pushed joystick a half-speed walk. Keys always reach 1.
+        const speedMul = (speed * Math.min(1, mag)) / mag;
         p.vx = lerp(p.vx, mov.x * speedMul, Math.min(1, 14 * dt));
         p.vy = lerp(p.vy, mov.y * speedMul, Math.min(1, 14 * dt));
       } else {
@@ -3182,16 +3198,12 @@ export class Engine {
     const a = p < 0.12 ? p / 0.12 : p > 0.72 ? (1 - p) / 0.28 : 1;
     const s = 1 + (1 - Math.min(1, p * 7)) * 0.35;
     c.save();
-    // 280 (not the DOM top-HUD's own ~40% mark) leaves clearance below the
-    // React-rendered stage/wave tracker, which is sized in real CSS px and so
-    // doesn't shrink the way this canvas text does when the game's 16:9 box
-    // is small (phone landscape) — too high here and the two overlap.
-    c.translate(W / 2, 280);
+    c.translate(W / 2, 208);
     c.scale(s, s);
     c.globalAlpha = clamp(a, 0, 1);
     c.textAlign = "center";
     (c as unknown as { letterSpacing: string }).letterSpacing = "10px";
-    c.font = "400 50px Anton, sans-serif";
+    c.font = "400 58px Anton, sans-serif";
     c.shadowColor = "rgba(245,158,11,0.5)";
     c.shadowBlur = 30;
     c.fillStyle = "#f4efe6";

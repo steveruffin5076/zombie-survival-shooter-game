@@ -13,7 +13,7 @@ interface Props {
 /** Shown after StageClear, before advanceStage() — resupply + backpack logistics. */
 export default function SafeHouseOverlay({ next, inv, onMove, onDepositAll, onContinue }: Props) {
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center bg-gradient-to-b from-cyan-950/20 via-black/85 to-black/95 backdrop-blur-[5px]">
+    <div className="pointer-events-auto absolute inset-0 z-40 flex items-center justify-center bg-gradient-to-b from-cyan-950/20 via-black/85 to-black/95 backdrop-blur-[5px]">
       <div className="anim-pop flex w-full max-w-2xl flex-col items-center px-8 text-center">
         <div className="anim-rise mb-3 flex items-center gap-3 text-[13px] font-bold tracking-[0.45em] text-cyan-300/80">
           <span className="h-px w-8 bg-cyan-400/40" />

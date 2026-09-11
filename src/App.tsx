@@ -18,9 +18,16 @@ import Settings from "./components/Settings";
 import { isTouchCapable } from "./game/input";
 import { loadSettings, saveSettings } from "./game/settings";
 
+/** the canvas's own coordinate space — the UI layer is authored at this size
+ * and scaled to the box, so HUD and canvas art stay in proportion everywhere */
+const UI_W = 1280;
+const UI_H = 720;
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Engine | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [uiScale, setUiScale] = useState(1);
 
   const [screen, setScreen] = useState<"menu" | "game">("menu");
   const [showLoadout, setShowLoadout] = useState(false);
@@ -36,6 +43,16 @@ export default function App() {
   const [touch] = useState(() =>
     isTouchCapable(navigator.maxTouchPoints, window.matchMedia("(pointer: coarse)").matches)
   );
+  // Measured rather than computed in CSS: scale() needs a unitless number, and
+  // CSS can't divide a length down to one (calc(100vw / 1280) is still a length).
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setUiScale(entry.contentRect.width / UI_W));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const [stageClear, setStageClear] = useState<{ stage: number; next: number; stageName: string; wavesPerStage: number } | null>(null);
   const [stageLoadout, setStageLoadout] = useState(false);
   const [safeHouse, setSafeHouse] = useState(false);
@@ -193,12 +210,8 @@ export default function App() {
   const togglePause = useCallback(() => engineRef.current?.togglePause(), []);
   const toggleMute = useCallback(() => engineRef.current?.toggleMute(), []);
 
-  const moveStart = useCallback((dir: -1 | 1) => {
-    engineRef.current?.pressKey(dir === -1 ? "KeyA" : "KeyD");
-  }, []);
-  const moveEnd = useCallback(() => {
-    engineRef.current?.releaseKey("KeyA");
-    engineRef.current?.releaseKey("KeyD");
+  const move = useCallback((x: number, y: number) => {
+    engineRef.current?.setMoveVector(x, y);
   }, []);
   const triggerDash = useCallback(() => engineRef.current?.triggerDash(), []);
   const tap = useCallback((x: number, y: number) => engineRef.current?.triggerTap(x, y), []);
@@ -233,7 +246,7 @@ export default function App() {
 
   return (
     <div className="fixed inset-0 grid place-items-center overflow-hidden bg-black select-none">
-      <div className="relative" style={{ width: "min(100vw, 177.78vh)", aspectRatio: "16 / 9" }}>
+      <div ref={boxRef} className="relative" style={{ width: "min(100vw, 177.78vh)", aspectRatio: "16 / 9" }}>
         <canvas
           ref={canvasRef}
           className="absolute inset-0 h-full w-full cursor-none"
@@ -245,6 +258,16 @@ export default function App() {
         <div className="grain pointer-events-none absolute inset-0 z-10" />
         <div className="scanlines pointer-events-none absolute inset-0 z-10 opacity-60" />
 
+        {/* Scaled UI layer. The canvas renders at a fixed 1280x720 stretched to
+         * the box, so its art shrinks with the box; this layer is authored at
+         * that same size and scaled by the same factor, so the HUD stays in
+         * proportion instead of keeping desktop pixel sizes over a phone-sized
+         * game view. pointer-events-none so the canvas still gets mouse aim —
+         * every interactive child opts back in with pointer-events-auto. */}
+        <div
+          className="pointer-events-none absolute left-0 top-0 z-20 origin-top-left"
+          style={{ width: UI_W, height: UI_H, transform: `scale(${uiScale})` }}
+        >
         {screen === "game" && hud && inv && (
           <Hud
             hud={hud}
@@ -269,8 +292,7 @@ export default function App() {
         )}
         {screen === "game" && touch && !paused && !choices && !over && !stageClear && !showInventory && (
           <TouchControls
-            onMoveStart={moveStart}
-            onMoveEnd={moveEnd}
+            onMove={move}
             onDash={triggerDash}
             onTap={tap}
             onFireStart={fireStart}
@@ -292,6 +314,7 @@ export default function App() {
             high={hud?.high ?? 0}
             muted={hud?.muted ?? false}
             onMute={toggleMute}
+            touch={touch}
           />
         )}
 
@@ -366,6 +389,7 @@ export default function App() {
         )}
 
         {over && <GameOver stats={over} onRestart={start} onQuit={quit} />}
+        </div>
       </div>
     </div>
   );

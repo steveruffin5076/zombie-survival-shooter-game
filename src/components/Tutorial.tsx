@@ -20,7 +20,7 @@ export default function Tutorial({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("controls");
 
   return (
-    <div className="absolute inset-0 z-50 flex items-center-safe justify-center overflow-y-auto bg-black/85 p-3 backdrop-blur-[6px]">
+    <div className="pointer-events-auto absolute inset-0 z-50 flex items-center-safe justify-center overflow-y-auto bg-black/85 p-3 backdrop-blur-[6px]">
       <div className="anim-pop relative flex h-[560px] max-h-full w-full max-w-3xl flex-col rounded-xl border border-cyan-500/20 bg-zinc-950/95 shadow-[0_0_80px_rgba(0,0,0,0.7)]">
         <button
           onClick={onClose}
