@@ -45,6 +45,10 @@ export default function App() {
   const [touch] = useState(() =>
     isTouchCapable(navigator.maxTouchPoints, window.matchMedia("(pointer: coarse)").matches)
   );
+  // stage a saved run would resume at, or null. Refreshed only at the moments it
+  // can change (mount, quitting to the menu, starting/continuing a run) rather
+  // than polled — HudState is for the 66ms combat poll, not rare menu data.
+  const [savedStage, setSavedStage] = useState<number | null>(null);
   const [canFullscreen] = useState(supportsFullscreen);
   const [fullscreen, setFullscreen] = useState(false);
   // track the real state, not just our own clicks — Esc and the system back
@@ -105,6 +109,7 @@ export default function App() {
     });
     engineRef.current = engine;
     engine.begin();
+    setSavedStage(engine.savedRunStage());
     // ?debug=1 exposes the engine on window for the same debug tooling that
     // draws the ?debug=1 HUD overlay (see engine.ts render()) — lets manual
     // QA fast-forward wave/stage state instead of grinding real playtime.
@@ -133,8 +138,7 @@ export default function App() {
     };
   }, []);
 
-  const start = useCallback(() => {
-    engineRef.current?.startGame();
+  const enterGame = useCallback(() => {
     setScreen("game");
     setShowLoadout(false);
     setShowTutorial(false);
@@ -146,7 +150,18 @@ export default function App() {
     setSafeHouse(false);
     setShowInventory(false);
     setPaused(false);
+    setSavedStage(engineRef.current?.savedRunStage() ?? null);
   }, []);
+
+  const start = useCallback(() => {
+    engineRef.current?.startGame();
+    enterGame();
+  }, [enterGame]);
+
+  const continueGame = useCallback(() => {
+    if (!engineRef.current?.continueRun()) return;
+    enterGame();
+  }, [enterGame]);
 
   const openLoadout = useCallback(() => setShowLoadout(true), []);
   const closeLoadout = useCallback(() => setShowLoadout(false), []);
@@ -178,6 +193,7 @@ export default function App() {
 
   const quit = useCallback(() => {
     engineRef.current?.toMenu();
+    setSavedStage(engineRef.current?.savedRunStage() ?? null);
     setScreen("menu");
     setShowLoadout(false);
     setShowTutorial(false);
@@ -342,6 +358,8 @@ export default function App() {
             muted={hud?.muted ?? false}
             onMute={toggleMute}
             touch={touch}
+            savedStage={savedStage}
+            onContinue={continueGame}
             canFullscreen={canFullscreen}
             fullscreen={fullscreen}
             onFullscreen={goFullscreen}

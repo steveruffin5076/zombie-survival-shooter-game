@@ -13,7 +13,7 @@ import { BACKPACK_SIZE, moveItem, placeItem, removeItem, type PlacedItem } from 
 import { ITEMS, shapeOfItem, itemForHotkey, type ConsumableKey } from "./items";
 import { rollLoot, type CrateTier } from "./loot";
 import {
-  saveRun, loadRun, SAVE_VERSION, type SaveData,
+  saveRun, loadRun, clearRun, SAVE_VERSION, type SaveData,
   loadProfile, saveProfile, type ProfileData,
 } from "./save";
 import {
@@ -373,8 +373,14 @@ export class Engine {
     this.canvas.removeEventListener("contextmenu", this.onCtx);
   }
 
+  /** Starts a fresh run at stage 1, discarding any saved one. The discard
+   * matters: die() restores from whatever checkpoint exists, so without it a
+   * new run that ended in stage 1 would warp the player into the *previous*
+   * run's stage. Also reached from the pause menu's RESTART and game-over's
+   * RETRY, where starting over should likewise not inherit an old checkpoint. */
   startGame() {
     this.sfx.ensure();
+    clearRun();
     this.reset();
     this.recompute();
     this.pl.hp = this.st.maxHp;
@@ -1956,8 +1962,16 @@ export class Engine {
     this.onEvent({ type: "gameover", stats });
   }
 
-  /** reset() then restore progression from the last safe-house checkpoint. */
-  private retryStage(checkpoint: SaveData) {
+  /** reset() then restore progression from the last safe-house checkpoint. Shared
+   * by dying (which drops the carried backpack as the penalty) and by resuming a
+   * saved run from the menu (which doesn't — nobody died, the player just
+   * stopped playing). */
+  private restoreFrom(
+    checkpoint: SaveData,
+    // sub is built from the *restored* stage's name, so it has to be a callback —
+    // this.stageDef still points at the old stage until setStage() below runs
+    opts: { keepBackpack: boolean; banner: string; subFor: (stageName: string) => string }
+  ) {
     this.reset();
     this.setStage(checkpoint.stage);
     this.pl.level = checkpoint.level;
@@ -1970,8 +1984,7 @@ export class Engine {
     this.stacks = { ...checkpoint.stacks };
     this.deposit = checkpoint.deposit;
     this.scrap = checkpoint.scrap ?? 0;
-    // backpack is deliberately dropped — that's the whole point of the penalty
-    this.backpack = [];
+    this.backpack = opts.keepBackpack ? checkpoint.backpack : [];
     this.invVer++;
     this.recompute();
     this.pl.hp = this.st.maxHp;
@@ -1983,7 +1996,37 @@ export class Engine {
     this.camY = clamp(this.pl.y - this.viewH / 2, 0, WORLD_H - this.viewH);
     this.mode = "play";
     this.beginRest(2.4);
-    this.announce("YOU DIED", `back at the safe house — ${this.stageDef.name}`, 2.8);
+    this.announce(opts.banner, opts.subFor(this.stageDef.name), 2.8);
+  }
+
+  private retryStage(checkpoint: SaveData) {
+    this.restoreFrom(checkpoint, {
+      // dropping the carried backpack is the whole point of the death penalty
+      keepBackpack: false,
+      banner: "YOU DIED",
+      subFor: (stage) => `back at the safe house — ${stage}`,
+    });
+  }
+
+  /** Stage a saved run would resume at, or null if there's nothing to continue.
+   * Drives the menu's CONTINUE button and its label. */
+  savedRunStage(): number | null {
+    return loadRun()?.stage ?? null;
+  }
+
+  /** Resume the checkpoint written by the last stage clear. Unlike dying, this
+   * keeps the backpack — the player didn't lose the run, they just stopped
+   * playing and came back. */
+  continueRun(): boolean {
+    const checkpoint = loadRun();
+    if (!checkpoint) return false;
+    this.sfx.ensure();
+    this.restoreFrom(checkpoint, {
+      keepBackpack: true,
+      banner: `STAGE ${checkpoint.stage}`,
+      subFor: (stage) => `picking up where you left off — ${stage}`,
+    });
+    return true;
   }
 
   private writeCheckpoint(nextStage: number) {

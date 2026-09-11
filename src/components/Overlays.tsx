@@ -2,7 +2,7 @@ import type { GameStats, UpgradeChoice } from "../game/types";
 import {
   Play, RotateCcw, Home, Trophy, Timer, Skull, TrendingUp, Volume2, VolumeX,
   Crosshair, Gauge, ChevronsRight, HeartPulse, Infinity as InfinityIcon, BookOpen, Settings as SettingsIcon,
-  Maximize, Minimize,
+  Maximize, Minimize, FastForward,
 } from "lucide-react";
 import { ICONS, RARITY_STYLE, MenuButton, StatBox } from "./ui";
 
@@ -10,12 +10,16 @@ import { ICONS, RARITY_STYLE, MenuButton, StatBox } from "./ui";
 
 export function Menu({
   onEndless, onTutorial, onSettings, high, muted, onMute, touch = false,
+  savedStage = null, onContinue,
   canFullscreen = false, fullscreen = false, onFullscreen,
 }: {
   onEndless: () => void; onTutorial: () => void; onSettings: () => void;
   high: number; muted: boolean; onMute: () => void;
   /** swaps the keyboard hint row for the on-screen control equivalents */
   touch?: boolean;
+  /** stage a saved run would resume at — null hides Continue entirely */
+  savedStage?: number | null;
+  onContinue?: () => void;
   /** hidden where the Fullscreen API isn't available (notably iPhone Safari) */
   canFullscreen?: boolean;
   fullscreen?: boolean;
@@ -71,13 +75,28 @@ export function Menu({
         survivor. Every shot you fire tells them exactly where you are.
       </p>
 
+      {savedStage != null && (
+        <button
+          onClick={onContinue}
+          className="anim-rise group relative mt-9 flex items-center gap-3 overflow-hidden rounded-xl bg-gradient-to-b from-emerald-400 to-emerald-600 px-12 py-4 text-xl font-bold tracking-[0.25em] text-emerald-950 shadow-[0_0_50px_rgba(52,211,153,0.35)] transition-all duration-200 hover:scale-[1.04] hover:shadow-[0_0_70px_rgba(52,211,153,0.5)] active:scale-[0.98]"
+          style={{ animationDelay: "180ms" }}
+        >
+          <FastForward className="h-5 w-5 transition-transform group-hover:translate-x-0.5" />
+          CONTINUE · STAGE {savedStage}
+        </button>
+      )}
+
       <button
         onClick={onEndless}
-        className="anim-rise group relative mt-9 flex items-center gap-3 overflow-hidden rounded-xl bg-gradient-to-b from-amber-400 to-amber-600 px-12 py-4 text-xl font-bold tracking-[0.25em] text-amber-950 shadow-[0_0_50px_rgba(245,158,11,0.35)] transition-all duration-200 hover:scale-[1.04] hover:shadow-[0_0_70px_rgba(245,158,11,0.5)] active:scale-[0.98]"
-        style={{ animationDelay: "180ms" }}
+        className={`anim-rise group relative flex items-center gap-3 overflow-hidden rounded-xl transition-all duration-200 hover:scale-[1.04] active:scale-[0.98] ${
+          savedStage != null
+            ? "mt-3 border border-white/12 bg-white/5 px-8 py-2.5 text-sm font-bold tracking-[0.2em] text-zinc-300 hover:border-white/30 hover:bg-white/10"
+            : "mt-9 bg-gradient-to-b from-amber-400 to-amber-600 px-12 py-4 text-xl font-bold tracking-[0.25em] text-amber-950 shadow-[0_0_50px_rgba(245,158,11,0.35)] hover:shadow-[0_0_70px_rgba(245,158,11,0.5)]"
+        }`}
+        style={{ animationDelay: savedStage != null ? "210ms" : "180ms" }}
       >
-        <InfinityIcon className="h-5 w-5 transition-transform group-hover:translate-x-0.5" />
-        ENDLESS MODE
+        <InfinityIcon className={savedStage != null ? "h-4 w-4" : "h-5 w-5 transition-transform group-hover:translate-x-0.5"} />
+        {savedStage != null ? "NEW RUN" : "ENDLESS MODE"}
       </button>
 
       <button
