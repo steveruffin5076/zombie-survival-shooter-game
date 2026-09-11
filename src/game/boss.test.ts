@@ -53,13 +53,14 @@ describe("phaseFor", () => {
 });
 
 describe("BOSS_DEFS", () => {
-  it("the Juggernaut's def reproduces the exact defaults (unchanged tuning)", () => {
+  it("the Juggernaut's def reproduces the exact defaults (unchanged windup/cooldown tuning)", () => {
     const def = BOSS_DEFS.juggernaut;
     expect(windupFor("mortar", 2, def)).toBe(BOSS_WINDUP.mortar);
     expect(windupFor("call", 2, def)).toBe(BOSS_WINDUP.call);
     expect(windupFor("slam", 1, def)).toBe(slamWindup(1));
     expect(cooldownFor(0, def)).toBe(cooldownFor(0));
-    expect(def.hpMul).toBe(1);
+    // deliberately buffed — "very hard to kill" per design request
+    expect(def.hpMul).toBe(1.6);
   });
 
   it("the Watch has its own attack pool, distinct from the Juggernaut's", () => {

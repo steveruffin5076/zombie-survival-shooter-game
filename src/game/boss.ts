@@ -46,7 +46,7 @@ export const BOSS_DEFS: Record<string, BossDef> = {
     deathBanner: "THE JUGGERNAUT FALLS", deathSub: "it's not getting back up",
     attacks: ["slam", "mortar", "call"],
     windup: {},
-    hpMul: 1, scale: 2.1, r: 40, color: "#3a2c1e",
+    hpMul: 1.6, scale: 2.1, r: 40, color: "#3a2c1e",
     cooldownBase: 1.8, cooldownStep: 0.45,
   },
   neighborhood_watch: {

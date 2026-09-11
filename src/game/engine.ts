@@ -80,6 +80,10 @@ const HORDE_DURATION = 60;
  * means the same thing visually and mechanically. */
 const FLASHLIGHT_HALF_ANGLE = 0.55;
 
+/** How long the Terminal Defense boss spends rising out of its grave —
+ * invulnerable and inert — before the fight actually starts. */
+const BOSS_EMERGE_DURATION = 1.6;
+
 const WAVE_SUBS = [
   "they see your light",
   "hold the line",
@@ -107,6 +111,9 @@ interface Zombie {
   blockedBy: string | null;
   /** arena only — razor wire slow remaining, seconds */
   slowT: number;
+  /** Incendiary Rounds — seconds left burning, and current damage-per-second */
+  burnT: number;
+  burnDps: number;
 }
 
 /** The Juggernaut Alpha — a unique boss encounter, deliberately kept out of `zombies[]` so its
@@ -116,7 +123,8 @@ interface Boss extends AimTarget {
   defId: string;
   vx: number; face: 1 | -1; flash: number; hurtT: number;
   hp: number; maxHp: number; phase: 0 | 1 | 2;
-  state: "seek" | "windup" | "attack" | "cooldown";
+  /** "emerge" — rising out of its grave, invulnerable and inert, on spawn */
+  state: "emerge" | "seek" | "windup" | "attack" | "cooldown";
   attack: BossAttack | null;
   /** counts down within the current state */
   timer: number;
@@ -235,6 +243,8 @@ export class Engine {
 
   /* --- boss: The Juggernaut Alpha, spawned on each stage's mid-stage boss wave --- */
   private boss: Boss | null = null;
+  /** where the boss's grave split open — a lasting visual scar, cleared on the next stage */
+  private bossGrave: { x: number; y: number } | null = null;
   /** toggled by KeyE while the boss is alive — forces auto-aim onto it over a close add */
   private bossForceTarget = false;
   /** after any boss windup starts, regular lane-edge zombie spawns pause this long —
@@ -499,6 +509,7 @@ export class Engine {
     this.worldW = this.stageDef.worldW;
     this.theme = THEMES[this.stageDef.themeId];
     this.genDecor(this.theme, this.worldW);
+    this.bossGrave = null;
   }
 
   private genDecor(theme: ThemeDef, worldW: number) {
@@ -892,7 +903,7 @@ export class Engine {
     } else if (this.phase === "active") {
       if (this.spawnSuppressT > 0) this.spawnSuppressT -= dt;
       this.spawnT -= dt;
-      const cap = Math.min(36, 10 + this.power * 1.1);
+      const cap = Math.min(42, 10 + this.power * 1.1);
       if (this.hordeT > 0) {
         // continuously refilled stream instead of a fixed queue — the horde
         // doesn't run out until its timer does, not when a batch is dead
@@ -999,7 +1010,7 @@ export class Engine {
     }
 
     const boss = this.boss;
-    if (boss && !boss.dead) {
+    if (boss && !boss.dead && boss.state !== "emerge") {
       const dx = boss.x - p.x, dy = boss.y - p.y;
       const d = Math.hypot(dx, dy);
       if (d <= range && angleDiff(Math.atan2(dy, dx)) <= halfAngle && (this.bossForceTarget || d < bestD)) {
@@ -1030,7 +1041,7 @@ export class Engine {
     }
 
     const boss = this.boss;
-    if (boss && !boss.dead) {
+    if (boss && !boss.dead && boss.state !== "emerge") {
       const dx = boss.x - p.x, dy = boss.y - p.y;
       const proj = dx * dirX + dy * dirY;
       if (proj > 0 && proj <= range) {
@@ -1231,6 +1242,17 @@ export class Engine {
       }
       z.atk -= dt;
       if (z.slowT > 0) z.slowT -= dt;
+      if (z.burnT > 0) {
+        z.burnT -= dt;
+        z.hp -= z.burnDps * dt;
+        if (chance(0.3)) {
+          this.particles.push({
+            x: z.x + R(-6, 6), y: z.y - 10 * z.scale, vx: R(-20, 20), vy: R(-60, -20),
+            life: R(0.2, 0.4), max: 0.4, size: R(2, 3), color: "#f97316", grav: -50, add: true,
+          });
+        }
+        if (z.hp <= 0) { this.killZombie(z, z.face); continue; }
+      }
       const dx = p.x - z.x;
       const dy = p.y - z.y;
       const dir = dx > 0 ? 1 : -1;
@@ -1354,6 +1376,24 @@ export class Engine {
     b.phase = phaseFor(b.hp / b.maxHp);
     const dx = p.x - b.x;
     b.face = dx >= 0 ? 1 : -1;
+
+    if (b.state === "emerge") {
+      // invulnerable and immobile while it rises — see drawBoss() for the
+      // visual, and updateBullets()/targeting for why it can't be hit or
+      // locked onto yet
+      b.timer -= dt;
+      if (chance(0.35)) {
+        this.particles.push({
+          x: b.x + R(-20, 20), y: b.y, vx: R(-30, 30), vy: R(-140, -60),
+          life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#1c1712", grav: 400, add: false,
+        });
+      }
+      if (b.timer <= 0) {
+        b.state = "seek";
+        b.timer = R(1, 1.8);
+      }
+      return;
+    }
 
     const def = BOSS_DEFS[b.defId];
     if (b.state === "seek" || b.state === "cooldown") {
@@ -1556,7 +1596,7 @@ export class Engine {
           else { b.life = 0; break; }
         }
       }
-      if (b.life > 0 && this.boss && !this.boss.dead && !b.hitBoss) {
+      if (b.life > 0 && this.boss && !this.boss.dead && this.boss.state !== "emerge" && !b.hitBoss) {
         const boss = this.boss;
         const cy = boss.y - 60 * boss.scale;
         const rr = boss.r + 7;
@@ -1684,6 +1724,14 @@ export class Engine {
     this.texts.push({ x: z.x + R(-8, 8), y: dmgTextY, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(b.dmg)), color: b.crit ? "#fbbf24" : "rgba(255,255,255,.8)", size: b.crit ? 17 : 12 });
     if (this.st.lifesteal > 0) this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + b.dmg * this.st.lifesteal);
     this.sfx.zhit();
+    const incendiary = this.stacks["incendiary"] || 0;
+    if (incendiary > 0) {
+      // refreshes on every hit rather than stacking additively — keeps
+      // sustained fire on one target strong without compounding into an
+      // unbounded DoT if you tag it repeatedly
+      z.burnT = 3;
+      z.burnDps = b.dmg * 0.25 * incendiary;
+    }
     if (z.hp <= 0) this.killZombie(z, dir);
   }
 
@@ -1721,6 +1769,29 @@ export class Engine {
     }
   }
 
+  /** Bombardment upgrade — an instant, one-time strike wiping every regular
+   * zombie currently alive. Spares anything boss-tier (the arena's Boss
+   * entity is untouched by definition since it isn't in `zombies[]`, and a
+   * `z.boss` mini-boss like a horde finale's brute is excluded here too) so
+   * it can't trivialize the one fight in a wave meant to actually matter. */
+  private executeBombardment() {
+    for (const z of this.zombies) {
+      if (z.dead || z.boss) continue;
+      this.killZombie(z, z.face);
+    }
+    this.shake(16);
+    this.sfx.zdie();
+    for (let i = 0; i < 60; i++) {
+      const ang = R(0, TAU);
+      this.particles.push({
+        x: this.pl.x + Math.cos(ang) * R(0, 260), y: this.pl.y + Math.sin(ang) * R(0, 260),
+        vx: Math.cos(ang) * R(60, 220), vy: Math.sin(ang) * R(60, 220) - 40,
+        life: R(0.4, 0.9), max: 0.9, size: R(3, 7), color: chance(0.5) ? "#f97316" : "#fde68a", grav: 0, add: true,
+      });
+    }
+    this.announce("BOMBARDMENT", "the wave is cleared", 2.4);
+  }
+
   /** A suppressed hit on a still-dormant sleeper — instant takedown, nearby sleepers stay asleep. */
   private quietKill(z: Zombie) {
     z.hp = 0;
@@ -1735,6 +1806,9 @@ export class Engine {
   private hurtPlayer(dmg: number, kx: number) {
     const p = this.pl;
     if (p.ifr > 0 || p.dashT > 0 || this.over) return;
+    // Body Armor — flat % reduction on every damage source that funnels
+    // through here (zombie melee, spit, boss melee/ranged alike)
+    dmg *= 1 - 0.08 * (this.stacks["armor"] || 0);
     p.hp -= dmg;
     p.ifr = 0.9;
     p.hurtT = 1;
@@ -1883,6 +1957,7 @@ export class Engine {
     this.stacks[id] = (this.stacks[id] || 0) + 1;
     this.recompute();
     if (id === "hp") this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + 30);
+    if (id === "bombardment") this.executeBombardment();
     this.sfx.upgrade();
     this.lvlPending--;
     if (this.lvlPending > 0) {
@@ -2187,9 +2262,11 @@ export class Engine {
   private buildWave(power: number, inStage: number): SpawnItem[] {
     const items: SpawnItem[] = [];
     const boss = this.stageDef.bossWaves.includes(inStage);
+    // inStage adds its own escalation on top of power, so each wave within a
+    // stage visibly spawns more than the last, not just a slow difficulty drift
     const count = boss
-      ? Math.min(36, Math.round(6 + power * 1.5))
-      : Math.min(64, Math.round(6 + power * 3.0 + power * power * 0.12));
+      ? Math.min(40, Math.round(6 + power * 1.5 + inStage * 1.2))
+      : Math.min(72, Math.round(6 + power * 3.0 + power * power * 0.12 + inStage * 1.6));
     const weights = this.zombieWeights(power);
     for (let i = 0; i < count; i++) items.push({ type: rollEnemy(weights) as ZType });
     // shuffle the fodder
@@ -2385,10 +2462,22 @@ export class Engine {
       x, y: GROUND, r: def.r, scale: def.scale, dead: false,
       vx: 0, face: -side as 1 | -1, flash: 0, hurtT: 0,
       hp: maxHp, maxHp, phase: 0,
-      state: "seek", attack: null, timer: R(1, 1.8), atk: 0,
+      state: "emerge", attack: null, timer: BOSS_EMERGE_DURATION, atk: 0,
       targetX: this.pl.x, targetY: this.pl.y,
       tint: Math.random(), wob: R(0, TAU), t: 0,
     };
+    // a large grave splits open under the entrance point — drawn directly
+    // (not pushed into `decor`) so it never gets a solid-collision radius
+    // from DECOR_SOLID_R; a crater the player can't walk into would just
+    // trap them against it in the arena's narrow lane
+    this.bossGrave = { x, y: GROUND };
+    for (let i = 0; i < 24; i++) {
+      const ang = R(0, TAU);
+      this.particles.push({
+        x, y: GROUND, vx: Math.cos(ang) * R(40, 160), vy: Math.sin(ang) * R(40, 160) - 80,
+        life: R(0.5, 1), max: 1, size: R(3, 6), color: "#1c1712", grav: 500, add: false,
+      });
+    }
     this.shake(9);
   }
 
@@ -2460,7 +2549,7 @@ export class Engine {
       type, xp: c.xp, score: c.score,
       t: R(0, 10), atk: R(0, 0.4), flash: 0, face: 1, dead: false, spit: R(1, 2.4),
       tint: Math.random(), boss: false, wob: R(0, TAU), dormant: false, blockedBy: null, slowT: 0,
-      alertT: 0,
+      alertT: 0, burnT: 0, burnDps: 0,
     };
   }
 
@@ -2785,6 +2874,25 @@ export class Engine {
       c.beginPath();
       c.ellipse(d.x + 9 * d.s, d.y + 6 * d.s, 6 * d.s, 4 * d.s, 0, 0, TAU);
       c.fill();
+    }
+
+    // the boss's grave — a lasting scar, drawn flat like the blood decals
+    // above rather than through the decor/collision system (see spawnBoss())
+    if (this.bossGrave) {
+      const g = this.bossGrave;
+      c.fillStyle = "rgba(10,8,6,0.75)";
+      c.beginPath();
+      c.ellipse(g.x, g.y, 46, 22, 0, 0, TAU);
+      c.fill();
+      c.strokeStyle = "rgba(60,50,40,0.5)";
+      c.lineWidth = 2;
+      for (let i = 0; i < 5; i++) {
+        const ang = (i / 5) * TAU + g.x * 0.01;
+        c.beginPath();
+        c.moveTo(g.x + Math.cos(ang) * 20, g.y + Math.sin(ang) * 10);
+        c.lineTo(g.x + Math.cos(ang) * 54, g.y + Math.sin(ang) * 26);
+        c.stroke();
+      }
     }
 
     // decor, scattered across the full 2D play area as top-down footprints
@@ -3533,6 +3641,11 @@ export class Engine {
     const px = b.x - cam;
     if (px < -140 || px > W + 140) return;
     const py = b.y + camY;
+    // rising out of its grave: starts low/small/faded and grows into its
+    // resting position as the emerge timer runs out — see spawnBoss()/updateBoss()
+    const emergeT = b.state === "emerge" ? clamp(1 - b.timer / BOSS_EMERGE_DURATION, 0, 1) : 1;
+    const riseOffset = (1 - emergeT) * 60;
+    const visScale = 0.4 + 0.6 * emergeT;
     this.drawBossTelegraphs(b, cam, camY);
     const def = BOSS_DEFS[b.defId];
     // one base color per boss, shaded into torso/head/limb tones —
@@ -3546,7 +3659,7 @@ export class Engine {
 
     c.fillStyle = "rgba(0,0,0,0.5)";
     c.beginPath();
-    c.ellipse(px, py + 8, 30 * b.scale, 15 * b.scale, 0, 0, TAU);
+    c.ellipse(px, py + 8 + riseOffset, 30 * b.scale * visScale, 15 * b.scale * visScale, 0, 0, TAU);
     c.fill();
 
     const walk = b.state === "windup" ? 0 : b.t * 2.1;
@@ -3555,8 +3668,9 @@ export class Engine {
     const coreColor = b.attack ? Engine.BOSS_TELL_COLOR[b.attack] : "#ef4444";
 
     c.save();
-    c.translate(px, py);
-    c.scale(b.face * b.scale, b.scale);
+    c.globalAlpha = 0.35 + 0.65 * emergeT;
+    c.translate(px, py + riseOffset);
+    c.scale(b.face * b.scale * visScale, b.scale * visScale);
 
     // legs
     const l1 = shamble * 6;
