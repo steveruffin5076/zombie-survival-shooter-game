@@ -36,6 +36,11 @@ const GROUND = 584; // Kept for compatibility with attract mode and particle eff
 // Top-down camera: world bounds for player movement
 const WORLD_H = 1440; // vertical play area height
 const TAU = Math.PI * 2;
+/** Settings zoom bounds. The floor is 1 on purpose: at >= 1 the visible world
+ * only ever shrinks, so render()'s culling bounds stay a superset and need no
+ * rework. Allowing zoom-out would break that. */
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 1.5;
 
 const R = (a: number, b: number) => a + Math.random() * (b - a);
 const RI = (a: number, b: number) => Math.floor(R(a, b + 1));
@@ -210,6 +215,9 @@ export class Engine {
   private mouse = { x: W / 2, y: 300, down: false };
   /** left touch joystick deflection, -1..1 per axis — see setMoveVector() */
   private stick = { x: 0, y: 0 };
+  /** world magnification from Settings, 1 = off. Stored separately from the
+   * effective `zoom` below so the arena can opt out without losing the setting. */
+  private zoomPref = 1;
   /** right touch joystick deflection, -1..1 per axis — see setAimVector() */
   private aimStick = { x: 0, y: 0 };
 
@@ -327,7 +335,9 @@ export class Engine {
     canvas.height = H * dpr;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.high = Number(localStorage.getItem("graveyard-shift-high") || 0);
-    this.sfx.setVolume(loadSettings().volume);
+    const saved = loadSettings();
+    this.sfx.setVolume(saved.volume);
+    this.zoomPref = clamp(saved.zoom, ZOOM_MIN, ZOOM_MAX);
     this.reset();
     this.cam = 0; // attract mode frames the world edge as a backdrop
     this.bind();
@@ -466,6 +476,17 @@ export class Engine {
     saveSettings({ ...loadSettings(), volume: v });
   }
 
+  getZoom() {
+    return this.zoomPref;
+  }
+
+  /** Settings-screen zoom slider. Magnifies the world only — the HUD lives in a
+   * separately scaled DOM layer (see App.tsx) and is unaffected. */
+  setZoom(v: number) {
+    this.zoomPref = clamp(v, ZOOM_MIN, ZOOM_MAX);
+    saveSettings({ ...loadSettings(), zoom: this.zoomPref });
+  }
+
   /* ---------------- setup ---------------- */
 
   private freshPlayer() {
@@ -556,7 +577,7 @@ export class Engine {
     this.over = false;
     this.paused = false;
     this.modals.clear();
-    this.cam = clamp(this.pl.x - W / 2, 0, this.worldW - W);
+    this.cam = clamp(this.pl.x - this.viewW / 2, 0, this.worldW - this.viewW);
     this.mouse.x = W / 2;
     this.mouse.y = 280;
     // Clear held input so a key/fire state stuck by a touch gesture that never
@@ -1036,8 +1057,8 @@ export class Engine {
       this.cam = this.camOrigin();
       this.camY = 0;
     } else {
-      const targetX = clamp(p.x - W / 2, 0, this.worldW - W);
-      const targetY = clamp(p.y - H / 2, 0, WORLD_H - H);
+      const targetX = clamp(p.x - this.viewW / 2, 0, this.worldW - this.viewW);
+      const targetY = clamp(p.y - this.viewH / 2, 0, WORLD_H - this.viewH);
       this.cam = lerp(this.cam, targetX, Math.min(1, 5 * dt));
       this.camY = lerp(this.camY, targetY, Math.min(1, 5 * dt));
     }
@@ -1056,13 +1077,11 @@ export class Engine {
       return Math.atan2(this.aimStick.y, this.aimStick.x);
     }
     const p = this.pl;
-    // mouse.x/y are canvas (screen-space) pixels, so add the camera's
-    // world-space top-left corner to convert to world coordinates. No extra
-    // -W/2/-H/2: that would only be correct if cam/camY always sat exactly
-    // at worldW/2-ish, which they don't (they clamp at world edges).
-    const mx = this.mouse.x + this.cam;
-    const my = this.mouse.y + this.camY;
-    return Math.atan2(my - p.y, mx - p.x);
+    // mouse.x/y are canvas (screen-space) pixels. canvasToWorld undoes the
+    // camera pan and the zoom together — the zoom has to be undone here too,
+    // or the cursor and the laser it aims disagree at anything but 1x.
+    const m = this.canvasToWorld(this.mouse.x, this.mouse.y);
+    return Math.atan2(m.y - p.y, m.x - p.x);
   }
 
   /** Auto-fire mode: nearest zombie within range AND inside the flashlight
@@ -1958,8 +1977,10 @@ export class Engine {
     this.pl.hp = this.st.maxHp;
     this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
     this.pl.y = WORLD_H / 2;
-    this.cam = this.stageDef.fixedCamera ? this.camOrigin() : clamp(this.pl.x - W / 2, 0, this.worldW - W);
-    this.camY = clamp(this.pl.y - H / 2, 0, WORLD_H - H);
+    this.cam = this.stageDef.fixedCamera
+      ? this.camOrigin()
+      : clamp(this.pl.x - this.viewW / 2, 0, this.worldW - this.viewW);
+    this.camY = clamp(this.pl.y - this.viewH / 2, 0, WORLD_H - this.viewH);
     this.mode = "play";
     this.beginRest(2.4);
     this.announce("YOU DIED", `back at the safe house — ${this.stageDef.name}`, 2.8);
@@ -2370,9 +2391,53 @@ export class Engine {
     return items;
   }
 
+  /** Magnification actually in force. The arena is a fixed side-view lane framed
+   * around GROUND rather than around the player, so magnifying about the screen
+   * centre would push its floor off-screen — it opts out and the player's
+   * setting is left untouched for the open stages. */
+  private get zoom() {
+    return this.stageDef.fixedCamera ? 1 : this.zoomPref;
+  }
+
+  /** Size of the visible world window. Zooming in shows *less* world, so every
+   * camera clamp measures against these rather than the canvas W/H. */
+  private get viewW() {
+    return W / this.zoom;
+  }
+  private get viewH() {
+    return H / this.zoom;
+  }
+
+  /** Magnification only. Whatever is drawn after this must already be in
+   * camera-relative coordinates — which covers both styles used in render():
+   * the `translate(-cam, camY)` blocks, and the draws that subtract `cam`
+   * themselves (drawZombie/drawBoss/drawPlayer, the laser sight).
+   *
+   * Deliberately NOT scaled about the screen centre: `cam` is the world-x of
+   * the visible window's LEFT EDGE, so a plain scale maps cam -> 0 and
+   * cam + viewW -> W. Scaling about the centre instead puts the player in the
+   * wrong place whenever the camera clamps at a world edge. */
+  private applyZoom() {
+    this.ctx.scale(this.zoom, this.zoom);
+  }
+
+  /** applyZoom() plus the camera pan — the full world-space transform. Scale
+   * first: the pan is expressed in world units, so it has to be scaled too. */
+  private camTransform(cam: number, camY: number) {
+    this.applyZoom();
+    this.ctx.translate(-cam, camY);
+  }
+
+  /** World position of a point given in canvas coordinates — the inverse of
+   * camTransform(), used to turn the cursor into an aim direction. */
+  private canvasToWorld(x: number, y: number) {
+    const z = this.zoom;
+    return { x: this.cam + x / z, y: this.camY + y / z };
+  }
+
   /** The arena's fixed camera frame — a constant origin, not a mode flag. */
   private camOrigin() {
-    return (this.worldW - W) / 2;
+    return (this.worldW - this.viewW) / 2;
   }
 
   /** Starts the rest between waves — a plain break, or the arena's timed prep phase. */
@@ -2405,7 +2470,9 @@ export class Engine {
   /** World-x under the cursor -> the deployable slot it lands in. */
   private ghostSlot() {
     const centerX = this.worldW / 2;
-    return worldXToSlot(this.cam + this.mouse.x, centerX);
+    // a no-op at the arena's forced 1x zoom, but keeps placement honest if the
+    // arena is ever allowed to magnify
+    return worldXToSlot(this.canvasToWorld(this.mouse.x, this.mouse.y).x, centerX);
   }
 
   /** Places the currently-selected tool at the cursor's slot, if it's free and affordable. */
@@ -2605,8 +2672,10 @@ export class Engine {
     this.pl.y = WORLD_H / 2;
     this.pl.vx = 0;
     this.pl.vy = 0;
-    this.cam = this.stageDef.fixedCamera ? this.camOrigin() : clamp(this.pl.x - W / 2, 0, this.worldW - W);
-    this.camY = clamp(this.pl.y - H / 2, 0, WORLD_H - H);
+    this.cam = this.stageDef.fixedCamera
+      ? this.camOrigin()
+      : clamp(this.pl.x - this.viewW / 2, 0, this.worldW - this.viewW);
+    this.camY = clamp(this.pl.y - this.viewH / 2, 0, WORLD_H - this.viewH);
     this.waveInStage = 0;
     this.stageIntermission = false;
     this.modals.delete("stageclear");
@@ -2793,17 +2862,22 @@ export class Engine {
   private drawEntities(cam: number, camY: number, t: number) {
     const c = this.ctx;
     c.save();
-    c.translate(-cam, camY);
+    this.camTransform(cam, camY);
     for (const g of this.gems) this.drawGem(g, t);
     for (const cr of this.crates) if (!cr.opened) this.drawCrate(cr, t);
     c.restore();
 
+    // these three subtract `cam` themselves instead of drawing under a camera
+    // transform, so they only need the magnification laid over the top
+    c.save();
+    this.applyZoom();
     for (const z of this.zombies) this.drawZombie(z, cam, camY, t);
     if (this.boss && !this.boss.dead) this.drawBoss(this.boss, cam, camY, t);
     if (this.mode === "play" && !this.over) this.drawPlayer(cam, camY, t);
+    c.restore();
 
     c.save();
-    c.translate(-cam, camY);
+    this.camTransform(cam, camY);
     // bullets (additive tracers)
     c.globalCompositeOperation = "lighter";
     for (const b of this.bullets) {
@@ -2848,7 +2922,7 @@ export class Engine {
 
     /* --- particles --- */
     c.save();
-    c.translate(-cam, camY);
+    this.camTransform(cam, camY);
     let additive = false;
     for (const q of this.particles) {
       if (q.add !== additive) {
@@ -2868,7 +2942,7 @@ export class Engine {
 
     /* --- float texts --- */
     c.save();
-    c.translate(-cam, camY);
+    this.camTransform(cam, camY);
     c.textAlign = "center";
     for (const ft of this.texts) {
       const a = clamp(ft.life / ft.max, 0, 1);
@@ -2897,7 +2971,12 @@ export class Engine {
     // camera clamps at world edges (see cam/camY assignments), so anything
     // meant to track the player (light pool, vignette, flashlight cone) has
     // to use this, not a hardcoded W/2,H/2, or it visibly detaches near edges
-    const px = this.pl.x - cam, py = this.pl.y + camY;
+    // zoom is applied about the screen centre, so these full-screen effects —
+    // which are drawn untransformed — have to project the player themselves
+    // rather than just subtracting the camera
+    const zf = this.zoom;
+    const px = (this.pl.x - cam) * zf;
+    const py = (this.pl.y + camY) * zf;
 
     /* --- top-down ground (per-stage theme, no sky/horizon) --- */
     const theme = this.theme;
@@ -2912,7 +2991,7 @@ export class Engine {
     c.fillRect(0, 0, W, H);
 
     c.save();
-    c.translate(-cam, camY);
+    this.camTransform(cam, camY);
     // visible world-space bounds, inverse of the translate above
     const wx0 = cam - 80, wx1 = cam + W + 80;
     const wy0 = -camY - 80, wy1 = H - camY + 80;
@@ -3017,7 +3096,7 @@ export class Engine {
     /* --- arena: deployables + placement ghost --- */
     if (this.stageDef.fixedCamera) {
       c.save();
-      c.translate(-cam, camY);
+      this.camTransform(cam, camY);
       for (const d of this.deployables) this.drawDeployable(d, t);
       if (this.phase === "prep" && this.placingKind) this.drawPlacementGhost();
       c.restore();
@@ -3051,6 +3130,7 @@ export class Engine {
       // dash ghost cooldown glow at player feet
       if (this.pl.dashCd <= 0 && this.paused === false && this.modalOpen === false) {
         c.save();
+        this.applyZoom();
         c.translate(this.pl.x - cam, this.pl.y + 16 + camY);
         c.globalAlpha = 0.12 + 0.08 * Math.sin(t * 4);
         c.fillStyle = "#67e8f9";
@@ -3066,6 +3146,9 @@ export class Engine {
       const p = this.pl;
       const w = this.effWeapon(this.kind);
       const range = w.range * (1 + 0.12 * (this.stacks["velo"] || 0));
+      // the beam is a world-space distance, so it magnifies with everything else
+      c.save();
+      this.applyZoom();
       const ox = p.x - cam + Math.cos(p.aim) * 20;
       const oy = p.y + camY + Math.sin(p.aim) * 20;
       const ex = ox + Math.cos(p.aim) * range;
@@ -3113,6 +3196,7 @@ export class Engine {
         c.stroke();
       }
       c.restore();
+      c.restore(); // the magnification opened above
     }
 
     /* --- reload ring above player --- */

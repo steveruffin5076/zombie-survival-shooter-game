@@ -36,6 +36,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [brightness, setBrightness] = useState(() => loadSettings().brightness);
   const [volume, setVolumeState] = useState(() => loadSettings().volume);
+  const [zoom, setZoomState] = useState(() => loadSettings().zoom);
   const [hud, setHud] = useState<HudState | null>(null);
   const [profile, setProfile] = useState<ProfileSnapshot | null>(null);
   const [choices, setChoices] = useState<UpgradeChoice[] | null>(null);
@@ -161,6 +162,10 @@ export default function App() {
   const changeVolume = useCallback((v: number) => {
     setVolumeState(v);
     engineRef.current?.setVolume(v);
+  }, []);
+  const changeZoom = useCallback((v: number) => {
+    setZoomState(v);
+    engineRef.current?.setZoom(v);
   }, []);
   const selectLoadout = useCallback((weaponId: string) => {
     engineRef.current?.setLoadout(weaponId);
@@ -347,8 +352,10 @@ export default function App() {
           <Settings
             volume={volume}
             brightness={brightness}
+            zoom={zoom}
             onVolumeChange={changeVolume}
             onBrightnessChange={changeBrightness}
+            onZoomChange={changeZoom}
             onClose={closeSettings}
           />
         )}
