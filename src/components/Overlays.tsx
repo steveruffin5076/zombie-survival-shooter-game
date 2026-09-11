@@ -1,24 +1,36 @@
 import type { GameStats, UpgradeChoice } from "../game/types";
 import {
   Play, RotateCcw, Home, Trophy, Timer, Skull, TrendingUp, Volume2, VolumeX,
-  Crosshair, Gauge, ChevronsRight, HeartPulse, Infinity as InfinityIcon, BookOpen,
+  Crosshair, Gauge, ChevronsRight, HeartPulse, Infinity as InfinityIcon, BookOpen, Settings as SettingsIcon,
 } from "lucide-react";
 import { ICONS, RARITY_STYLE, MenuButton, StatBox } from "./ui";
 
 /* ------------------------------------------------------------------ */
 
 export function Menu({
-  onEndless, onTutorial, high, muted, onMute,
-}: { onEndless: () => void; onTutorial: () => void; high: number; muted: boolean; onMute: () => void }) {
+  onEndless, onTutorial, onSettings, high, muted, onMute,
+}: {
+  onEndless: () => void; onTutorial: () => void; onSettings: () => void;
+  high: number; muted: boolean; onMute: () => void;
+}) {
   return (
     <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-gradient-to-b from-black/60 via-transparent to-black/85">
-      <button
-        onClick={onMute}
-        className="absolute right-6 top-6 flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white"
-        aria-label="Mute"
-      >
-        {muted ? <VolumeX className="h-4.5 w-4.5" /> : <Volume2 className="h-4.5 w-4.5" />}
-      </button>
+      <div className="absolute right-6 top-6 flex items-center gap-2">
+        <button
+          onClick={onSettings}
+          className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white"
+          aria-label="Settings"
+        >
+          <SettingsIcon className="h-4.5 w-4.5" />
+        </button>
+        <button
+          onClick={onMute}
+          className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white"
+          aria-label="Mute"
+        >
+          {muted ? <VolumeX className="h-4.5 w-4.5" /> : <Volume2 className="h-4.5 w-4.5" />}
+        </button>
+      </div>
 
       <div className="anim-rise mb-5 flex items-center gap-3 text-[13px] font-bold tracking-[0.5em] text-amber-400/90">
         <span className="h-px w-10 bg-amber-400/40" />

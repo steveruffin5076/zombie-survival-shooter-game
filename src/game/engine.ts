@@ -4,6 +4,7 @@ import {
   type WeaponClass,
 } from "./weapons";
 import { Sfx } from "./audio";
+import { loadSettings, saveSettings } from "./settings";
 import { stageDefFor, cumulativeWaveIndex, difficultyFor, rollEnemy, type StageDef } from "./stages";
 import { WEAPON_UNLOCK_LEVEL, metaXpFor, ownedWeaponsForLevel, isWeaponUnlocked } from "./progression";
 import { THEMES, type ThemeDef } from "./themes";
@@ -309,6 +310,7 @@ export class Engine {
     canvas.height = H * dpr;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.high = Number(localStorage.getItem("graveyard-shift-high") || 0);
+    this.sfx.setVolume(loadSettings().volume);
     this.reset();
     this.cam = 0; // attract mode frames the world edge as a backdrop
     this.bind();
@@ -402,6 +404,16 @@ export class Engine {
     this.sfx.ensure();
     this.sfx.muted = !this.sfx.muted;
     this.sfx.click();
+  }
+
+  getVolume() {
+    return this.sfx.getVolume();
+  }
+
+  /** Settings-screen volume slider — persists immediately, separate from the quick mute toggle. */
+  setVolume(v: number) {
+    this.sfx.setVolume(v);
+    saveSettings({ ...loadSettings(), volume: v });
   }
 
   /* ---------------- setup ---------------- */

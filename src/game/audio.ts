@@ -5,6 +5,8 @@ export class Sfx {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   muted = false;
+  /** 0..1 master gain, independent of `muted` — see setVolume() */
+  private volume = 0.45;
   private last: Record<string, number> = {};
 
   ensure() {
@@ -15,10 +17,20 @@ export class Sfx {
       if (!AC) return;
       this.ctx = new AC();
       this.master = this.ctx.createGain();
-      this.master.gain.value = 0.45;
+      this.master.gain.value = this.volume;
       this.master.connect(this.ctx.destination);
     }
     if (this.ctx.state === "suspended") void this.ctx.resume();
+  }
+
+  /** Fine-grained level, separate from the quick mute toggle — settings screen only. */
+  setVolume(v: number) {
+    this.volume = Math.max(0, Math.min(1, v));
+    if (this.master) this.master.gain.value = this.volume;
+  }
+
+  getVolume() {
+    return this.volume;
   }
 
   private throttle(key: string, ms: number): boolean {

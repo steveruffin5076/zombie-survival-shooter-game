@@ -13,7 +13,9 @@ import RepairPanel from "./components/RepairPanel";
 import TouchControls from "./components/TouchControls";
 import LoadoutProfile from "./components/LoadoutProfile";
 import Tutorial from "./components/Tutorial";
+import Settings from "./components/Settings";
 import { isTouchCapable } from "./game/input";
+import { loadSettings, saveSettings } from "./game/settings";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -22,6 +24,9 @@ export default function App() {
   const [screen, setScreen] = useState<"menu" | "game">("menu");
   const [showLoadout, setShowLoadout] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [brightness, setBrightness] = useState(() => loadSettings().brightness);
+  const [volume, setVolumeState] = useState(() => loadSettings().volume);
   const [hud, setHud] = useState<HudState | null>(null);
   const [profile, setProfile] = useState<ProfileSnapshot | null>(null);
   const [choices, setChoices] = useState<UpgradeChoice[] | null>(null);
@@ -100,6 +105,7 @@ export default function App() {
     setScreen("game");
     setShowLoadout(false);
     setShowTutorial(false);
+    setShowSettings(false);
     setOver(null);
     setChoices(null);
     setStageClear(null);
@@ -113,6 +119,16 @@ export default function App() {
   const closeLoadout = useCallback(() => setShowLoadout(false), []);
   const openTutorial = useCallback(() => setShowTutorial(true), []);
   const closeTutorial = useCallback(() => setShowTutorial(false), []);
+  const openSettings = useCallback(() => setShowSettings(true), []);
+  const closeSettings = useCallback(() => setShowSettings(false), []);
+  const changeBrightness = useCallback((v: number) => {
+    setBrightness(v);
+    saveSettings({ ...loadSettings(), brightness: v });
+  }, []);
+  const changeVolume = useCallback((v: number) => {
+    setVolumeState(v);
+    engineRef.current?.setVolume(v);
+  }, []);
   const selectLoadout = useCallback((weaponId: string) => {
     engineRef.current?.setLoadout(weaponId);
     setProfile(engineRef.current?.getProfile() ?? null);
@@ -123,6 +139,7 @@ export default function App() {
     setScreen("menu");
     setShowLoadout(false);
     setShowTutorial(false);
+    setShowSettings(false);
     setOver(null);
     setChoices(null);
     setStageClear(null);
@@ -213,7 +230,11 @@ export default function App() {
   return (
     <div className="fixed inset-0 grid place-items-center overflow-hidden bg-black select-none">
       <div className="relative" style={{ width: "min(100vw, 177.78vh)", aspectRatio: "16 / 9" }}>
-        <canvas ref={canvasRef} className="absolute inset-0 h-full w-full cursor-none" />
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 h-full w-full cursor-none"
+          style={{ filter: `brightness(${brightness})` }}
+        />
 
         {/* film treatment */}
         <div className="vignette pointer-events-none absolute inset-0 z-10" />
@@ -257,13 +278,24 @@ export default function App() {
           />
         )}
 
-        {screen === "menu" && !showLoadout && !showTutorial && (
+        {screen === "menu" && !showLoadout && !showTutorial && !showSettings && (
           <Menu
             onEndless={openLoadout}
             onTutorial={openTutorial}
+            onSettings={openSettings}
             high={hud?.high ?? 0}
             muted={hud?.muted ?? false}
             onMute={toggleMute}
+          />
+        )}
+
+        {screen === "menu" && showSettings && (
+          <Settings
+            volume={volume}
+            brightness={brightness}
+            onVolumeChange={changeVolume}
+            onBrightnessChange={changeBrightness}
+            onClose={closeSettings}
           />
         )}
 
