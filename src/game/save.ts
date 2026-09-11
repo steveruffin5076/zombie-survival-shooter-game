@@ -91,6 +91,12 @@ export interface ProfileData {
   bestWave: number;
   totalScrap: number;
   equipped: Partial<Record<WeaponClass, string>>;
+  /** per-weapon mastery XP (kills made with that weapon equipped) — keyed by
+   * weapon id, not class, so P365 and Glock 18 level up independently even
+   * though both are pistols. Drives attachment unlocks (see attachments.ts). */
+  weaponXp: Record<string, number>;
+  /** the one attachment equipped per weapon, if any — keyed by weapon id */
+  equippedAttachment: Record<string, string | null>;
 }
 
 const PROFILE_KEY = "graveyard-shift-profile";
@@ -104,6 +110,8 @@ export function defaultProfile(): ProfileData {
     bestWave: 0,
     totalScrap: 0,
     equipped: { pistol: "p365" },
+    weaponXp: {},
+    equippedAttachment: {},
   };
 }
 
@@ -120,6 +128,8 @@ function migrateProfile(raw: unknown): ProfileData | null {
     bestWave: d.bestWave ?? base.bestWave,
     totalScrap: d.totalScrap ?? base.totalScrap,
     equipped: d.equipped ?? base.equipped,
+    weaponXp: d.weaponXp ?? base.weaponXp,
+    equippedAttachment: d.equippedAttachment ?? base.equippedAttachment,
   };
 }
 

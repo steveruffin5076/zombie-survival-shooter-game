@@ -4,12 +4,21 @@ import { WEAPONS, CLASS_ORDER, CLASS_LABEL, byClass, type WeaponClass, type Weap
 import { WEAPON_UNLOCK_LEVEL } from "../game/progression";
 import { ZOMBIE_INFO } from "../game/zombieInfo";
 import {
+  ATTACHMENT_ORDER, MAX_WEAPON_LEVEL, WEAPON_XP_PER_LEVEL, weaponLevelFor, unlockedAttachments,
+  type AttachmentId,
+} from "../game/attachments";
+import {
   X, Play, Crosshair, Lock, Skull, Waves, Gem, Gauge, Swords,
   Wind, Target, Layers, ChevronLeft, Check, Infinity as InfinityIcon,
+  Package, ChevronsRight, Zap, Wrench,
 } from "lucide-react";
 
 const CLASS_ICON: Record<WeaponClass, typeof Crosshair> = {
   pistol: Crosshair, smg: Wind, shotgun: Target, carbine: Layers,
+};
+
+const ATTACHMENT_ICON: Record<string, typeof Crosshair> = {
+  Layers, Gauge, Package, ChevronsRight, Zap,
 };
 
 /** byClass() returns declaration order, not unlock order — every list of a
@@ -29,6 +38,7 @@ interface Props {
   onClose: () => void;
   onStart: () => void;
   onSelectLoadout: (weaponId: string) => void;
+  onEquipAttachment: (weaponId: string, attachmentId: AttachmentId | null) => void;
   /** button label + icon context — "START" before a run, "CONTINUE" between stages */
   ctaLabel?: string;
 }
@@ -36,7 +46,7 @@ interface Props {
 /** Opened from the Menu before an Endless run starts, and again between stages so
  * a level-up mid-run can actually be put to use — no more campaign, no walkable
  * hideout: just the weapon loadout (gated by lifetime meta level) and lifetime stats. */
-export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoadout, ctaLabel = "START" }: Props) {
+export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoadout, onEquipAttachment, ctaLabel = "START" }: Props) {
   const [tab, setTab] = useState<Tab>("loadout");
   const [selectedClass, setSelectedClass] = useState<WeaponClass | null>(null);
   const xpPct = Math.max(0, Math.min(1, profile.metaXp / profile.metaXpNext));
@@ -80,6 +90,7 @@ export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoad
                 profile={profile}
                 onBack={() => setSelectedClass(null)}
                 onSelectLoadout={onSelectLoadout}
+                onEquipAttachment={onEquipAttachment}
               />
             )
           )}
@@ -237,8 +248,11 @@ const statPct = (val: number, min: number, max: number, invert = false) => {
  * the right. Clicking a row previews it; clicking an unlocked row also
  * equips it immediately, same as the old single-page picker. */
 function CategoryPage({
-  cls, profile, onBack, onSelectLoadout,
-}: { cls: WeaponClass; profile: ProfileSnapshot; onBack: () => void; onSelectLoadout: (id: string) => void }) {
+  cls, profile, onBack, onSelectLoadout, onEquipAttachment,
+}: {
+  cls: WeaponClass; profile: ProfileSnapshot; onBack: () => void; onSelectLoadout: (id: string) => void;
+  onEquipAttachment: (weaponId: string, attachmentId: AttachmentId | null) => void;
+}) {
   const ids = unlockSorted(cls);
   const equippedId = profile.equipped[cls];
   const [previewId, setPreviewId] = useState(equippedId ?? ids[0]);
@@ -345,10 +359,92 @@ function CategoryPage({
             )}
           </div>
 
+          {!previewLocked && (
+            <MasterySection
+              weaponId={previewId}
+              xp={profile.weaponXp[previewId] ?? 0}
+              equippedAttachment={(profile.equippedAttachment[previewId] as AttachmentId | null) ?? null}
+              onEquipAttachment={onEquipAttachment}
+            />
+          )}
+
           <div className="mt-auto pt-4 text-[10px] text-zinc-600">
             Bars are shown relative to the other weapons in this class.
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** Per-weapon mastery: kills with this exact weapon build XP toward its own
+ * attachment unlocks (see attachments.ts) — a third progression axis, separate
+ * from in-run level-ups and lifetime account level. One slot, swap anytime. */
+function MasterySection({
+  weaponId, xp, equippedAttachment, onEquipAttachment,
+}: {
+  weaponId: string; xp: number; equippedAttachment: AttachmentId | null;
+  onEquipAttachment: (weaponId: string, attachmentId: AttachmentId | null) => void;
+}) {
+  const level = weaponLevelFor(xp);
+  const maxed = level >= MAX_WEAPON_LEVEL;
+  const intoLevel = xp - level * WEAPON_XP_PER_LEVEL;
+  const pct = maxed ? 100 : (intoLevel / WEAPON_XP_PER_LEVEL) * 100;
+  const unlocked = unlockedAttachments(xp);
+
+  return (
+    <div className="mt-5 border-t border-white/10 pt-4">
+      <div className="mb-1 flex items-center justify-between text-[11px] font-bold tracking-[0.1em] text-zinc-500">
+        <span className="flex items-center gap-1.5">
+          <Wrench className="h-3 w-3" /> WEAPON MASTERY
+        </span>
+        <span className="text-zinc-200">{maxed ? "MAX" : `LEVEL ${level} / ${MAX_WEAPON_LEVEL}`}</span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-cyan-600 to-cyan-300"
+          style={{ width: `${Math.max(maxed ? 100 : 4, pct)}%` }}
+        />
+      </div>
+      <div className="mt-1 text-[10px] text-zinc-600">
+        {maxed ? "All attachments unlocked for this weapon." : "Kill zombies with this weapon equipped to level it up."}
+      </div>
+
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {ATTACHMENT_ORDER.map((a) => {
+          const isUnlocked = unlocked.some((u) => u.id === a.id);
+          const isEquipped = equippedAttachment === a.id;
+          const Icon = ATTACHMENT_ICON[a.icon] ?? Package;
+          const reqLevel = ATTACHMENT_ORDER.indexOf(a) + 1;
+          return (
+            <button
+              key={a.id}
+              disabled={!isUnlocked}
+              onClick={() => onEquipAttachment(weaponId, isEquipped ? null : a.id)}
+              className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-left transition ${
+                isEquipped
+                  ? "border-cyan-400/60 bg-cyan-400/10"
+                  : isUnlocked
+                    ? "border-white/10 bg-white/[0.02] hover:border-white/25"
+                    : "cursor-not-allowed border-white/5 bg-white/[0.01] opacity-50"
+              }`}
+            >
+              <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${isEquipped ? "text-cyan-300" : "text-zinc-400"}`} />
+              <div className="min-w-0">
+                <div className={`text-[12px] font-bold ${isEquipped ? "text-cyan-300" : isUnlocked ? "text-zinc-200" : "text-zinc-500"}`}>
+                  {a.name}
+                </div>
+                <div className="text-[10px] leading-snug text-zinc-600">{a.desc}</div>
+                {!isUnlocked && (
+                  <div className="mt-0.5 flex items-center gap-1 text-[10px] tracking-[0.1em] text-zinc-600">
+                    <Lock className="h-2.5 w-2.5" /> WEAPON LEVEL {reqLevel}
+                  </div>
+                )}
+              </div>
+              {isEquipped && <Check className="ml-auto h-3.5 w-3.5 shrink-0 text-cyan-400" />}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

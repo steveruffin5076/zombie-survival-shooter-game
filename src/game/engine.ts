@@ -1,10 +1,11 @@
 import { UPGRADES, type UpgradeDef } from "./upgrades";
 import {
   WEAPONS as WDEF, WEAPON_IDS, CLASS_ORDER, CLASS_LABEL, CLASS_ROLE, byClass, STARTER,
-  type WeaponClass,
+  type WeaponClass, type WeaponDef,
 } from "./weapons";
 import { Sfx } from "./audio";
 import { loadSettings, saveSettings } from "./settings";
+import { ATTACHMENT_ORDER, applyAttachment, unlockedAttachments, weaponLevelFor, type AttachmentId } from "./attachments";
 import { stageDefFor, cumulativeWaveIndex, difficultyFor, rollEnemy, type StageDef } from "./stages";
 import { WEAPON_UNLOCK_LEVEL, metaXpFor, ownedWeaponsForLevel, isWeaponUnlocked } from "./progression";
 import { THEMES, type ThemeDef } from "./themes";
@@ -397,7 +398,40 @@ export class Engine {
       bestWave: this.profile.bestWave,
       totalScrap: this.profile.totalScrap,
       equipped: { ...this.profile.equipped },
+      weaponXp: { ...this.profile.weaponXp },
+      equippedAttachment: { ...this.profile.equippedAttachment },
     };
+  }
+
+  /** Weapon-mastery attachment picker — validates the level is actually
+   * unlocked before equipping, same guard pattern as equip()/setLoadout(). */
+  equipAttachment(weaponId: string, attachmentId: AttachmentId | null) {
+    if (attachmentId) {
+      const xp = this.profile.weaponXp[weaponId] ?? 0;
+      const unlocked = unlockedAttachments(xp).some((a) => a.id === attachmentId);
+      if (!unlocked) return;
+    }
+    this.profile.equippedAttachment[weaponId] = attachmentId;
+    saveProfile(this.profile);
+  }
+
+  /** Base weapon stats with its equipped attachment's modifiers applied —
+   * every gameplay-affecting read of a weapon's mag/reload/reserve/range/
+   * swap should go through this, not WDEF[id] directly. */
+  private effWeapon(kind: string): WeaponDef {
+    const base = WDEF[kind] ?? WDEF.pistol;
+    const att = this.profile.equippedAttachment[kind] as AttachmentId | null | undefined;
+    return applyAttachment(base, att);
+  }
+
+  private gainWeaponXp(kind: string, v: number) {
+    const before = weaponLevelFor(this.profile.weaponXp[kind] ?? 0);
+    this.profile.weaponXp[kind] = (this.profile.weaponXp[kind] ?? 0) + v;
+    const after = weaponLevelFor(this.profile.weaponXp[kind]);
+    if (after > before) {
+      const unlocked = ATTACHMENT_ORDER[after - 1];
+      this.announce("ATTACHMENT UNLOCKED", `${unlocked.name} — ${WDEF[kind]?.name ?? kind}`, 2.4);
+    }
   }
 
   togglePause() {
@@ -471,8 +505,9 @@ export class Engine {
     this.ammo = {};
     this.reserve = {};
     for (const id of WEAPON_IDS) {
-      this.ammo[id] = WDEF[id].mag;
-      this.reserve[id] = WDEF[id].reserve;
+      const w = this.effWeapon(id);
+      this.ammo[id] = w.mag;
+      this.reserve[id] = w.reserve;
     }
     this.reloading = false;
     this.reloadT = 0;
@@ -1002,7 +1037,7 @@ export class Engine {
    * bossForceTarget, same idea as acquireRayTarget's tie-break. */
   private acquireConeTarget(aim: number, halfAngle: number): AimTarget | null {
     const p = this.pl;
-    const w = WDEF[this.kind];
+    const w = this.effWeapon(this.kind);
     const range = w.range * (1 + 0.12 * (this.stacks["velo"] || 0));
     const angleDiff = (a: number) => {
       let d = Math.abs(a - aim) % TAU;
@@ -1036,7 +1071,7 @@ export class Engine {
    * actually crosses a zombie or the boss — no auto-snap to the nearest one. */
   private acquireRayTarget(aim: number) {
     const p = this.pl;
-    const w = WDEF[this.kind];
+    const w = this.effWeapon(this.kind);
     const range = w.range * (1 + 0.12 * (this.stacks["velo"] || 0));
     const dirX = Math.cos(aim), dirY = Math.sin(aim);
     let best: AimTarget | null = null;
@@ -1099,7 +1134,7 @@ export class Engine {
 
   /** Begin a reload if it makes sense to. */
   startReload(manual = false) {
-    const w = WDEF[this.kind] ?? WDEF.pistol;
+    const w = this.effWeapon(this.kind);
     if (this.reloading) return;
     if (this.ammo[this.kind] >= w.mag) {
       if (manual) this.sfx.click();
@@ -1142,7 +1177,7 @@ export class Engine {
   }
 
   private finishReload() {
-    const w = WDEF[this.kind];
+    const w = this.effWeapon(this.kind);
     const need = w.mag - this.ammo[this.kind];
     if (this.reserve[this.kind] < 0) {
       this.ammo[this.kind] = w.mag; // unlimited reserve (pistols)
@@ -1169,7 +1204,7 @@ export class Engine {
   private fire() {
     const p = this.pl;
     const st = this.st;
-    const w = WDEF[this.kind] ?? WDEF.pistol;
+    const w = this.effWeapon(this.kind);
     // out of ammo -> auto reload
     if (this.ammo[this.kind] <= 0) {
       this.sfx.dryFire();
@@ -1752,6 +1787,7 @@ export class Engine {
     this.kills++;
     this.profile.totalKills++;
     this.gainMetaXp(1);
+    this.gainWeaponXp(this.kind, 1);
     this.score += Math.round(z.score * (1 + this.power * 0.06));
     this.shake(z.type === "brute" ? 5 : 1.6);
     this.sfx.zdie();
@@ -1991,10 +2027,10 @@ export class Engine {
     // swapping cancels an in-progress reload (per-weapon mags are preserved)
     this.reloading = false;
     this.reloadT = 0;
-    if (this.ammo[wid] === undefined) this.ammo[wid] = WDEF[wid].mag;
+    if (this.ammo[wid] === undefined) this.ammo[wid] = this.effWeapon(wid).mag;
     this.recompute();
     // heavier weapons take longer to bring up
-    this.pl.cd = Math.max(this.pl.cd, WDEF[wid].swap);
+    this.pl.cd = Math.max(this.pl.cd, this.effWeapon(wid).swap);
     if (!silent) this.sfx.click();
     for (let i = 0; i < 8; i++)
       this.particles.push({
@@ -2319,7 +2355,7 @@ export class Engine {
   /** Arena resupply: tops reserve up by a fraction of each weapon's capacity, capped at `cap` of it. */
   private awardSupply(amount: number, cap: number) {
     for (const id of WEAPON_IDS) {
-      const maxReserve = WDEF[id].reserve;
+      const maxReserve = this.effWeapon(id).reserve;
       if (maxReserve <= 0) continue; // unlimited/no reserve — nothing to top up
       this.reserve[id] = Math.max(this.reserve[id], Math.min(maxReserve * cap, this.reserve[id] + maxReserve * amount));
     }
@@ -2508,7 +2544,7 @@ export class Engine {
     if (!this.stageDef.fixedCamera) this.pl.hp = this.st.maxHp;
     // safe house resupply: reserve tops up to 50% (not full)
     for (const id of WEAPON_IDS) {
-      if (this.reserve[id] >= 0) this.reserve[id] = Math.max(this.reserve[id], Math.round(WDEF[id].reserve * 0.5));
+      if (this.reserve[id] >= 0) this.reserve[id] = Math.max(this.reserve[id], Math.round(this.effWeapon(id).reserve * 0.5));
     }
     // a clear stage deserves a real supply drop — a physical crate spawned
     // here would be left behind in a world about to be replaced, so grant it
@@ -2542,7 +2578,7 @@ export class Engine {
     this.bullets = [];
     this.eshots = [];
     // full reload on every weapon when moving on — no carrying a half-empty mag into the next stage
-    for (const id of WEAPON_IDS) this.ammo[id] = WDEF[id].mag;
+    for (const id of WEAPON_IDS) this.ammo[id] = this.effWeapon(id).mag;
     this.reloading = false;
     this.reloadT = 0;
     this.beginRest(2.6);
@@ -2663,17 +2699,17 @@ export class Engine {
           active: WDEF[this.kind].cls === cls,
           key: String(i + 1),
           ammo: this.ammo[shown] ?? 0,
-          mag: WDEF[shown].mag,
+          mag: this.effWeapon(shown).mag,
           variants: ownedInClass.length,
         };
       }),
       ammo: this.ammo[this.kind] ?? 0,
-      mag: WDEF[this.kind].mag,
+      mag: this.effWeapon(this.kind).mag,
       reserve: this.reserve[this.kind] ?? 0,
       autoFire: this.autoFire,
       facing: this.facing,
       onTarget: this.onTarget,
-      range: WDEF[this.kind].range,
+      range: this.effWeapon(this.kind).range,
       reloading: this.reloading,
       reloadPct: this.reloadDur > 0 ? 1 - this.reloadT / this.reloadDur : 0,
       paused: this.paused,
@@ -2993,7 +3029,7 @@ export class Engine {
     /* --- LASER SIGHT (effective range indicator) --- */
     if (this.mode === "play" && !this.over && !this.reloading) {
       const p = this.pl;
-      const w = WDEF[this.kind];
+      const w = this.effWeapon(this.kind);
       const range = w.range * (1 + 0.12 * (this.stacks["velo"] || 0));
       const ox = p.x - cam + Math.cos(p.aim) * 20;
       const oy = p.y + camY + Math.sin(p.aim) * 20;
@@ -3071,7 +3107,7 @@ export class Engine {
     /* --- low / empty ammo warning --- */
     if (this.mode === "play" && !this.over && !this.reloading) {
       const cur = this.ammo[this.kind] ?? 0;
-      const mag = (WDEF[this.kind] ?? WDEF.pistol).mag;
+      const mag = this.effWeapon(this.kind).mag;
       if (cur === 0) {
         c.save();
         c.textAlign = "center";

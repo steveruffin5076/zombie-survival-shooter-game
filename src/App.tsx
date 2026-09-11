@@ -5,6 +5,7 @@ import type {
 } from "./game/types";
 import type { Deployable, DeployableKind } from "./game/arena";
 import type { ConsumableKey } from "./game/items";
+import type { AttachmentId } from "./game/attachments";
 import Hud from "./components/Hud";
 import { Menu, LevelUpModal, PauseMenu, GameOver, StageClear } from "./components/Overlays";
 import InventoryOverlay from "./components/InventoryOverlay";
@@ -131,6 +132,10 @@ export default function App() {
   }, []);
   const selectLoadout = useCallback((weaponId: string) => {
     engineRef.current?.setLoadout(weaponId);
+    setProfile(engineRef.current?.getProfile() ?? null);
+  }, []);
+  const equipAttachment = useCallback((weaponId: string, attachmentId: AttachmentId | null) => {
+    engineRef.current?.equipAttachment(weaponId, attachmentId);
     setProfile(engineRef.current?.getProfile() ?? null);
   }, []);
 
@@ -305,6 +310,7 @@ export default function App() {
             onClose={closeLoadout}
             onStart={start}
             onSelectLoadout={selectLoadout}
+            onEquipAttachment={equipAttachment}
           />
         )}
 
@@ -326,6 +332,7 @@ export default function App() {
             onClose={confirmStageLoadout}
             onStart={confirmStageLoadout}
             onSelectLoadout={selectLoadout}
+            onEquipAttachment={equipAttachment}
             ctaLabel="CONTINUE"
           />
         )}

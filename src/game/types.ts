@@ -143,6 +143,9 @@ export interface ProfileSnapshot {
   bestWave: number;
   totalScrap: number;
   equipped: Partial<Record<WeaponClass, string>>;
+  /** per-weapon mastery XP, keyed by weapon id — see attachments.ts */
+  weaponXp: Record<string, number>;
+  equippedAttachment: Record<string, string | null>;
 }
 
 export type EngineEvent =
