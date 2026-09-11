@@ -1,9 +1,25 @@
 import { useState } from "react";
 import type { ProfileSnapshot } from "../game/types";
-import { WEAPONS, CLASS_ORDER, CLASS_LABEL, byClass, type WeaponClass } from "../game/weapons";
+import { WEAPONS, CLASS_ORDER, CLASS_LABEL, byClass, type WeaponClass, type WeaponDef } from "../game/weapons";
 import { WEAPON_UNLOCK_LEVEL } from "../game/progression";
 import { ZOMBIE_INFO } from "../game/zombieInfo";
-import { X, Play, Crosshair, Lock, Skull, Waves, Gem, Star, Gauge, Swords } from "lucide-react";
+import {
+  X, Play, Crosshair, Lock, Skull, Waves, Gem, Gauge, Swords,
+  Wind, Target, Layers, ChevronLeft, Check, Infinity as InfinityIcon,
+} from "lucide-react";
+
+const CLASS_ICON: Record<WeaponClass, typeof Crosshair> = {
+  pistol: Crosshair, smg: Wind, shotgun: Target, carbine: Layers,
+};
+
+/** byClass() returns declaration order, not unlock order — every list of a
+ * class's weapons reads left-to-right (or top-to-bottom) as a progression
+ * the way the level number implies. */
+function unlockSorted(cls: WeaponClass): string[] {
+  return [...byClass(cls)].sort(
+    (a, b) => (WEAPON_UNLOCK_LEVEL[a] ?? Infinity) - (WEAPON_UNLOCK_LEVEL[b] ?? Infinity)
+  );
+}
 
 type Tab = "loadout" | "profile" | "zombies";
 const TABS: Tab[] = ["loadout", "profile", "zombies"];
@@ -22,11 +38,12 @@ interface Props {
  * hideout: just the weapon loadout (gated by lifetime meta level) and lifetime stats. */
 export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoadout, ctaLabel = "START" }: Props) {
   const [tab, setTab] = useState<Tab>("loadout");
+  const [selectedClass, setSelectedClass] = useState<WeaponClass | null>(null);
   const xpPct = Math.max(0, Math.min(1, profile.metaXp / profile.metaXpNext));
 
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-[6px]">
-      <div className="anim-pop relative flex h-[520px] w-full max-w-3xl flex-col rounded-xl border border-amber-500/20 bg-zinc-950/95 shadow-[0_0_80px_rgba(0,0,0,0.7)]">
+      <div className="anim-pop relative flex h-[600px] w-full max-w-3xl flex-col rounded-xl border border-amber-500/20 bg-zinc-950/95 shadow-[0_0_80px_rgba(0,0,0,0.7)]">
         <button
           onClick={onClose}
           className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-zinc-400 transition hover:border-white/25 hover:text-white"
@@ -55,20 +72,16 @@ export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoad
 
         <div className="flex flex-1 flex-col items-center overflow-y-auto p-6">
           {tab === "loadout" && (
-            <div className="flex w-full flex-col items-center gap-5">
-              <div className="text-[12px] font-bold tracking-[0.3em] text-zinc-500">
-                PICK YOUR STARTING WEAPON PER CLASS
-              </div>
-              {CLASS_ORDER.map((cls) => (
-                <ClassRow
-                  key={cls}
-                  cls={cls}
-                  metaLevel={profile.metaLevel}
-                  active={profile.equipped[cls]}
-                  onPick={onSelectLoadout}
-                />
-              ))}
-            </div>
+            selectedClass === null ? (
+              <CategoryGrid profile={profile} onSelect={setSelectedClass} />
+            ) : (
+              <CategoryPage
+                cls={selectedClass}
+                profile={profile}
+                onBack={() => setSelectedClass(null)}
+                onSelectLoadout={onSelectLoadout}
+              />
+            )
           )}
 
           {tab === "profile" && (
@@ -157,47 +170,204 @@ export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoad
   );
 }
 
-function ClassRow({
-  cls, metaLevel, active, onPick,
-}: { cls: WeaponClass; metaLevel: number; active: string | undefined; onPick: (id: string) => void }) {
-  // byClass() returns declaration order, not unlock order — sort so the
-  // row reads left-to-right as a progression the way the level number implies
-  const ids = [...byClass(cls)].sort(
-    (a, b) => (WEAPON_UNLOCK_LEVEL[a] ?? Infinity) - (WEAPON_UNLOCK_LEVEL[b] ?? Infinity)
-  );
+/** Screen A — four large category cards; picking one opens CategoryPage for it. */
+function CategoryGrid({
+  profile, onSelect,
+}: { profile: ProfileSnapshot; onSelect: (cls: WeaponClass) => void }) {
   return (
-    <div className="flex w-full flex-col items-center gap-2">
-      <div className="text-[11px] font-bold tracking-[0.25em] text-zinc-600">{CLASS_LABEL[cls]}</div>
-      <div className="flex flex-wrap justify-center gap-2.5">
-        {ids.map((wid) => {
-          const w = WEAPONS[wid];
-          const unlockLevel = WEAPON_UNLOCK_LEVEL[wid] ?? Infinity;
-          const unlocked = metaLevel >= unlockLevel;
-          const isActive = active === wid;
+    <div className="flex w-full flex-col items-center gap-5">
+      <div className="text-[12px] font-bold tracking-[0.3em] text-zinc-500">
+        CHOOSE A WEAPON CATEGORY
+      </div>
+      <div className="grid w-full grid-cols-2 gap-4 md:grid-cols-4">
+        {CLASS_ORDER.map((cls) => {
+          const ids = unlockSorted(cls);
+          const unlockedCount = ids.filter((id) => profile.metaLevel >= (WEAPON_UNLOCK_LEVEL[id] ?? Infinity)).length;
+          const equippedId = profile.equipped[cls];
+          const Icon = CLASS_ICON[cls];
+          const hasUnlocked = unlockedCount > 0;
           return (
             <button
-              key={wid}
-              onClick={() => unlocked && onPick(wid)}
-              disabled={!unlocked}
-              title={unlocked ? w.desc : `unlocks at level ${unlockLevel}`}
-              className={`flex w-32 flex-col items-center gap-1 rounded-lg border p-3 text-center transition ${
-                isActive
-                  ? "border-amber-400/50 bg-amber-400/10 text-amber-300"
-                  : unlocked
-                    ? "border-white/10 bg-white/[0.02] text-zinc-400 hover:border-white/25 hover:text-zinc-200"
-                    : "cursor-not-allowed border-white/5 bg-white/[0.01] text-zinc-700"
+              key={cls}
+              onClick={() => onSelect(cls)}
+              className={`flex flex-col items-center gap-2.5 rounded-xl border p-5 text-center transition hover:-translate-y-0.5 ${
+                hasUnlocked
+                  ? "border-amber-400/40 bg-amber-400/[0.06] hover:border-amber-400/60"
+                  : "border-white/10 bg-white/[0.02] hover:border-white/25"
               }`}
             >
-              {unlocked ? <Crosshair className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
-              <span className="text-[13px] font-bold leading-tight">{w.short}</span>
-              {!unlocked && (
-                <span className="flex items-center gap-1 text-[10px] tracking-wide text-zinc-600">
-                  <Star className="h-2.5 w-2.5" /> LEVEL {unlockLevel}
-                </span>
-              )}
+              <div
+                className={`flex h-12 w-12 items-center justify-center rounded-full border ${
+                  hasUnlocked ? "border-amber-400/40 bg-amber-400/15" : "border-white/12 bg-white/5"
+                }`}
+              >
+                <Icon className={`h-5 w-5 ${hasUnlocked ? "text-amber-300" : "text-zinc-400"}`} />
+              </div>
+              <div className="font-display text-xl tracking-wide text-zinc-100">{CLASS_LABEL[cls]}</div>
+              <div className="text-[11px] text-zinc-500">{unlockedCount} of {ids.length} unlocked</div>
+              <div
+                className={`rounded-full border px-2.5 py-1 text-[10px] font-bold tracking-[0.1em] ${
+                  equippedId
+                    ? "border-amber-400/30 bg-amber-400/10 text-amber-300"
+                    : "border-white/10 bg-white/5 text-zinc-500"
+                }`}
+              >
+                {equippedId ? `EQUIPPED: ${WEAPONS[equippedId].short}` : "NONE UNLOCKED"}
+              </div>
             </button>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+const classStat = (ids: string[], pick: (w: WeaponDef) => number) => {
+  const vals = ids.map((id) => pick(WEAPONS[id]));
+  return { min: Math.min(...vals), max: Math.max(...vals) };
+};
+const statPct = (val: number, min: number, max: number, invert = false) => {
+  if (max <= min) return 100;
+  const pct = ((val - min) / (max - min)) * 100;
+  return invert ? 100 - pct : pct;
+};
+
+/** Screen B — a category's own page: every weapon in it on the left (locked
+ * ones included, grayed out), the currently-previewed one's full stats on
+ * the right. Clicking a row previews it; clicking an unlocked row also
+ * equips it immediately, same as the old single-page picker. */
+function CategoryPage({
+  cls, profile, onBack, onSelectLoadout,
+}: { cls: WeaponClass; profile: ProfileSnapshot; onBack: () => void; onSelectLoadout: (id: string) => void }) {
+  const ids = unlockSorted(cls);
+  const equippedId = profile.equipped[cls];
+  const [previewId, setPreviewId] = useState(equippedId ?? ids[0]);
+  const unlockedCount = ids.filter((id) => profile.metaLevel >= (WEAPON_UNLOCK_LEVEL[id] ?? Infinity)).length;
+
+  const pick = (id: string) => {
+    setPreviewId(id);
+    const unlocked = profile.metaLevel >= (WEAPON_UNLOCK_LEVEL[id] ?? Infinity);
+    if (unlocked) onSelectLoadout(id);
+  };
+
+  const w = WEAPONS[previewId];
+  const previewUnlockLevel = WEAPON_UNLOCK_LEVEL[previewId] ?? Infinity;
+  const previewLocked = profile.metaLevel < previewUnlockLevel;
+  const dmg = classStat(ids, (x) => x.damage);
+  const rpm = classStat(ids, (x) => x.rpm);
+  const mag = classStat(ids, (x) => x.mag);
+  const reload = classStat(ids, (x) => x.reload);
+  const reserveIds = ids.filter((id) => WEAPONS[id].reserve >= 0);
+  const reserve = reserveIds.length > 0 ? classStat(reserveIds, (x) => x.reserve) : { min: 0, max: 1 };
+
+  return (
+    <div className="flex min-h-0 w-full flex-1 flex-col gap-4">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onBack}
+          className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-zinc-300 transition hover:border-white/25 hover:text-white"
+          aria-label="Back to categories"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <div className="font-display text-2xl tracking-wide text-zinc-100">{CLASS_LABEL[cls]}</div>
+        <div className="text-[11px] font-bold tracking-[0.2em] text-zinc-500">
+          {unlockedCount} OF {ids.length} UNLOCKED
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1 gap-4">
+        <div className="flex w-56 shrink-0 flex-col gap-2 overflow-y-auto">
+          {ids.map((wid) => {
+            const wd = WEAPONS[wid];
+            const unlockLevel = WEAPON_UNLOCK_LEVEL[wid] ?? Infinity;
+            const locked = profile.metaLevel < unlockLevel;
+            const isEquipped = equippedId === wid;
+            const isPreviewed = previewId === wid;
+            return (
+              <button
+                key={wid}
+                onClick={() => pick(wid)}
+                className={`flex items-center justify-between rounded-lg border px-3.5 py-2.5 text-left transition ${
+                  isPreviewed
+                    ? "border-amber-400/60 bg-amber-400/10 shadow-[0_0_20px_rgba(245,158,11,0.15)]"
+                    : locked
+                      ? "border-white/5 bg-white/[0.01] opacity-55 hover:border-white/15"
+                      : "border-white/10 bg-white/[0.02] hover:border-white/25"
+                }`}
+              >
+                <div>
+                  <div className={`text-sm font-bold ${isPreviewed ? "text-amber-300" : locked ? "text-zinc-500" : "text-zinc-200"}`}>
+                    {wd.name}
+                  </div>
+                  {isEquipped ? (
+                    <div className="mt-0.5 text-[10px] tracking-[0.1em] text-amber-400/70">EQUIPPED</div>
+                  ) : locked ? (
+                    <div className="mt-0.5 flex items-center gap-1 text-[10px] tracking-[0.1em] text-zinc-600">
+                      <Lock className="h-2.5 w-2.5" /> LEVEL {unlockLevel}
+                    </div>
+                  ) : (
+                    <div className="mt-0.5 text-[10px] tracking-[0.1em] text-zinc-600">OWNED</div>
+                  )}
+                </div>
+                {isEquipped && <Check className="h-4 w-4 shrink-0 text-amber-400" />}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-1 flex-col overflow-y-auto rounded-xl border border-white/10 bg-white/[0.015] p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="font-display text-xl tracking-wide text-zinc-100">{w.name}</div>
+              <div className="mt-1 max-w-sm text-[13px] leading-relaxed text-zinc-500">{w.desc}</div>
+            </div>
+            {previewUnlockLevel === 1 ? (
+              <span className="shrink-0 whitespace-nowrap rounded-full bg-gradient-to-b from-amber-400 to-amber-600 px-3 py-1 text-[10px] font-bold tracking-[0.12em] text-amber-950">
+                STARTER
+              </span>
+            ) : previewLocked ? (
+              <span className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[10px] font-bold tracking-[0.12em] text-zinc-400">
+                <Lock className="h-2.5 w-2.5" /> LEVEL {previewUnlockLevel}
+              </span>
+            ) : null}
+          </div>
+
+          <div className="mt-5 flex flex-col gap-3.5">
+            <StatBar label="DAMAGE" value={String(w.damage)} pct={statPct(w.damage, dmg.min, dmg.max)} />
+            <StatBar label="FIRE RATE" value={`${w.rpm} RPM`} pct={statPct(w.rpm, rpm.min, rpm.max)} />
+            <StatBar label="MAG SIZE" value={String(w.mag)} pct={statPct(w.mag, mag.min, mag.max)} />
+            <StatBar label="RELOAD SPEED" value={`${w.reload.toFixed(2)}s`} pct={statPct(w.reload, reload.min, reload.max, true)} />
+            {w.reserve < 0 ? (
+              <StatBar label="RESERVE AMMO" value="UNLIMITED" pct={100} icon={<InfinityIcon className="h-3 w-3" />} cyan />
+            ) : (
+              <StatBar label="RESERVE AMMO" value={String(w.reserve)} pct={statPct(w.reserve, reserve.min, reserve.max)} cyan />
+            )}
+          </div>
+
+          <div className="mt-auto pt-4 text-[10px] text-zinc-600">
+            Bars are shown relative to the other weapons in this class.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatBar({
+  label, value, pct, cyan, icon,
+}: { label: string; value: string; pct: number; cyan?: boolean; icon?: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between text-[11px] font-bold tracking-[0.1em] text-zinc-500">
+        <span>{label}</span>
+        <span className="flex items-center gap-1 text-zinc-200">{icon}{value}</span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+        <div
+          className={`h-full rounded-full bg-gradient-to-r ${cyan ? "from-cyan-600 to-cyan-300" : "from-amber-600 to-amber-300"}`}
+          style={{ width: `${Math.max(4, pct)}%` }}
+        />
       </div>
     </div>
   );
