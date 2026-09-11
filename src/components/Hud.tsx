@@ -141,8 +141,11 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
             >
               {hud.hordeT > 0 ? "HORDE" : hud.isBossWave ? "BOSS WAVE" : `WAVE ${Math.max(1, hud.waveInStage)}`}
             </div>
-            {/* per-stage wave pips */}
-            <div className="mt-1.5 flex items-center justify-center gap-1">
+            {/* per-stage wave pips — hidden on short/landscape-phone viewports so this
+             * block stays clear of the canvas-drawn stage/wave banner (engine.ts
+             * drawBanner), which shrinks with the game's 16:9 box while this DOM
+             * text doesn't. */}
+            <div className="mt-1.5 hidden items-center justify-center gap-1 [@media(min-height:460px)]:flex">
               {Array.from({ length: hud.wavesPerStage }).map((_, i) => {
                 const n = i + 1;
                 const done = n < hud.waveInStage;
@@ -164,7 +167,7 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
                 );
               })}
             </div>
-            <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[13px] font-semibold tracking-widest text-white/55">
+            <div className="mt-1.5 hidden items-center justify-center gap-1.5 text-[13px] font-semibold tracking-widest text-white/55 [@media(min-height:460px)]:flex">
               <Skull className="h-3.5 w-3.5" />
               {hud.hordeT > 0
                 ? `SURVIVE ${Math.ceil(hud.hordeT)}s`
@@ -367,8 +370,12 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
 
       {/* right column: consumable slots + fire mode */}
       <div className="absolute bottom-32 right-3 flex flex-col items-end gap-1.5 md:bottom-28 md:right-6 md:gap-3">
-        {/* CONSUMABLE SLOTS — hidden on mobile, visible on desktop */}
-        <div className="pointer-events-auto hidden gap-2 md:flex w-44 justify-end">
+        {/* CONSUMABLE SLOTS — hidden on touch (a `md:` width breakpoint alone
+         * isn't enough: most phones are wider than that in landscape, which
+         * used to let this keyboard-hotkey row render on top of the touch
+         * fire/dash buttons below) */}
+        {!touch && (
+        <div className="pointer-events-auto flex w-44 justify-end gap-2">
           {CONSUMABLE_ITEMS.map((id) => {
             const def = ITEMS[id];
             const count = inv.backpack.filter((it) => it.itemId === id).length;
@@ -393,38 +400,44 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
             );
           })}
         </div>
+        )}
 
-        {/* FIRE MODE TOGGLE */}
-        <button
-          onClick={onFireMode}
-          className={`pointer-events-auto flex w-40 items-center gap-1.5 rounded-xl border px-2 py-1.5 text-[11px] backdrop-blur-sm transition-all active:scale-[0.97] md:w-56 md:gap-2.5 md:px-3 md:py-2.5 md:text-[13px] ${
-            hud.autoFire
-              ? "border-emerald-400/50 bg-emerald-500/10 hover:bg-emerald-500/20"
-              : "border-amber-400/50 bg-amber-500/10 hover:bg-amber-500/20"
-          }`}
-        >
-          {hud.autoFire ? (
-            <Bot className="h-4 w-4 md:h-5 md:w-5 text-emerald-300" />
-          ) : (
-            <Hand className="h-4 w-4 md:h-5 md:w-5 text-amber-300" />
-          )}
-          <div className="text-left">
-            <div
-              className={`hidden font-bold tracking-[0.14em] md:block ${
-                hud.autoFire ? "text-emerald-200" : "text-amber-200"
-              }`}
-            >
-              {hud.autoFire ? "AUTO-FIRE" : "MANUAL"}
+        {/* FIRE MODE TOGGLE — touch gets its own copy of this in TouchControls,
+         * right where this one would otherwise render, so it's desktop-only here */}
+        {!touch && (
+          <button
+            onClick={onFireMode}
+            className={`pointer-events-auto flex w-40 items-center gap-1.5 rounded-xl border px-2 py-1.5 text-[11px] backdrop-blur-sm transition-all active:scale-[0.97] md:w-56 md:gap-2.5 md:px-3 md:py-2.5 md:text-[13px] ${
+              hud.autoFire
+                ? "border-emerald-400/50 bg-emerald-500/10 hover:bg-emerald-500/20"
+                : "border-amber-400/50 bg-amber-500/10 hover:bg-amber-500/20"
+            }`}
+          >
+            {hud.autoFire ? (
+              <Bot className="h-4 w-4 md:h-5 md:w-5 text-emerald-300" />
+            ) : (
+              <Hand className="h-4 w-4 md:h-5 md:w-5 text-amber-300" />
+            )}
+            <div className="text-left">
+              <div
+                className={`hidden font-bold tracking-[0.14em] md:block ${
+                  hud.autoFire ? "text-emerald-200" : "text-amber-200"
+                }`}
+              >
+                {hud.autoFire ? "AUTO-FIRE" : "MANUAL"}
+              </div>
+              <div className="text-[9px] tracking-[0.12em] text-white/40 md:text-[10px]">
+                {hud.autoFire ? "FIRES ON LASER" : "CLICK TO SHOOT"}
+              </div>
             </div>
-            <div className="text-[9px] tracking-[0.12em] text-white/40 md:text-[10px]">
-              {hud.autoFire ? "FIRES ON LASER" : "CLICK TO SHOOT"}
-            </div>
-          </div>
-          <span className="kbd ml-auto text-[9px] md:text-[10px]">F</span>
-        </button>
+            <span className="kbd ml-auto text-[9px] md:text-[10px]">F</span>
+          </button>
+        )}
       </div>
 
-      {/* bottom-right: dash */}
+      {/* bottom-right: dash — touch gets a tinted Dash button in TouchControls
+       * instead, in the same corner, so this status readout is desktop-only */}
+      {!touch && (
       <div className="absolute bottom-3 right-3 md:bottom-6 md:right-6">
         <div
           className={`flex items-center gap-2 rounded-xl border px-2 py-1.5 text-[10px] backdrop-blur-sm transition-colors md:gap-3 md:px-4 md:py-2.5 md:text-[12px] ${
@@ -445,6 +458,7 @@ export default function Hud({ hud, inv, onMute, onPause, onSwitch, onFireMode, o
           </div>
         </div>
       </div>
+      )}
 
       {/* bottom-center: crate interact prompt */}
       {hud.crateNear && (

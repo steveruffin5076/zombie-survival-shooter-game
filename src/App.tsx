@@ -278,6 +278,9 @@ export default function App() {
             showInteract={!!hud?.crateNear}
             onInteractStart={interactStart}
             onInteractEnd={interactEnd}
+            dashReady={(hud?.dashT ?? 0) <= 0}
+            autoFire={!!hud?.autoFire}
+            onToggleFireMode={toggleFireMode}
           />
         )}
 

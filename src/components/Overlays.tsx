@@ -14,40 +14,40 @@ export function Menu({
   high: number; muted: boolean; onMute: () => void;
 }) {
   return (
-    <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-gradient-to-b from-black/60 via-transparent to-black/85">
-      <div className="absolute right-6 top-6 flex items-center gap-2">
+    <div className="absolute inset-0 z-30 flex flex-col items-center justify-center overflow-y-auto bg-gradient-to-b from-black/60 via-transparent to-black/85 px-4 py-4">
+      <div className="absolute right-4 top-4 flex items-center gap-2 md:right-6 md:top-6">
         <button
           onClick={onSettings}
-          className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white"
+          className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white md:h-10 md:w-10"
           aria-label="Settings"
         >
-          <SettingsIcon className="h-4.5 w-4.5" />
+          <SettingsIcon className="h-4 w-4 md:h-4.5 md:w-4.5" />
         </button>
         <button
           onClick={onMute}
-          className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white"
+          className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-black/50 text-white/70 backdrop-blur-sm transition hover:border-white/25 hover:text-white md:h-10 md:w-10"
           aria-label="Mute"
         >
-          {muted ? <VolumeX className="h-4.5 w-4.5" /> : <Volume2 className="h-4.5 w-4.5" />}
+          {muted ? <VolumeX className="h-4 w-4 md:h-4.5 md:w-4.5" /> : <Volume2 className="h-4 w-4 md:h-4.5 md:w-4.5" />}
         </button>
       </div>
 
-      <div className="anim-rise mb-5 flex items-center gap-3 text-[13px] font-bold tracking-[0.5em] text-amber-400/90">
+      <div className="anim-rise mb-2 hidden items-center gap-3 text-[13px] font-bold tracking-[0.5em] text-amber-400/90 [@media(min-height:520px)]:flex">
         <span className="h-px w-10 bg-amber-400/40" />
         THE DEAD DON'T SLEEP
         <span className="h-px w-10 bg-amber-400/40" />
       </div>
 
       <h1 className="anim-rise text-center font-display leading-[0.9]" style={{ animationDelay: "60ms" }}>
-        <span className="title-outline anim-flicker block text-[clamp(3.5rem,10vw,7.5rem)] tracking-[0.06em]">
+        <span className="title-outline anim-flicker block text-[clamp(2.4rem,9vmin,7.5rem)] tracking-[0.06em]">
           GRAVEYARD
         </span>
-        <span className="title-blood anim-title-glow block text-[clamp(4.5rem,13vw,10rem)] tracking-[0.08em]">
+        <span className="title-blood anim-title-glow block text-[clamp(3.1rem,12vmin,10rem)] tracking-[0.08em]">
           SHIFT
         </span>
       </h1>
 
-      <p className="anim-rise mt-5 max-w-md text-center text-base leading-relaxed text-zinc-400" style={{ animationDelay: "120ms" }}>
+      <p className="anim-rise mt-2 hidden max-w-md text-center text-base leading-relaxed text-zinc-400 [@media(min-height:560px)]:block" style={{ animationDelay: "120ms" }}>
         The infected see nothing in the dark — only your laser sight, and the
         instant it crosses one, its tracking locks to you. Two lanes. One
         survivor. Every shot you fire tells them exactly where you are.
@@ -55,7 +55,7 @@ export function Menu({
 
       <button
         onClick={onEndless}
-        className="anim-rise group relative mt-9 flex items-center gap-3 overflow-hidden rounded-xl bg-gradient-to-b from-amber-400 to-amber-600 px-12 py-4 text-xl font-bold tracking-[0.25em] text-amber-950 shadow-[0_0_50px_rgba(245,158,11,0.35)] transition-all duration-200 hover:scale-[1.04] hover:shadow-[0_0_70px_rgba(245,158,11,0.5)] active:scale-[0.98]"
+        className="anim-rise group relative mt-4 flex items-center gap-3 overflow-hidden rounded-xl bg-gradient-to-b from-amber-400 to-amber-600 px-12 py-3 text-xl font-bold tracking-[0.25em] text-amber-950 shadow-[0_0_50px_rgba(245,158,11,0.35)] transition-all duration-200 hover:scale-[1.04] hover:shadow-[0_0_70px_rgba(245,158,11,0.5)] active:scale-[0.98] [@media(min-height:520px)]:mt-9 [@media(min-height:520px)]:py-4"
         style={{ animationDelay: "180ms" }}
       >
         <InfinityIcon className="h-5 w-5 transition-transform group-hover:translate-x-0.5" />
@@ -72,13 +72,13 @@ export function Menu({
       </button>
 
       {high > 0 && (
-        <div className="anim-rise mt-5 flex items-center gap-2 text-sm font-semibold tracking-widest text-zinc-500" style={{ animationDelay: "220ms" }}>
+        <div className="anim-rise mt-3 hidden items-center gap-2 text-sm font-semibold tracking-widest text-zinc-500 [@media(min-height:520px)]:flex" style={{ animationDelay: "220ms" }}>
           <Trophy className="h-3.5 w-3.5 text-amber-400/80" />
           BEST SCORE {high.toLocaleString()}
         </div>
       )}
 
-      <div className="anim-rise mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-[12px] font-semibold tracking-wider text-white/40" style={{ animationDelay: "260ms" }}>
+      <div className="anim-rise mt-6 hidden flex-wrap items-center justify-center gap-x-6 gap-y-3 text-[12px] font-semibold tracking-wider text-white/40 [@media(min-height:640px)]:flex" style={{ animationDelay: "260ms" }}>
         <span className="flex items-center gap-1.5"><span className="kbd">W</span><span className="kbd">A</span><span className="kbd">S</span><span className="kbd">D</span> MOVE</span>
         <span className="flex items-center gap-1.5"><span className="kbd">MOUSE</span> AIM</span>
         <span className="flex items-center gap-1.5"><span className="kbd">SHIFT</span> DASH</span>
@@ -97,7 +97,7 @@ export function LevelUpModal({
   choices, level, onPick,
 }: { choices: UpgradeChoice[]; level: number; onPick: (id: string) => void }) {
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/75 backdrop-blur-[6px]">
+    <div className="absolute inset-0 z-40 flex items-center-safe justify-center overflow-y-auto bg-black/75 py-4 backdrop-blur-[6px]">
       <div className="anim-pop w-full max-w-3xl px-8">
         <div className="mb-2 text-center text-[13px] font-bold tracking-[0.5em] text-violet-300/80">
           LEVEL {level} REACHED
@@ -159,7 +159,7 @@ export function PauseMenu({
   muted: boolean; onMute: () => void; onSettings: () => void;
 }) {
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-[6px]">
+    <div className="absolute inset-0 z-40 flex items-center-safe justify-center overflow-y-auto bg-black/70 py-4 backdrop-blur-[6px]">
       <div className="anim-pop flex w-72 flex-col items-stretch gap-3">
         <h2 className="mb-3 text-center font-display text-4xl tracking-[0.2em] text-zinc-100">
           PAUSED
@@ -184,7 +184,7 @@ export function StageClear({
   stage, next, stageName, wavesPerStage, onContinue,
 }: { stage: number; next: number; stageName: string; wavesPerStage: number; onContinue: () => void }) {
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center bg-gradient-to-b from-emerald-950/30 via-black/80 to-black/90 backdrop-blur-[5px]">
+    <div className="absolute inset-0 z-40 flex items-center-safe justify-center overflow-y-auto bg-gradient-to-b from-emerald-950/30 via-black/80 to-black/90 py-4 backdrop-blur-[5px]">
       <div className="anim-pop flex w-full max-w-lg flex-col items-center px-8 text-center">
         <div className="anim-rise mb-3 flex items-center gap-3 text-[13px] font-bold tracking-[0.45em] text-emerald-300/80">
           <span className="h-px w-8 bg-emerald-400/40" />
@@ -241,7 +241,7 @@ export function GameOver({ stats, onRestart, onQuit }: { stats: GameStats; onRes
   const mins = Math.floor(stats.time / 60);
   const secs = Math.floor(stats.time % 60);
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center bg-gradient-to-b from-red-950/40 via-black/75 to-black/90 backdrop-blur-[4px]">
+    <div className="absolute inset-0 z-40 flex items-center-safe justify-center overflow-y-auto bg-gradient-to-b from-red-950/40 via-black/75 to-black/90 py-4 backdrop-blur-[4px]">
       <div className="anim-pop flex w-full max-w-md flex-col items-center px-8">
         <div className="anim-rise mb-2 flex h-16 w-16 items-center justify-center rounded-2xl border border-red-500/30 bg-red-950/50">
           <Skull className="h-8 w-8 text-red-400" />

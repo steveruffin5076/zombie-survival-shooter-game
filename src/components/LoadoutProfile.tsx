@@ -52,8 +52,8 @@ export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoad
   const xpPct = Math.max(0, Math.min(1, profile.metaXp / profile.metaXpNext));
 
   return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-[6px]">
-      <div className="anim-pop relative flex h-[600px] w-full max-w-3xl flex-col rounded-xl border border-amber-500/20 bg-zinc-950/95 shadow-[0_0_80px_rgba(0,0,0,0.7)]">
+    <div className="absolute inset-0 z-50 flex items-center-safe justify-center overflow-y-auto bg-black/85 p-3 backdrop-blur-[6px]">
+      <div className="anim-pop relative flex h-[600px] max-h-full w-full max-w-3xl flex-col rounded-xl border border-amber-500/20 bg-zinc-950/95 shadow-[0_0_80px_rgba(0,0,0,0.7)]">
         <button
           onClick={onClose}
           className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-zinc-400 transition hover:border-white/25 hover:text-white"

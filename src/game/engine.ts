@@ -3182,12 +3182,16 @@ export class Engine {
     const a = p < 0.12 ? p / 0.12 : p > 0.72 ? (1 - p) / 0.28 : 1;
     const s = 1 + (1 - Math.min(1, p * 7)) * 0.35;
     c.save();
-    c.translate(W / 2, 208);
+    // 280 (not the DOM top-HUD's own ~40% mark) leaves clearance below the
+    // React-rendered stage/wave tracker, which is sized in real CSS px and so
+    // doesn't shrink the way this canvas text does when the game's 16:9 box
+    // is small (phone landscape) — too high here and the two overlap.
+    c.translate(W / 2, 280);
     c.scale(s, s);
     c.globalAlpha = clamp(a, 0, 1);
     c.textAlign = "center";
     (c as unknown as { letterSpacing: string }).letterSpacing = "10px";
-    c.font = "400 58px Anton, sans-serif";
+    c.font = "400 50px Anton, sans-serif";
     c.shadowColor = "rgba(245,158,11,0.5)";
     c.shadowBlur = 30;
     c.fillStyle = "#f4efe6";
