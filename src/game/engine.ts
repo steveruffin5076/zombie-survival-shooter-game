@@ -220,6 +220,13 @@ export class Engine {
   private zoomPref = 1;
   /** right touch joystick deflection, -1..1 per axis — see setAimVector() */
   private aimStick = { x: 0, y: 0 };
+  /** Angle the aim stick was last pointed at, kept after the thumb lifts so the
+   * aim holds instead of snapping somewhere else. null = stick never used. */
+  private aimHold: number | null = null;
+  /** True once a real mouse has moved. Taps also write mouse.x/y (the arena's
+   * placement ghost needs a pointer position), so aiming can't just key off
+   * that — this is what tells a moved cursor apart from a tap. */
+  private pointerAims = false;
 
   // world state
   private cam = 0;
@@ -593,6 +600,11 @@ export class Engine {
     this.stick.y = 0;
     this.aimStick.x = 0;
     this.aimStick.y = 0;
+    // a fresh run faces the default direction rather than inheriting the angle
+    // the last one was left holding. onBlur deliberately doesn't do this — a
+    // backgrounded tab shouldn't lose your aim.
+    this.aimHold = null;
+    this.pointerAims = false;
     this.mouse.down = false;
   }
 
@@ -731,6 +743,10 @@ export class Engine {
     const p = this.clientToCanvas(e.clientX, e.clientY);
     this.mouse.x = p.x;
     this.mouse.y = p.y;
+    // a real cursor takes aiming back off a held stick angle — matters on a
+    // touch laptop, where both inputs exist
+    this.pointerAims = true;
+    this.aimHold = null;
   };
 
   private onMouseDown = (e: MouseEvent) => {
@@ -784,6 +800,9 @@ export class Engine {
   setAimVector(x: number, y: number) {
     this.aimStick.x = clamp(x, -1, 1);
     this.aimStick.y = clamp(y, -1, 1);
+    // remember the direction so releasing holds it rather than reverting to
+    // wherever the pointer happens to be; (0,0) is a release, so leave it alone
+    if (x !== 0 || y !== 0) this.aimHold = Math.atan2(y, x);
   }
 
   /** Starts/stops continuous fire — same effect as holding/releasing the mouse button.
@@ -1077,17 +1096,24 @@ export class Engine {
 
   /** Pure mouse-directed aim angle. */
   private mouseAimAngle() {
-    // the right stick, while deflected, overrides the pointer direction —
-    // it's the only aim input on touch (see setAimVector)
+    // the right stick, while deflected, aims live
     if (this.aimStick.x !== 0 || this.aimStick.y !== 0) {
       return Math.atan2(this.aimStick.y, this.aimStick.x);
     }
-    const p = this.pl;
-    // mouse.x/y are canvas (screen-space) pixels. canvasToWorld undoes the
-    // camera pan and the zoom together — the zoom has to be undone here too,
-    // or the cursor and the laser it aims disagree at anything but 1x.
-    const m = this.canvasToWorld(this.mouse.x, this.mouse.y);
-    return Math.atan2(m.y - p.y, m.x - p.x);
+    // released: hold the direction it left off at. Falling through to the
+    // pointer here is what used to snap the aim back to the last tap.
+    if (this.aimHold !== null) return this.aimHold;
+    if (this.pointerAims) {
+      const p = this.pl;
+      // mouse.x/y are canvas (screen-space) pixels. canvasToWorld undoes the
+      // camera pan and the zoom together — the zoom has to be undone here too,
+      // or the cursor and the laser it aims disagree at anything but 1x.
+      const m = this.canvasToWorld(this.mouse.x, this.mouse.y);
+      return Math.atan2(m.y - p.y, m.x - p.x);
+    }
+    // touch, before the stick has ever been touched — keep facing as-is rather
+    // than letting a stray tap point us somewhere
+    return this.pl.aim;
   }
 
   /** Auto-fire mode: nearest zombie within range AND inside the flashlight
