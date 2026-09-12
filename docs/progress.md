@@ -7,7 +7,8 @@
 - **Completed plan (Phases 0–7):** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
 - **Design doc driving Phases 8+:** `enhancement-1.md` (repo root, on `main`)
-- **Last updated:** 2026-09-10 (Phase 8 finalized; phases 9-12 already complete from previous session)
+- **Last updated:** 2026-09-12 (tube-shotgun reload; pixel-art Phase 1 shipped, Phases 2-4 outlined at the end of this file)
+- ⚠ **`~/.claude/plans/logical-moseying-reddy.md` has been recycled.** That one path has held three unrelated plans now (Phases 8-12, then the pixel-art overhaul, then the shotgun reload). It is *not* an archive — whatever it holds is just the most recent planning session. This file is the durable record; don't send anyone to that path for history.
 
 ---
 
@@ -15,7 +16,7 @@
 
 **As of Phase 21, the campaign/mission system (Phases 8–20, the whole `enhancement-1.md` Aetheris/Redshift arc) is gone.** The user's explicit direction: "remove all campaign and its features, it's not suitable for this." The game is now Endless-mode-only, with a persistent, lifetime meta-progression system replacing the old campaign's fixed Hideout loadout, and the noise/threat/suppressor system removed outright (a same-session follow-up request). Everything below Phase 21 in this file is history — kept for context on decisions made along the way, not a description of the current build.
 
-**Immediate next action:** none queued. The pivot is complete and verified; see Phase 21's own DONE writeup for what shipped and what was deliberately deferred.
+**Immediate next action:** pixel-art overhaul **Phase 2 — environment** (tiled ground, prop sprites, one set-piece wreck per stage). Phase 1 (characters) is shipped and live; the full Phase 2-4 outline is at the end of this file.
 
 ### Phase 21 — Major pivot: campaign removed, Endless-only with persistent progression — DONE (2026-09-10)
 
@@ -373,6 +374,7 @@ Phases 8–12 are all DONE. The 6-Act campaign framework exists for all 24 stage
 - **P365 is ~27% lower DPS than the Glock 18 it replaces** (88 vs 120) because it is semi-auto, not full-auto. If early waves feel sluggish, raise per-shot damage (16 → 18), **not** the fire rate.
 - Boss HP must be sized against **pistol** DPS, not carbine (88 vs 255), or the starving supply curve becomes a loss screen.
 - `.claude/launch.json` is local dev-server tooling — deliberately untracked, do not commit.
+- **GitHub Pages builds from `main` only** (`.github/workflows`, `on: push: branches: [main]`). Work pushed to a feature branch is invisible on the live site, and the symptom is indistinguishable from "the fix didn't work" — this cost a round-trip on 2026-09-12 when a removed HUD badge was reported as still showing. When the user says they'll "test in web", the change has to reach `main`, and they still need a hard refresh past the cached build.
 
 ### Risks carried into Phases 8–12
 
@@ -472,3 +474,133 @@ keeps the upscale crisp.
 
 Atlas build cost is ~70 ms for the full set, lazily per type, reported as
 `__engine.atlas.buildMs` under `?debug=1`.
+
+---
+
+## Weapon feel & HUD — 2026-09-12
+
+### Weapon-slot variant badge removed — DONE
+
+The bottom-left weapon slots carried a small cyan `×N` in the corner (`×3` on
+PISTOL, `×4` on SMG) counting how many weapons of that class the player owned.
+The user read it as clutter and asked for it gone; the `w.variants > 1` block in
+`Hud.tsx` went with it. `variants` is still computed in `getHud()` and still on
+`HudState` — nothing else reads it today, but it is one field and the next HUD
+pass may want it, so it was not chased out of the type.
+
+**The interesting part was not the change.** It was reported as "still not
+removed" after shipping, because the removal was pushed to the feature branch
+and GitHub Pages builds from `main`. The code was already correct. Worth
+remembering that "your fix didn't work" and "your fix isn't deployed" look
+identical from the player's side — check which branch the live site builds from
+*before* re-reading the diff. See Open items for the standing note.
+
+### Tube shotguns reload one shell at a time — DONE
+
+Every weapon shared one reload path: `startReload()` set a single timer,
+`finishReload()` refilled the whole magazine, and the trigger was dead for the
+entire duration. That is right for a box magazine and wrong for a pump gun —
+firing a SPAS-12 dry locked the player out for 2.3 s with a zombie on top of
+them, when one shell would have done.
+
+Benelli M4, SPAS-12 and W1200 now feed a shell at a time, and the reload yields
+to the trigger the moment there is something to fire.
+
+**The shotgun class was already mixed, and already said so.** AA-12 and
+Origin 12 are drum-fed — their own `desc` strings read "Full-auto drum" and
+"Semi-auto drum" — while the other three read "tube" or pump-action. So this is
+a per-weapon `tubeReload` flag, not a per-class rule: the data had the
+distinction long before the reload code did. A test asserts the two drums do
+**not** carry the flag, so a future drum shotgun cannot inherit shell-feeding
+just by being in the class.
+
+**Per-shell time is derived, not a new tuning knob.** `reload` still means
+empty-to-full for every weapon in the game; `shellReloadTime(w) = w.reload /
+w.mag` falls out of it — 0.229 s (Benelli), 0.230 s (SPAS-12), 0.250 s (W1200).
+Those three landing in a 20 ms band on their own is a good sign the original
+`reload` values were already set with shell counts in mind. An uninterrupted
+reload therefore takes exactly as long as it always did; the only change is that
+it no longer has to finish. Adding a separate `shellTime` field would have
+created a second balance surface that could silently drift out of agreement with
+`reload`.
+
+`reloadT`/`reloadDur` are reused as the *per-shell* clock rather than the
+whole-reload clock, so the HUD bar and the reload ring above the player became
+per-shell indicators for free — no render change, and a tube reload now reads
+visibly different from a magazine reload at a glance. The timer carries its
+overshoot (`reloadT += reloadDur`, not `=`) so shell cadence doesn't drift a
+frame per shell on a slow tick.
+
+**Auto-fire consequence, chosen deliberately.** The user picked fire-on-first-
+shell over the safer alternatives, so with a zombie permanently on the laser the
+shotgun degrades to a ~0.23 s-per-shot single-loader and never rebuilds its
+tube. That is self-inflicted — breaking the laser lets it fill — but it is the
+thing to watch in playtest. The mitigation, if it ever feels bad, is a threshold
+at the fire gate (auto-fire only interrupts once N shells are in); it is a
+one-line change, deliberately not pre-built.
+
+**Headless timing is not wall-clock timing.** Verified in the real game via
+Playwright against `window.__engine`: the tube filled 0→10 one shell at a time
+with reserve stepping down in lockstep, firing at 2 shells dropped it to 1 and
+cleared `reloading`, a 3-round reserve stopped cleanly at ammo 3 / reserve 0
+without wedging, and the Origin 12 control still jumped 0→20 in one go. But
+*both* paths ran ~30% slow against wall clock, because rAF is throttled in
+headless. Ratios and orderings from a headless run are trustworthy; absolute
+durations are not — compare against a control on the same run rather than
+against the spec, which is what caught this as an artifact rather than a bug.
+
+Sound is the one thing not verified: each shell plays `click()` and the
+tube-full plays `reloadEnd()`, chosen by reading `audio.ts`, never heard.
+
+---
+
+## Pixel-art overhaul — Phases 2-4 (planned, not started)
+
+Phase 1 (characters) is shipped; see the section above it for what landed and
+what it cost. The remaining phases, in the order they were agreed with the user.
+Each ships and gets verified in the browser before the next starts.
+
+### Phase 2 — Environment (next)
+
+Today `render()` paints a flat theme color, a radial light pool, a faint 64 px
+grid, grass tufts and blood decals — that is the entire world, and it is what
+now looks thin next to the Phase 1 characters standing on it.
+
+1. **`sprites/tiles.ts`** — 4-6 ground variants per theme (cracked concrete,
+   weathered, stained, asphalt, gravel), authored with the same `PixelBuf`
+   primitives as the characters. Which variant lands on which tile comes from
+   hashing the tile's x/y, so the layout is deterministic, identical every run,
+   and needs no storage. Use a real hash (MurmurHash3-style), not `x * 31 + y` —
+   a weak mix visibly stripes on a grid.
+2. **Tile the ground** — replace the flat fill + grid with a blit loop over the
+   already-computed visible bounds (`wx0/wx1/wy0/wy1`). The radial light pool
+   stays on top; it is what sells the darkness mechanic and must not be tiled
+   over.
+3. **`sprites/props.ts`** — turn `drawDecor()` from ellipses into sprite blits.
+   The kinds and their per-theme weights already exist as `decorWeights` in
+   `themes.ts`: tombstoneA/B, tree, lamp, car, barrier, rubble. Only the draw
+   path changes; spawning and collision stay as they are.
+4. **One set-piece wreck per stage** — a large focal prop in the spirit of the
+   crashed plane in the user's reference screenshot, at a fixed per-stage world
+   position rather than randomly placed. Watch that a ~100-unit obstacle doesn't
+   funnel play into a corridor.
+
+Phase 1's rules apply unchanged: variants not scaling, no gradient or
+`ctx.filter` per entity per frame, composite-then-outline.
+
+### Phase 3 — Enemy labels
+
+Floating name + HP bar above zombies and bosses, names from `zombieInfo.ts`.
+Draw **after** the camera transform is restored, using the projected `px/py`, so
+text stays upright and unscaled at any zoom. Cap how many render at once
+(nearest N, or only damaged ones) or a 40-zombie horde becomes a wall of text.
+Enemies only — the user was explicit that the player gets no label.
+
+### Phase 4 — HUD restyle
+
+React/Tailwind only, no engine work: an objective checklist panel driven by the
+existing stage goals, a stage completion bar, and circular ability buttons with
+`x / y` counts to match the reference. `TouchControls.tsx` already has circular
+dash and fire-mode buttons to extend. Must respect the 44 px tap-target rule and
+the `--ui-scale` mechanism — re-run the tap-target audit (0 controls under 44 px,
+0 overflow, 0 collisions at all four viewport sizes) after.
