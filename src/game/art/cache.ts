@@ -19,6 +19,7 @@ import { DIRS, FRAMES, GUN_SIZE, SOLDIER_SIZE } from "./sprites/soldier";
 import { Z_DIRS, Z_FRAMES, Z_SIZE, Z_VARIANTS, type ZSpriteType } from "./sprites/zombies";
 import { TILE_PX, TILE_VARIANTS, buildTileBufs, type GroundTheme } from "./sprites/tiles";
 import { PROP_SIZE, buildPropBufs } from "./sprites/props";
+import { BOSS_DIRS, BOSS_FRAMES, bossArtSize, drawBoss } from "./sprites/boss";
 import type { WeaponClass } from "../weapons";
 
 export { PX_SCALE, dirFor };
@@ -26,6 +27,7 @@ export { DIRS, FRAMES, SOLDIER_SIZE, GUN_SIZE } from "./sprites/soldier";
 export { Z_DIRS, Z_FRAMES, Z_SIZE, Z_VARIANTS, type ZSpriteType } from "./sprites/zombies";
 export { TILE_PX, TILE_VARIANTS, tileVariant, groundTheme, type GroundTheme } from "./sprites/tiles";
 export { PROP_KINDS, PROP_VARIANTS, PROP_SIZE, WRECK_KIND } from "./sprites/props";
+export { BOSS_DIRS, BOSS_FRAMES, bossArtSize } from "./sprites/boss";
 
 /** Tile edge in CANVAS units — what the render loop steps by. */
 export const TILE_UNITS = TILE_PX * PX_SCALE;
@@ -52,6 +54,7 @@ export class SpriteAtlas {
   private zombiePoses = new Map<ZSpriteType, HTMLCanvasElement[]>();
   private tileSets = new Map<GroundTheme, HTMLCanvasElement[]>();
   private propSets = new Map<number, HTMLCanvasElement[]>();
+  private bossPoses = new Map<string, HTMLCanvasElement[]>();
   /** White silhouettes for hit flashes, keyed by the pose they mask. */
   private masks = new WeakMap<HTMLCanvasElement, HTMLCanvasElement>();
   /** Pre-rendered radial glows, keyed by color. */
@@ -108,6 +111,32 @@ export class SpriteAtlas {
       this.tileSets.set(theme, set);
     }
     return set[variant % TILE_VARIANTS];
+  }
+
+  /**
+   * Boss body for a facing + stomp frame. Keyed by the boss's id so two bosses
+   * sharing a colour still get their own set, and built on first use — a run
+   * only ever meets the bosses its stages actually spawn.
+   */
+  boss(defId: string, color: string, r: number, dir: number, frame: number): HTMLCanvasElement {
+    let poses = this.bossPoses.get(defId);
+    if (!poses) {
+      poses = this.timed(() => {
+        const size = bossArtSize(r);
+        const out: HTMLCanvasElement[] = [];
+        for (let d = 0; d < BOSS_DIRS; d++) {
+          for (let f = 0; f < BOSS_FRAMES; f++) {
+            const buf = new PixelBuf(size, size);
+            drawBoss(buf, d, f, color);
+            buf.outline("#07090c");
+            out.push(toCanvas(buf));
+          }
+        }
+        return out;
+      });
+      this.bossPoses.set(defId, poses);
+    }
+    return poses[(dir % BOSS_DIRS) * BOSS_FRAMES + (frame % BOSS_FRAMES)];
   }
 
   /** One decor prop variant, built per kind on first use. */

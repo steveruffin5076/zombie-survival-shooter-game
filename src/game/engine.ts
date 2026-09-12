@@ -17,15 +17,12 @@ import {
   loadProfile, saveProfile, type ProfileData,
 } from "./save";
 import {
-  DEPLOYABLE_DEFS, canPlaceAt, slotToWorldX, worldXToSlot,
-  type Deployable, type DeployableKind,
-} from "./arena";
-import {
   BOSS_DEFS, cooldownFor, phaseFor, pickAttack, windupFor,
   type AimTarget, type BossAttack,
 } from "./boss";
 import {
-  DIRS, FRAMES, GUN_HALF, PROP_VARIANTS, PX_SCALE, SOLDIER_HALF, SpriteAtlas, TILE_UNITS, WRECK_KIND,
+  BOSS_DIRS, BOSS_FRAMES, DIRS, FRAMES, GUN_HALF, PROP_VARIANTS, PX_SCALE, SOLDIER_HALF,
+  SpriteAtlas, TILE_UNITS, WRECK_KIND,
   Z_DIRS, Z_FRAMES, dirFor, groundTheme, tileVariant, type ZSpriteType,
 } from "./art/cache";
 import { muzzleReach } from "./art/sprites/soldier";
@@ -37,7 +34,9 @@ import type { EngineEvent, GameStats, HudState, InventorySnapshot, ProfileSnapsh
 
 const W = 1280;
 const H = 720;
-const GROUND = 584; // Kept for compatibility with attract mode and particle effects
+/** Menu attract-mode ground line and the screen-space fog band. Gameplay is
+ * fully 2D and has no ground line. */
+const GROUND = 584;
 // Top-down camera: world bounds for player movement
 const WORLD_H = 1440; // vertical play area height
 /** Theme order the per-theme stage wrecks are authored in (see props.ts). */
@@ -62,11 +61,6 @@ const chance = (p: number) => Math.random() < p;
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 /** Darkens (factor<1) or lightens (factor>1) a "#rrggbb" hex color — used to
  * derive a boss's torso/limb/head tones from one BossDef.color. */
-const shadeHex = (hex: string, factor: number) => {
-  const n = parseInt(hex.slice(1), 16);
-  const ch = (shift: number) => clamp(Math.round(((n >> shift) & 0xff) * factor), 0, 255);
-  return `rgb(${ch(16)}, ${ch(8)}, ${ch(0)})`;
-};
 
 type ZType = "walker" | "runner" | "brute" | "spitter" | "screamer";
 type ModalKind = "levelup" | "stageclear";
@@ -130,10 +124,6 @@ interface Zombie {
   dormant: boolean;
   /** screamer only: 0 idle, >0 counting down to her scream, -1 already spent */
   alertT: number;
-  /** arena only — id of the barricade currently blocking this zombie's advance */
-  blockedBy: string | null;
-  /** arena only — razor wire slow remaining, seconds */
-  slowT: number;
   /** Incendiary Rounds — seconds left burning, and current damage-per-second */
   burnT: number;
   burnDps: number;
@@ -144,7 +134,7 @@ interface Zombie {
 interface Boss extends AimTarget {
   /** which BOSS_DEFS entry this instance is — looked up wherever attack/timing/art needs it */
   defId: string;
-  vx: number; face: 1 | -1; flash: number; hurtT: number;
+  vx: number; vy: number; face: 1 | -1; flash: number; hurtT: number;
   hp: number; maxHp: number; phase: 0 | 1 | 2;
   /** "emerge" — rising out of its grave, invulnerable and inert, on spawn */
   state: "emerge" | "seek" | "windup" | "attack" | "cooldown";
@@ -229,17 +219,15 @@ export class Engine {
   private mouse = { x: W / 2, y: 300, down: false };
   /** left touch joystick deflection, -1..1 per axis — see setMoveVector() */
   private stick = { x: 0, y: 0 };
-  /** world magnification from Settings, 1 = off. Stored separately from the
-   * effective `zoom` below so the arena can opt out without losing the setting. */
+  /** world magnification from Settings, 1 = off */
   private zoomPref = 1;
   /** right touch joystick deflection, -1..1 per axis — see setAimVector() */
   private aimStick = { x: 0, y: 0 };
   /** Angle the aim stick was last pointed at, kept after the thumb lifts so the
    * aim holds instead of snapping somewhere else. null = stick never used. */
   private aimHold: number | null = null;
-  /** True once a real mouse has moved. Taps also write mouse.x/y (the arena's
-   * placement ghost needs a pointer position), so aiming can't just key off
-   * that — this is what tells a moved cursor apart from a tap. */
+  /** True once a real mouse has moved. Taps also write mouse.x/y, so aiming
+   * can't just key off that — this tells a moved cursor apart from a tap. */
   private pointerAims = false;
 
   // world state
@@ -305,6 +293,8 @@ export class Engine {
   private stageIntermission = false;
   private phase: "break" | "active" | "prep" = "break";
   private breakT = 0;
+  /** what breakT started at — the HUD draws a countdown bar against it */
+  private breakMax = 0;
   private spawnT = 0;
   private queue: SpawnItem[] = [];
   private waveTotal = 0;
@@ -325,14 +315,6 @@ export class Engine {
   /** active Tactical Stim buff remaining, seconds */
   private stimT = 0;
 
-  /* --- arena (stage 4): prep phase, deployables, scrap --- */
-  private deployables: Deployable[] = [];
-  private nextDeployableSeq = 1;
-  private placingKind: DeployableKind | null = null;
-  private prepT = 0;
-  /** RepairPanel is shown while this is > 0, ticking down from 12s each prep phase */
-  private repairWindowT = 0;
-  private scrap = 0;
 
   private score = 0;
   private kills = 0;
@@ -414,6 +396,7 @@ export class Engine {
     this.mode = "play";
     this.phase = "break";
     this.breakT = 2.2;
+    this.breakMax = 2.2;
     this.announce(`STAGE 1 — ${this.stageDef.name}`, this.stageDef.sub, 2.6);
   }
 
@@ -597,11 +580,6 @@ export class Engine {
     this.crateOpenT = 0;
     this.grenades = [];
     this.stimT = 0;
-    this.deployables = [];
-    this.placingKind = null;
-    this.prepT = 0;
-    this.repairWindowT = 0;
-    this.scrap = 0;
     this.score = 0;
     this.kills = 0;
     this.playTime = 0;
@@ -727,16 +705,11 @@ export class Engine {
     }
     if (this.paused || this.modalOpen) return;
     if (c === "ShiftLeft" || c === "ShiftRight") this.dash();
-    // during arena prep, 1/2/3 pick a deployable tool instead of a weapon class
-    if (c === "Enter" && this.phase === "prep") this.prepT = 0; // READY — skip the rest of prep
+    // ENTER skips the rest of a countdown (the boss stage's 10s opener)
+    if (c === "Enter" && this.phase === "break") this.breakT = 0;
     if (c.startsWith("Digit")) {
       const i = Number(c.slice(5)) - 1;
-      if (this.phase === "prep") {
-        const kinds: DeployableKind[] = ["barricade", "wire", "claymore"];
-        if (i >= 0 && i < kinds.length) this.selectDeployable(kinds[i]);
-      } else if (i >= 0 && i < CLASS_ORDER.length) {
-        this.selectClass(CLASS_ORDER[i]);
-      }
+      if (i >= 0 && i < CLASS_ORDER.length) this.selectClass(CLASS_ORDER[i]);
     }
     // during a boss fight, E forces the lock onto it over a close add (crate/gate E is
     // a held check elsewhere in update(), so this discrete toggle never steals that input)
@@ -787,10 +760,6 @@ export class Engine {
   private onMouseDown = (e: MouseEvent) => {
     if (e.button !== 0) return;
     this.sfx.ensure();
-    if (this.mode === "play" && !this.over && !this.paused && !this.modalOpen && this.phase === "prep" && this.placingKind) {
-      this.tryPlaceDeployable();
-      return;
-    }
     this.mouse.down = true;
     // Top-down mode: no pivoting, just aim toward mouse
   };
@@ -862,10 +831,6 @@ export class Engine {
     const p = this.clientToCanvas(clientX, clientY);
     this.mouse.x = p.x;
     this.mouse.y = p.y;
-    if (this.phase === "prep" && this.placingKind) {
-      this.tryPlaceDeployable();
-      return;
-    }
     // Top-down: tap updates aim direction, no pivoting
   }
 
@@ -1060,12 +1025,6 @@ export class Engine {
         this.breakT -= dt;
         if (this.breakT <= 0) this.startWave(this.waveInStage + 1);
       }
-    } else if (this.phase === "prep") {
-      if (!this.stageIntermission) {
-        this.prepT -= dt;
-        if (this.repairWindowT > 0) this.repairWindowT = Math.max(0, this.repairWindowT - dt);
-        if (this.prepT <= 0) this.startWave(this.waveInStage + 1);
-      }
     } else if (this.phase === "active") {
       if (this.spawnSuppressT > 0) this.spawnSuppressT -= dt;
       this.spawnT -= dt;
@@ -1097,7 +1056,7 @@ export class Engine {
           // grenades (tier 2+) and stims (tier 3) need a periodic step up too
           const milestone = this.waveInStage % 5 === 0;
           this.beginRest(1.4);
-          if (this.stageDef.fixedCamera) this.awardSupply(0.18, 0.6);
+          if (this.stageDef.bossId != null) this.awardSupply(0.18, 0.6);
           else p.hp = Math.min(this.st.maxHp, p.hp + 12);
           this.spawnCrate(boss ? (chance(0.5) ? 3 : 2) : milestone ? 2 : 1);
           this.announce(
@@ -1107,7 +1066,6 @@ export class Engine {
         }
       }
     }
-    this.updateDeployables();
 
     this.updateZombies(dt);
     this.updateBoss(dt);
@@ -1122,10 +1080,7 @@ export class Engine {
     this.decals = this.decals.filter((d) => d.a > 0.05);
 
     // camera — top-down follows player position in 2D
-    if (this.stageDef.fixedCamera) {
-      this.cam = this.camOrigin();
-      this.camY = 0;
-    } else {
+    {
       const targetX = clamp(p.x - this.viewW / 2, 0, this.worldW - this.viewW);
       const targetY = clamp(p.y - this.viewH / 2, 0, WORLD_H - this.viewH);
       this.cam = lerp(this.cam, targetX, Math.min(1, 5 * dt));
@@ -1422,8 +1377,6 @@ export class Engine {
   private updateZombies(dt: number) {
     const p = this.pl;
     const movingFast = Math.abs(p.vx) > 220;
-    const arena = this.stageDef.fixedCamera;
-    const centerX = this.worldW / 2;
     for (const z of this.zombies) {
       z.t += dt;
       z.flash -= dt;
@@ -1449,7 +1402,6 @@ export class Engine {
         }
       }
       z.atk -= dt;
-      if (z.slowT > 0) z.slowT -= dt;
       if (z.burnT > 0) {
         z.burnT -= dt;
         z.hp -= z.burnDps * dt;
@@ -1465,99 +1417,42 @@ export class Engine {
       const dy = p.y - z.y;
       const dir = dx > 0 ? 1 : -1;
       z.face = dir;
-      // 2D chase direction for the open top-down stages — the arena keeps
-      // its own x-only lane approach (fixedCamera below), so this is unused there
       const dist2d = Math.hypot(dx, dy) || 1;
       const ux = dx / dist2d, uy = dy / dist2d;
 
-      // arena barricades: melee zombies stop at the nearest one still ahead of
-      // them and tear it down instead of reaching the player; spitters ignore
-      // it entirely — their lobbed attack arcs over the wall
-      let wall: Deployable | null = null;
-      if (arena && z.type !== "spitter") {
-        const side: 1 | -1 = z.x > centerX ? 1 : -1;
-        let bestDist = Infinity;
-        for (const d of this.deployables) {
-          if (d.kind !== "barricade" || d.hp <= 0 || d.lane !== side) continue;
-          const wx = slotToWorldX(d.lane, d.slot, centerX);
-          const ahead = side === 1 ? wx < z.x : wx > z.x;
-          if (!ahead) continue;
-          const wd = Math.abs(wx - z.x);
-          if (wd < bestDist) { bestDist = wd; wall = d; }
-        }
-      }
-      z.blockedBy = wall ? wall.id : null;
-
       if (z.type === "spitter") {
-        if (arena) {
-          // unchanged: the arena is a fixed x-lane approach by design
-          const ad = Math.abs(dx);
-          if (ad > 400) z.vx = dir * z.speed;
-          else if (ad < 230) z.vx = -dir * z.speed * 0.6;
-          else z.vx *= 0.85;
-        } else {
-          // keep-away kiting, now in full 2D instead of x-only
+        {
+          // keep-away kiting in full 2D
           if (dist2d > 400) { z.vx = ux * z.speed; z.vy = uy * z.speed; }
           else if (dist2d < 230) { z.vx = -ux * z.speed * 0.6; z.vy = -uy * z.speed * 0.6; }
           else { z.vx *= 0.85; z.vy *= 0.85; }
         }
         z.spit -= dt;
-        if (z.spit <= 0 && (arena ? Math.abs(dx) : dist2d) < 640) {
+        if (z.spit <= 0 && dist2d < 640) {
           z.spit = R(2.1, 3.1);
           this.spitAt(z);
         }
-      } else if (wall) {
-        const wx = slotToWorldX(wall.lane, wall.slot, centerX);
-        z.vx = lerp(z.vx, (wall.lane === 1 ? -1 : 1) * z.speed * 0.4, Math.min(1, 6 * dt));
-        z.x = clamp(z.x + z.vx * dt, wall.lane === 1 ? wx : 10, wall.lane === 1 ? this.worldW - 10 : wx);
-        if (z.atk <= 0) {
-          z.atk = 0.6;
-          wall.hp = Math.max(0, wall.hp - z.dmg * 1.4);
-          this.texts.push({ x: wx, y: GROUND - 60, vy: -40, life: 0.4, max: 0.4, text: "-" + Math.round(z.dmg * 1.4), color: "#f87171", size: 11 });
-          if (wall.hp <= 0) {
-            this.deployables = this.deployables.filter((d) => d.id !== wall!.id);
-            this.shake(3);
-          }
-        }
       } else {
-        const speedMul = z.slowT > 0 ? 0.4 : 1;
-        if (arena) {
-          // unchanged: the arena is a fixed x-lane approach by design
-          z.vx = lerp(z.vx, dir * z.speed * speedMul, Math.min(1, 6 * dt));
-        } else {
-          // open stages: chase the player in full 2D instead of x-only
-          z.vx = lerp(z.vx, ux * z.speed * speedMul, Math.min(1, 6 * dt));
-          z.vy = lerp(z.vy, uy * z.speed * speedMul, Math.min(1, 6 * dt));
-        }
+        // chase the player in full 2D, same as every other stage
+        z.vx = lerp(z.vx, ux * z.speed, Math.min(1, 6 * dt));
+        z.vy = lerp(z.vy, uy * z.speed, Math.min(1, 6 * dt));
       }
-      if (!wall) {
-        z.x = clamp(z.x + z.vx * dt, 10, this.worldW - 10);
-        if (!arena) z.y = clamp(z.y + z.vy * dt, 22, WORLD_H - 22);
-      }
+      z.x = clamp(z.x + z.vx * dt, 10, this.worldW - 10);
+      z.y = clamp(z.y + z.vy * dt, 22, WORLD_H - 22);
 
-      // razor wire — no collision, just slows anything that crosses it
-      if (arena) {
-        for (const d of this.deployables) {
-          if (d.kind !== "wire" || d.hp <= 0) continue;
-          const wx = slotToWorldX(d.lane, d.slot, centerX);
-          if (Math.abs(wx - z.x) < 22) z.slowT = 0.4;
-        }
-      }
-
-      // contact damage (blocked zombies are busy with the wall, not the player)
-      if (!wall && Math.abs(dx) < z.r + 15 && Math.abs(p.y - z.y) < 56 && z.atk <= 0) {
+      // contact damage
+      if (Math.abs(dx) < z.r + 15 && Math.abs(p.y - z.y) < 56 && z.atk <= 0) {
         z.atk = z.type === "brute" ? 1.15 : 0.8;
         this.hurtPlayer(z.dmg * R(0.9, 1.1), dir * (z.type === "brute" ? 300 : 150));
       }
     }
-    // separation — full 2D outside the arena, where y now actually varies;
-    // in the arena, dy stays 0 so this reduces to the original x-only push
+    // separation, in full 2D
     const zs = this.zombies;
     for (let i = 0; i < zs.length; i++) {
       for (let j = i + 1; j < zs.length; j++) {
         const a = zs[i], b = zs[j];
         const sdx = b.x - a.x;
-        const sdy = arena ? 0 : b.y - a.y;
+        const sdy = b.y - a.y;
         const sepDist = Math.hypot(sdx, sdy) || 1;
         const min = (a.r + b.r) * 0.72;
         if (sepDist < min) {
@@ -1565,7 +1460,7 @@ export class Engine {
           const sux = sdx / sepDist, suy = sdy / sepDist;
           a.x -= sux * push;
           b.x += sux * push;
-          if (!arena) { a.y -= suy * push; b.y += suy * push; }
+          a.y -= suy * push; b.y += suy * push;
         }
       }
     }
@@ -1583,6 +1478,7 @@ export class Engine {
     b.hurtT = Math.max(0, b.hurtT - dt);
     b.phase = phaseFor(b.hp / b.maxHp);
     const dx = p.x - b.x;
+    const dy = p.y - b.y;
     b.face = dx >= 0 ? 1 : -1;
 
     if (b.state === "emerge") {
@@ -1605,11 +1501,14 @@ export class Engine {
 
     const def = BOSS_DEFS[b.defId];
     if (b.state === "seek" || b.state === "cooldown") {
-      b.vx = lerp(b.vx, Math.sign(dx || 1) * 68, Math.min(1, 4 * dt));
+      const bd = Math.hypot(dx, dy) || 1;
+      b.vx = lerp(b.vx, (dx / bd) * 68, Math.min(1, 4 * dt));
+      b.vy = lerp(b.vy, (dy / bd) * 68, Math.min(1, 4 * dt));
       b.x = clamp(b.x + b.vx * dt, 10, this.worldW - 10);
+      b.y = clamp(b.y + b.vy * dt, 30, WORLD_H - 30);
       b.timer -= dt;
       if (b.atk > 0) b.atk -= dt;
-      else if (Math.abs(dx) < b.r + 18 && Math.abs(p.y - b.y) < 56) {
+      else if (bd < b.r + 30) {
         b.atk = 1.1;
         this.hurtPlayer(26 * (1 + (this.power - 1) * 0.05), Math.sign(dx || 1) * 260);
       }
@@ -1628,6 +1527,7 @@ export class Engine {
       }
     } else if (b.state === "windup") {
       b.vx = 0;
+      b.vy = 0;
       b.timer -= dt;
       if (b.timer <= 0) {
         this.executeBossAttack(b);
@@ -1639,24 +1539,18 @@ export class Engine {
 
   private executeBossAttack(b: Boss) {
     const p = this.pl;
-    const centerX = this.worldW / 2;
     if (b.attack === "slam") {
       const radius = 150;
       this.sfx.bossSlam();
       this.shake(11);
       const dx = p.x - b.x;
-      if (Math.abs(dx) < radius && Math.abs(p.y - b.y) < 90) {
+      if (Math.hypot(dx, p.y - b.y) < radius) {
         this.hurtPlayer(32 * (1 + (this.power - 1) * 0.05), Math.sign(dx || 1) * 340);
       }
-      for (const d of this.deployables) {
-        const wx = slotToWorldX(d.lane, d.slot, centerX);
-        if (Math.abs(wx - b.x) < radius) d.hp = Math.max(0, d.hp - d.maxHp * 0.6);
-      }
-      this.deployables = this.deployables.filter((d) => d.hp > 0);
       for (let i = 0; i < 26; i++)
         this.particles.push({
-          x: b.x + R(-radius, radius), y: GROUND, vx: R(-100, 100), vy: R(-160, -20),
-          life: R(0.3, 0.6), max: 0.6, size: R(2, 5), color: "#7a6a52", grav: 900, add: false,
+          x: b.x + R(-radius, radius), y: b.y + R(-radius * 0.6, radius * 0.6), vx: R(-100, 100), vy: R(-100, 100),
+          life: R(0.3, 0.6), max: 0.6, size: R(2, 5), color: "#7a6a52", grav: 0, add: false,
         });
     } else if (b.attack === "mortar") {
       const radius = 95;
@@ -1665,15 +1559,10 @@ export class Engine {
       if (dx * dx + dy * dy < radius * radius) {
         this.hurtPlayer(27 * (1 + (this.power - 1) * 0.05), Math.sign(-dx || 1) * 260);
       }
-      for (const d of this.deployables) {
-        const wx = slotToWorldX(d.lane, d.slot, centerX);
-        if (Math.abs(wx - b.targetX) < radius) d.hp = Math.max(0, d.hp - d.maxHp * 0.6);
-      }
-      this.deployables = this.deployables.filter((d) => d.hp > 0);
       for (let i = 0; i < 20; i++)
         this.particles.push({
-          x: b.targetX + R(-30, 30), y: GROUND, vx: R(-140, 140), vy: R(-220, -40),
-          life: R(0.3, 0.65), max: 0.65, size: R(2, 5), color: "#65a30d", grav: 900, add: true,
+          x: b.targetX + R(-30, 30), y: b.targetY + R(-30, 30), vx: R(-140, 140), vy: R(-140, 140),
+          life: R(0.3, 0.65), max: 0.65, size: R(2, 5), color: "#65a30d", grav: 0, add: true,
         });
     } else if (b.attack === "shieldcharge") {
       // The Neighborhood Watch's signature move — same melee-AOE-and-knockback
@@ -1683,18 +1572,13 @@ export class Engine {
       this.sfx.bossSlam();
       this.shake(9);
       const dx = p.x - b.x;
-      if (Math.abs(dx) < radius && Math.abs(p.y - b.y) < 90) {
+      if (Math.hypot(dx, p.y - b.y) < radius) {
         this.hurtPlayer(30 * (1 + (this.power - 1) * 0.05), Math.sign(dx || 1) * 320);
       }
-      for (const d of this.deployables) {
-        const wx = slotToWorldX(d.lane, d.slot, centerX);
-        if (Math.abs(wx - b.x) < radius) d.hp = Math.max(0, d.hp - d.maxHp * 0.6);
-      }
-      this.deployables = this.deployables.filter((d) => d.hp > 0);
       for (let i = 0; i < 20; i++)
         this.particles.push({
-          x: b.x + R(-radius, radius), y: GROUND, vx: R(-100, 100), vy: R(-160, -20),
-          life: R(0.3, 0.6), max: 0.6, size: R(2, 5), color: "#38bdf8", grav: 900, add: false,
+          x: b.x + R(-radius, radius), y: b.y + R(-radius * 0.6, radius * 0.6), vx: R(-100, 100), vy: R(-100, 100),
+          life: R(0.3, 0.6), max: 0.6, size: R(2, 5), color: "#38bdf8", grav: 0, add: false,
         });
     } else {
       // Screaming Call — reuses the existing runner-ambush system rather than
@@ -1711,7 +1595,7 @@ export class Engine {
     const dir = Math.sign(bullet.vx);
     for (let i = 0; i < (bullet.crit ? 8 : 5); i++)
       this.particles.push({ x: bullet.x, y: bullet.y, vx: dir * R(30, 190) + R(-60, 60), vy: R(-130, 40), life: R(0.25, 0.5), max: 0.5, size: R(2, 4.5), color: BLOOD[RI(0, BLOOD.length - 1)], grav: 1100, add: false });
-    this.texts.push({ x: b.x + R(-8, 8), y: b.y - 100 * b.scale, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(bullet.dmg)), color: bullet.crit ? "#fbbf24" : "rgba(255,255,255,.8)", size: bullet.crit ? 17 : 12 });
+    this.texts.push({ x: b.x + R(-8, 8), y: b.y - 30 * b.scale, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(bullet.dmg)), color: bullet.crit ? "#fbbf24" : "rgba(255,255,255,.8)", size: bullet.crit ? 17 : 12 });
     if (this.st.lifesteal > 0) this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + bullet.dmg * this.st.lifesteal);
     this.sfx.zhit();
     if (b.hp <= 0) this.killBoss(b);
@@ -1751,43 +1635,27 @@ export class Engine {
 
   private spitAt(z: Zombie) {
     const p = this.pl;
-    const arena = this.stageDef.fixedCamera;
-    // arena keeps its lobbed side-view arc (aimed above the "chest" with an
-    // upward bias, then gravity brings it back down in updateEshots); the
-    // open top-down stages fire straight at the player's actual position —
-    // there's no "up" to lob into in a full 2D world
+    // straight at the player — there is no "up" to lob into in a 2D world
     const dx = p.x - z.x;
-    const dy = arena ? (p.y - 40) - (z.y - 44 * z.scale) : p.y - z.y;
+    const dy = p.y - z.y;
     const d = Math.hypot(dx, dy) || 1;
     const sp = 330;
-    const originY = arena ? z.y - 46 * z.scale : z.y;
+    const originY = z.y;
     this.eshots.push({
       x: z.x, y: originY,
-      vx: (dx / d) * sp, vy: (dy / d) * sp - (arena ? 60 : 0),
+      vx: (dx / d) * sp, vy: (dy / d) * sp,
       dmg: z.dmg, life: 3,
     });
     this.sfx.spit();
     for (let i = 0; i < 4; i++)
-      this.particles.push({ x: z.x, y: originY, vx: R(-40, 40), vy: arena ? R(-40, 10) : R(-40, 40), life: 0.3, max: 0.3, size: R(2, 4), color: "#a3e635", grav: 0, add: true });
+      this.particles.push({ x: z.x, y: originY, vx: R(-40, 40), vy: R(-40, 40), life: 0.3, max: 0.3, size: R(2, 4), color: "#a3e635", grav: 0, add: true });
   }
 
   private updateBullets(dt: number) {
-    const arena = this.stageDef.fixedCamera;
     for (const b of this.bullets) {
       b.life -= dt;
       b.x += b.vx * dt;
       b.y += b.vy * dt;
-      // arena only: a real ground line to kick up dust against. In the open
-      // top-down stages the player can be anywhere in y, so despawning every
-      // bullet that crosses a fixed height (previously unconditional here)
-      // made shooting fail outright below that line — bullets now just expire
-      // by their life timer or the world-bounds filter below instead
-      if (arena && b.y > GROUND + 4) {
-        b.life = 0;
-        for (let i = 0; i < 3; i++)
-          this.particles.push({ x: b.x, y: GROUND, vx: R(-60, 60), vy: R(-120, -40), life: 0.25, max: 0.25, size: 2, color: "#94a3b8", grav: 800, add: false });
-        continue;
-      }
       for (const z of this.zombies) {
         if (z.dead || b.hits.has(z)) continue;
         // top-down zombie body is centered at z.y directly now — no more
@@ -1806,7 +1674,7 @@ export class Engine {
       }
       if (b.life > 0 && this.boss && !this.boss.dead && this.boss.state !== "emerge" && !b.hitBoss) {
         const boss = this.boss;
-        const cy = boss.y - 60 * boss.scale;
+        const cy = boss.y;
         const rr = boss.r + 7;
         const dx = b.x - boss.x, dy = b.y - cy;
         if (dx * dx + dy * dy < rr * rr * 1.25) {
@@ -1824,16 +1692,13 @@ export class Engine {
 
   private updateEshots(dt: number) {
     const p = this.pl;
-    const arena = this.stageDef.fixedCamera;
     for (const s of this.eshots) {
       s.life -= dt;
-      if (arena) s.vy += 230 * dt; // unchanged: arena keeps its lobbed arc
       s.x += s.vx * dt;
       s.y += s.vy * dt;
       if (chance(0.5))
         this.particles.push({ x: s.x, y: s.y, vx: R(-12, 12), vy: R(-12, 12), life: 0.3, max: 0.3, size: 2.4, color: "#84cc16", grav: 0, add: true });
-      if (arena && s.y > GROUND + 2) { s.life = 0; continue; }
-      const dx = s.x - p.x, dy = s.y - (arena ? p.y - 36 : p.y);
+      const dx = s.x - p.x, dy = s.y - p.y;
       if (dx * dx + dy * dy < 22 * 22) {
         s.life = 0;
         this.hurtPlayer(s.dmg, Math.sign(s.vx) * 110);
@@ -1844,7 +1709,6 @@ export class Engine {
 
   private updateGems(dt: number) {
     const p = this.pl;
-    const arena = this.stageDef.fixedCamera;
     const mr = 110 * this.st.magnet;
     for (const g of this.gems) {
       g.t += dt;
@@ -1858,11 +1722,6 @@ export class Engine {
         g.vx = (dx / (d || 1)) * pull;
         g.vy = (dy / (d || 1)) * pull;
         g.rest = false;
-      } else if (!g.rest && arena) {
-        // unchanged: the arena is a side-view lane shooter with a real ground line
-        g.vy += 1300 * dt;
-        g.vx = lerp(g.vx, 0, Math.min(1, 4 * dt));
-        if (g.y >= GROUND - 5) { g.y = GROUND - 5; g.vy *= -0.35; if (Math.abs(g.vy) < 30) { g.rest = true; g.vy = 0; g.vx = 0; } }
       } else if (!g.rest) {
         // top-down: no gravity, no fixed floor — the gem scatters from the
         // kill and settles wherever it lands instead of falling to a
@@ -1876,7 +1735,6 @@ export class Engine {
       if (d < 24) {
         g.val = -g.val; // mark collected
         if (g.kind === "scrap") {
-          this.scrap += Math.abs(g.val);
           this.profile.totalScrap += Math.abs(g.val);
           this.gainMetaXp(2);
           this.particles.push({ x: p.x, y: p.y - 34, vx: R(-30, 30), vy: R(-60, -10), life: 0.3, max: 0.3, size: 3, color: "#94a3b8", grav: 0, add: true });
@@ -1891,18 +1749,13 @@ export class Engine {
   }
 
   private updateParticles(dt: number) {
-    // arena only: a real ground line for gravity-affected particles to land
-    // on. In the open top-down stages a kill can happen at any y, so bouncing
-    // everything toward one fixed height made blood/debris drift toward a
-    // line unrelated to where it actually happened — those now just arc
-    // under gravity and fade out on their own life timer instead
-    const arena = this.stageDef.fixedCamera;
+    // no ground line: a kill can happen at any y, so debris just arcs under
+    // its own gravity and fades on its life timer
     for (const q of this.particles) {
       q.life -= dt;
       q.vy += q.grav * dt;
       q.x += q.vx * dt;
       q.y += q.vy * dt;
-      if (arena && q.y > GROUND + 2 && q.grav > 0) { q.y = GROUND + 2; q.vy *= -0.3; q.vx *= 0.7; }
     }
     this.particles = this.particles.filter((q) => q.life > 0);
     if (this.particles.length > 500) this.particles.splice(0, this.particles.length - 500);
@@ -1929,8 +1782,7 @@ export class Engine {
     const dir = Math.sign(b.vx);
     for (let i = 0; i < (b.crit ? 8 : 5); i++)
       this.particles.push({ x: b.x, y: b.y, vx: dir * R(30, 190) + R(-60, 60), vy: R(-130, 40), life: R(0.25, 0.5), max: 0.5, size: R(2, 4.5), color: BLOOD[RI(0, BLOOD.length - 1)], grav: 1100, add: false });
-    const dmgTextY = this.stageDef.fixedCamera ? z.y - 74 * z.scale : z.y - 18 * z.scale;
-    this.texts.push({ x: z.x + R(-8, 8), y: dmgTextY, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(b.dmg)), color: b.crit ? "#fbbf24" : "rgba(255,255,255,.8)", size: b.crit ? 17 : 12 });
+    this.texts.push({ x: z.x + R(-8, 8), y: z.y - 18 * z.scale, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(b.dmg)), color: b.crit ? "#fbbf24" : "rgba(255,255,255,.8)", size: b.crit ? 17 : 12 });
     if (this.st.lifesteal > 0) this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + b.dmg * this.st.lifesteal);
     this.sfx.zhit();
     const incendiary = this.stacks["incendiary"] || 0;
@@ -1953,12 +1805,10 @@ export class Engine {
     this.score += Math.round(z.score * (1 + this.power * 0.06));
     this.shake(z.type === "brute" ? 5 : 1.6);
     this.sfx.zdie();
-    const arena = this.stageDef.fixedCamera;
-    // arena keeps the old "chest height above feet" origin; the top-down
-    // zombie body is flat, so its own y is already the right burst origin
-    const cx = z.x, cy = arena ? z.y - 34 * z.scale : z.y;
+    // the top-down body is flat, so the zombie's own y is the burst origin
+    const cx = z.x, cy = z.y;
     for (let i = 0; i < (z.boss ? 30 : 16); i++)
-      this.particles.push({ x: cx + R(-8, 8), y: cy + R(-14, 14), vx: dir * R(20, 160) + R(-110, 110), vy: arena ? R(-200, 60) : R(-110, 110), life: R(0.3, 0.7), max: 0.7, size: R(2, 5.5), color: BLOOD[RI(0, BLOOD.length - 1)], grav: arena ? 1200 : 0, add: false });
+      this.particles.push({ x: cx + R(-8, 8), y: cy + R(-14, 14), vx: dir * R(20, 160) + R(-110, 110), vy: R(-110, 110), life: R(0.3, 0.7), max: 0.7, size: R(2, 5.5), color: BLOOD[RI(0, BLOOD.length - 1)], grav: 0, add: false });
     this.decals.push({ x: z.x, y: z.y, s: z.scale, a: 0.55 });
     if (this.decals.length > 70) this.decals.shift();
     // xp gems
@@ -1968,19 +1818,20 @@ export class Engine {
       const ang = R(0, TAU);
       this.gems.push({
         x: cx + R(-10, 10), y: cy,
-        vx: arena ? R(-90, 90) : Math.cos(ang) * R(60, 150),
-        vy: arena ? R(-220, -80) : Math.sin(ang) * R(60, 150),
+        vx: Math.cos(ang) * R(60, 150),
+        vy: Math.sin(ang) * R(60, 150),
         val: total / n, t: R(0, 9), age: 0, rest: false, kind: "xp",
       });
     }
-    // scrap — feeds building/repairing deployables in the arena; endless only ever sees it there
-    if (this.stageDef.fixedCamera && chance(0.22)) {
-      this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-220, -80), val: 1, t: R(0, 9), age: 0, rest: false, kind: "scrap" });
+    // scrap — no longer spendable; it feeds the lifetime total and meta XP, so
+    // it drops on every stage rather than only on the old arena
+    if (chance(0.22)) {
+      this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-80, 80), val: 1, t: R(0, 9), age: 0, rest: false, kind: "scrap" });
     }
   }
 
   /** Bombardment upgrade — an instant, one-time strike wiping every regular
-   * zombie currently alive. Spares anything boss-tier (the arena's Boss
+   * zombie currently alive. Spares anything boss-tier (the Boss
    * entity is untouched by definition since it isn't in `zombies[]`, and a
    * `z.boss` mini-boss like a horde finale's brute is excluded here too) so
    * it can't trivialize the one fight in a wave meant to actually matter. */
@@ -2085,16 +1936,13 @@ export class Engine {
     this.kind = this.owned.has(checkpoint.kind) ? checkpoint.kind : this.kind;
     this.stacks = { ...checkpoint.stacks };
     this.deposit = checkpoint.deposit;
-    this.scrap = checkpoint.scrap ?? 0;
     this.backpack = opts.keepBackpack ? checkpoint.backpack : [];
     this.invVer++;
     this.recompute();
     this.pl.hp = this.st.maxHp;
     this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
     this.pl.y = WORLD_H / 2;
-    this.cam = this.stageDef.fixedCamera
-      ? this.camOrigin()
-      : clamp(this.pl.x - this.viewW / 2, 0, this.worldW - this.viewW);
+    this.cam = clamp(this.pl.x - this.viewW / 2, 0, this.worldW - this.viewW);
     this.camY = clamp(this.pl.y - this.viewH / 2, 0, WORLD_H - this.viewH);
     this.mode = "play";
     this.beginRest(2.4);
@@ -2137,7 +1985,6 @@ export class Engine {
       level: this.pl.level, xp: this.pl.xp, xpNext: this.pl.xpNext,
       score: this.score, kills: this.kills, playTime: this.playTime,
       kind: this.kind, stacks: { ...this.stacks }, deposit: this.deposit, backpack: this.backpack,
-      scrap: this.scrap,
     };
     saveRun(data);
     this.profile.bestWave = Math.max(this.profile.bestWave, this.waveIndex);
@@ -2291,21 +2138,16 @@ export class Engine {
   /* ---------------- inventory: crates, backpack, consumables ---------------- */
 
   private spawnCrate(tier: CrateTier) {
-    // the arena is a fixed side-view lane (constant GROUND height, x-only
-    // movement); open stages are full 2D, so a crate needs to scatter near
-    // the player's actual position on both axes or it can land somewhere
-    // they're nowhere near and never visibly reach
-    const arena = this.stageDef.fixedCamera;
+    // scatter near the player on both axes, or it can land somewhere they're
+    // nowhere near and never visibly reach
     const x = clamp(this.pl.x + R(-160, 160), 30, this.worldW - 30);
-    const y = arena ? GROUND : clamp(this.pl.y + R(-140, 140), 30, WORLD_H - 30);
+    const y = clamp(this.pl.y + R(-140, 140), 30, WORLD_H - 30);
     this.crates.push({ x, y, tier, opened: false });
   }
 
   private isNearCrate(cr: Crate): boolean {
     const p = this.pl;
-    return this.stageDef.fixedCamera
-      ? Math.abs(cr.x - p.x) < 40
-      : Math.hypot(cr.x - p.x, cr.y - p.y) < 40;
+    return Math.hypot(cr.x - p.x, cr.y - p.y) < 40;
   }
 
   private updateCrates(dt: number) {
@@ -2363,10 +2205,9 @@ export class Engine {
     this.sfx.levelup();
     this.shake(2);
     this.announce("CRATE OPENED", summary, 2.2);
-    const arena = this.stageDef.fixedCamera;
     for (let i = 0; i < 14; i++)
       this.particles.push({
-        x: cr.x, y: (arena ? GROUND : cr.y) - 10, vx: R(-90, 90), vy: R(-220, -60),
+        x: cr.x, y: cr.y - 10, vx: R(-90, 90), vy: R(-220, -60),
         life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#fbbf24", grav: 700, add: true,
       });
   }
@@ -2536,12 +2377,9 @@ export class Engine {
     return items;
   }
 
-  /** Magnification actually in force. The arena is a fixed side-view lane framed
-   * around GROUND rather than around the player, so magnifying about the screen
-   * centre would push its floor off-screen — it opts out and the player's
-   * setting is left untouched for the open stages. */
+  /** Magnification actually in force. */
   private get zoom() {
-    return this.stageDef.fixedCamera ? 1 : this.zoomPref;
+    return this.zoomPref;
   }
 
   /** Size of the visible world window. Zooming in shows *less* world, so every
@@ -2580,21 +2418,11 @@ export class Engine {
     return { x: this.cam + x / z, y: this.camY + y / z };
   }
 
-  /** The arena's fixed camera frame — a constant origin, not a mode flag. */
-  private camOrigin() {
-    return (this.worldW - this.viewW) / 2;
-  }
-
-  /** Starts the rest between waves — a plain break, or the arena's timed prep phase. */
+  /** Starts the rest between waves. */
   private beginRest(breakDur: number) {
-    if (this.stageDef.fixedCamera) {
-      this.phase = "prep";
-      this.prepT = 45;
-      this.repairWindowT = 12;
-    } else {
-      this.phase = "break";
-      this.breakT = breakDur;
-    }
+    this.phase = "break";
+    this.breakT = breakDur;
+    this.breakMax = breakDur;
   }
 
   /** Arena resupply: tops reserve up by a fraction of each weapon's capacity, capped at `cap` of it. */
@@ -2606,98 +2434,6 @@ export class Engine {
     }
   }
 
-  /** Selects (or, passed the current selection, deselects) a deployable tool during prep. */
-  selectDeployable(kind: DeployableKind | null) {
-    if (this.phase !== "prep") return;
-    this.placingKind = this.placingKind === kind ? null : kind;
-  }
-
-  /** World-x under the cursor -> the deployable slot it lands in. */
-  private ghostSlot() {
-    const centerX = this.worldW / 2;
-    // a no-op at the arena's forced 1x zoom, but keeps placement honest if the
-    // arena is ever allowed to magnify
-    return worldXToSlot(this.canvasToWorld(this.mouse.x, this.mouse.y).x, centerX);
-  }
-
-  /** Places the currently-selected tool at the cursor's slot, if it's free and affordable. */
-  private tryPlaceDeployable() {
-    if (!this.placingKind) return;
-    const centerX = this.worldW / 2;
-    const { lane, slot } = this.ghostSlot();
-    const x = slotToWorldX(lane, slot, centerX);
-    if (!canPlaceAt(this.deployables, lane, slot)) {
-      this.sfx.dryFire();
-      this.texts.push({ x, y: GROUND - 90, vy: -46, life: 0.8, max: 0.8, text: "SLOT TAKEN", color: "#f87171", size: 12 });
-      return;
-    }
-    const def = DEPLOYABLE_DEFS[this.placingKind];
-    if (this.scrap < def.buildCost) {
-      this.sfx.dryFire();
-      this.texts.push({ x, y: GROUND - 90, vy: -46, life: 0.8, max: 0.8, text: `NEED ${def.buildCost} SCRAP`, color: "#f87171", size: 12 });
-      return;
-    }
-    this.scrap -= def.buildCost;
-    this.deployables.push({
-      id: `dep-${this.nextDeployableSeq++}`,
-      kind: this.placingKind, lane, slot, hp: def.hp, maxHp: def.hp, armed: true,
-    });
-    this.sfx.click();
-  }
-
-  /** Spends scrap to fully restore a damaged deployable. */
-  repairDeployable(id: string) {
-    const d = this.deployables.find((x) => x.id === id);
-    if (!d || d.hp >= d.maxHp) return;
-    const cost = DEPLOYABLE_DEFS[d.kind].repairCost;
-    if (this.scrap < cost) return;
-    this.scrap -= cost;
-    d.hp = d.maxHp;
-    this.sfx.click();
-  }
-
-  getDeployables(): Deployable[] {
-    return this.deployables.map((d) => ({ ...d }));
-  }
-
-  /** Claymore proximity trigger — holds through an active ambush instead of firing on the first zombie. */
-  private updateDeployables() {
-    if (!this.stageDef.fixedCamera || this.ambushT > 0) return;
-    const centerX = this.worldW / 2;
-    for (const d of this.deployables) {
-      if (d.kind !== "claymore" || !d.armed) continue;
-      const x = slotToWorldX(d.lane, d.slot, centerX);
-      const hit = this.zombies.find((z) => !z.dead && Math.abs(z.x - x) < 26);
-      if (hit) this.explodeClaymore(d, x);
-    }
-  }
-
-  private explodeClaymore(d: Deployable, x: number) {
-    d.armed = false;
-    const blast = 90;
-    const y = GROUND - 20;
-    for (const z of this.zombies) {
-      if (z.dead) continue;
-      if (z.dormant && Math.hypot(z.x - x, z.y - y) < blast * 2.5) this.wakeZombie(z, true);
-      const dist = Math.hypot(z.x - x, z.y - 34 * z.scale - y);
-      if (dist < blast) {
-        const dmg = 180 * (1 - dist / blast);
-        z.hp -= dmg;
-        z.flash = 0.09;
-        const dir = Math.sign(z.x - x) || 1;
-        z.vx += dir * 280;
-        this.texts.push({ x: z.x, y: z.y - 74 * z.scale, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(dmg)), color: "#fbbf24", size: 14 });
-        if (z.hp <= 0) this.killZombie(z, dir);
-      }
-    }
-    this.shake(9);
-    this.sfx.hurt();
-    for (let i = 0; i < 20; i++)
-      this.particles.push({
-        x, y, vx: R(-240, 240), vy: R(-240, 10), life: R(0.3, 0.6), max: 0.6,
-        size: R(2, 5), color: chance(0.5) ? "#f97316" : "#fde68a", grav: 900, add: true,
-      });
-  }
 
   private startWave(inStage: number) {
     this.waveInStage = inStage;
@@ -2707,7 +2443,7 @@ export class Engine {
     // stage 5 and 10 cap their final wave with a horde finale instead of a
     // normal fixed-size batch — a sustained, continuously-refilled swarm
     // with a boss-tier zombie, see HORDE_STAGES and the "active" phase update
-    const hordeFinale = !this.stageDef.fixedCamera && finalWave && HORDE_STAGES.includes(this.stage);
+    const hordeFinale = this.stageDef.bossId == null && finalWave && HORDE_STAGES.includes(this.stage);
     if (hordeFinale) {
       this.queue = [];
       this.waveTotal = 0;
@@ -2750,12 +2486,15 @@ export class Engine {
     const def = BOSS_DEFS[this.stageDef.bossId ?? "juggernaut"] ?? BOSS_DEFS.juggernaut;
     const hpMul = 1 + (this.power - 1) * 0.22;
     const maxHp = Math.round(150 * hpMul * 4.4 * 1.3 * def.hpMul);
+    // rises just off-screen on one side, at the player's own height rather
+    // than the old fixed GROUND line
     const side: 1 | -1 = chance(0.5) ? -1 : 1;
     const x = clamp(side < 0 ? this.cam - 200 : this.cam + W + 200, 40, this.worldW - 40);
+    const y = clamp(this.pl.y + R(-160, 160), 60, WORLD_H - 60);
     this.boss = {
       defId: def.id,
-      x, y: GROUND, r: def.r, scale: def.scale, dead: false,
-      vx: 0, face: -side as 1 | -1, flash: 0, hurtT: 0,
+      x, y, r: def.r, scale: def.scale, dead: false,
+      vx: 0, vy: 0, face: -side as 1 | -1, flash: 0, hurtT: 0,
       hp: maxHp, maxHp, phase: 0,
       state: "emerge", attack: null, timer: BOSS_EMERGE_DURATION, atk: 0,
       targetX: this.pl.x, targetY: this.pl.y,
@@ -2764,12 +2503,12 @@ export class Engine {
     // a large grave splits open under the entrance point — drawn directly
     // (not pushed into `decor`) so it never gets a solid-collision radius
     // from DECOR_SOLID_R; a crater the player can't walk into would just
-    // trap them against it in the arena's narrow lane
-    this.bossGrave = { x, y: GROUND };
+    // trap them against it
+    this.bossGrave = { x, y };
     for (let i = 0; i < 24; i++) {
       const ang = R(0, TAU);
       this.particles.push({
-        x, y: GROUND, vx: Math.cos(ang) * R(40, 160), vy: Math.sin(ang) * R(40, 160) - 80,
+        x, y, vx: Math.cos(ang) * R(40, 160), vy: Math.sin(ang) * R(40, 160),
         life: R(0.5, 1), max: 1, size: R(3, 6), color: "#1c1712", grav: 500, add: false,
       });
     }
@@ -2787,8 +2526,7 @@ export class Engine {
     this.phase = "break";
     const bonus = 500 * cleared;
     this.score += bonus;
-    // full heal between stages — except leaving the arena, which stays scrap-and-supply-only
-    if (!this.stageDef.fixedCamera) this.pl.hp = this.st.maxHp;
+    this.pl.hp = this.st.maxHp;
     // safe house resupply: reserve tops up to 50% (not full)
     for (const id of WEAPON_IDS) {
       if (this.reserve[id] >= 0) this.reserve[id] = Math.max(this.reserve[id], Math.round(this.effWeapon(id).reserve * 0.5));
@@ -2817,9 +2555,7 @@ export class Engine {
     this.pl.y = WORLD_H / 2;
     this.pl.vx = 0;
     this.pl.vy = 0;
-    this.cam = this.stageDef.fixedCamera
-      ? this.camOrigin()
-      : clamp(this.pl.x - this.viewW / 2, 0, this.worldW - this.viewW);
+    this.cam = clamp(this.pl.x - this.viewW / 2, 0, this.worldW - this.viewW);
     this.camY = clamp(this.pl.y - this.viewH / 2, 0, WORLD_H - this.viewH);
     this.waveInStage = 0;
     this.stageIntermission = false;
@@ -2830,7 +2566,9 @@ export class Engine {
     for (const id of WEAPON_IDS) this.ammo[id] = this.effWeapon(id).mag;
     this.reloading = false;
     this.reloadT = 0;
-    this.beginRest(2.6);
+    // the boss stage gets a real countdown to settle in; ordinary stages keep
+    // the brisk opener they already had
+    this.beginRest(this.stageDef.bossId != null ? 10 : 2.6);
     this.announce(`STAGE ${this.stage} — ${this.stageDef.name}`, this.stageDef.sub, 2.8);
   }
 
@@ -2845,7 +2583,7 @@ export class Engine {
       dmg: c.dmg, r: c.r * scale, scale,
       type, xp: c.xp, score: c.score,
       t: R(0, 10), atk: R(0, 0.4), flash: 0, face: 1, dead: false, spit: R(1, 2.4),
-      tint: Math.random(), boss: false, wob: R(0, TAU), dormant: false, blockedBy: null, slowT: 0,
+      tint: Math.random(), boss: false, wob: R(0, TAU), dormant: false,
       alertT: 0, burnT: 0, burnDps: 0,
     };
   }
@@ -2967,13 +2705,8 @@ export class Engine {
       crateNear: nearCrate !== null,
       crateTier: nearCrate?.tier ?? 0,
       crateOpenPct: clamp(this.crateOpenT / 1.2, 0, 1),
-      arena: this.stageDef.fixedCamera,
-      prepT: Math.max(0, this.prepT),
-      prepMax: 45,
-      placingKind: this.placingKind,
-      scrap: this.scrap,
-      repairWindowT: Math.max(0, this.repairWindowT),
-      repairWindowMax: 12,
+      breakT: Math.max(0, this.breakT),
+      breakMax: this.breakMax,
       bossActive: !!this.boss && !this.boss.dead,
       bossName: this.boss ? BOSS_DEFS[this.boss.defId].name : null,
       bossHp: this.boss?.hp ?? 0,
@@ -3233,9 +2966,8 @@ export class Engine {
     c.fillRect(0, 0, W, H);
 
     // flashlight-style vision cone, anchored to the player's real screen
-    // position and aimed with them — the arena stays on the old omnidirectional
-    // pool above since it's a fixed side-view lane, not a direction you turn to look
-    if (!this.stageDef.fixedCamera) {
+    // position and aimed with them
+    {
       const aim = this.pl.aim;
       const coneR = Math.hypot(W, H) * 1.5;
       const darkenOutside = (half: number, alpha: number) => {
@@ -3252,15 +2984,6 @@ export class Engine {
       };
       darkenOutside(0.95, 0.18);
       darkenOutside(FLASHLIGHT_HALF_ANGLE, 0.22);
-    }
-
-    /* --- arena: deployables + placement ghost --- */
-    if (this.stageDef.fixedCamera) {
-      c.save();
-      this.camTransform(cam, camY);
-      for (const d of this.deployables) this.drawDeployable(d, t);
-      if (this.phase === "prep" && this.placingKind) this.drawPlacementGhost();
-      c.restore();
     }
 
     /* --- gems / crates / zombies / player / projectiles --- */
@@ -3512,56 +3235,6 @@ export class Engine {
     c.drawImage(this.atlas.prop(d.kind, d.v), d.x - hw, d.y - hh, hw * 2, hh * 2);
   }
 
-  private drawDeployable(d: Deployable, t: number) {
-    const c = this.ctx;
-    const x = slotToWorldX(d.lane, d.slot, this.worldW / 2);
-    const pct = clamp(d.hp / d.maxHp, 0, 1);
-    if (d.kind === "barricade") {
-      c.fillStyle = pct > 0.5 ? "#78716c" : pct > 0.2 ? "#92400e" : "#7f1d1d";
-      c.fillRect(x - 16, GROUND - 62, 32, 62);
-      c.strokeStyle = "rgba(0,0,0,0.4)";
-      c.lineWidth = 2;
-      c.strokeRect(x - 16, GROUND - 62, 32, 62);
-      c.fillStyle = "rgba(0,0,0,0.5)";
-      c.fillRect(x - 18, GROUND - 74, 36, 5);
-      c.fillStyle = pct > 0.5 ? "#4ade80" : pct > 0.2 ? "#fbbf24" : "#f87171";
-      c.fillRect(x - 18, GROUND - 74, 36 * pct, 5);
-    } else if (d.kind === "wire") {
-      c.strokeStyle = pct > 0.3 ? "#94a3b8" : "#7f1d1d";
-      c.lineWidth = 2;
-      for (let i = -1; i <= 1; i++) {
-        c.beginPath();
-        c.moveTo(x + i * 8, GROUND - 2);
-        c.lineTo(x + i * 8 + 6, GROUND - 14);
-        c.lineTo(x + i * 8 - 4, GROUND - 22);
-        c.stroke();
-      }
-    } else {
-      c.fillStyle = d.armed ? "#4b5563" : "#1f2937";
-      c.beginPath();
-      c.ellipse(x, GROUND - 4, 10, 4, 0, 0, TAU);
-      c.fill();
-      if (d.armed) {
-        c.fillStyle = `rgba(248,113,113,${0.5 + 0.4 * Math.sin(t * 6)})`;
-        c.beginPath();
-        c.arc(x, GROUND - 6, 2, 0, TAU);
-        c.fill();
-      }
-    }
-  }
-
-  private drawPlacementGhost() {
-    if (!this.placingKind) return;
-    const { lane, slot } = this.ghostSlot();
-    const valid = canPlaceAt(this.deployables, lane, slot);
-    const x = slotToWorldX(lane, slot, this.worldW / 2);
-    const c = this.ctx;
-    c.globalAlpha = 0.4;
-    c.fillStyle = valid ? "#4ade80" : "#f87171";
-    c.fillRect(x - 16, GROUND - 62, 32, 62);
-    c.globalAlpha = 1;
-  }
-
   private static readonly GEM_PALETTE: Record<Gem["kind"], [string, string, string, string]> = {
     xp: ["rgba(167,139,250,0.5)", "rgba(167,139,250,0)", "#c4b5fd", "#ede9fe"],
     scrap: ["rgba(148,163,184,0.5)", "rgba(148,163,184,0)", "#cbd5e1", "#f1f5f9"],
@@ -3648,20 +3321,6 @@ export class Engine {
     c.restore();
   }
 
-  private limb(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, w1: number, w2: number, color: string) {
-    const c = this.ctx;
-    const a = Math.atan2(y2 - y1, x2 - x1);
-    const b = Math.atan2(y3 - y2, x3 - x2);
-    c.fillStyle = color;
-    c.beginPath();
-    c.moveTo(x1 + Math.cos(a + Math.PI / 2) * w1, y1 + Math.sin(a + Math.PI / 2) * w1);
-    c.lineTo(x2 + Math.cos(b + Math.PI / 2) * w2, y2 + Math.sin(b + Math.PI / 2) * w2);
-    c.lineTo(x3, y3);
-    c.lineTo(x2 - Math.cos(b + Math.PI / 2) * w2, y2 - Math.sin(b + Math.PI / 2) * w2);
-    c.lineTo(x1 - Math.cos(a + Math.PI / 2) * w1, y1 - Math.sin(a + Math.PI / 2) * w1);
-    c.closePath();
-    c.fill();
-  }
 
   /** Zombie, seen from above: the whole body rotates to face its actual
    * heading (chase velocity, or the player when idle) instead of only
@@ -3825,121 +3484,58 @@ export class Engine {
     }
   }
 
+  /**
+   * Boss, as seen from directly above. The body is an atlas blit like the
+   * player and the zombies; the emerge rise, the windup core glow and the hit
+   * flash stay here because they are state, not art.
+   */
   private drawBoss(b: Boss, cam: number, camY: number, t: number) {
     const c = this.ctx;
     const px = b.x - cam;
     if (px < -140 || px > W + 140) return;
     const py = b.y + camY;
-    // rising out of its grave: starts low/small/faded and grows into its
-    // resting position as the emerge timer runs out — see spawnBoss()/updateBoss()
+    const def = BOSS_DEFS[b.defId];
+    // rising out of its grave: starts small and faded, grows into place as the
+    // emerge timer runs out — see spawnBoss()/updateBoss()
     const emergeT = b.state === "emerge" ? clamp(1 - b.timer / BOSS_EMERGE_DURATION, 0, 1) : 1;
-    const riseOffset = (1 - emergeT) * 60;
     const visScale = 0.4 + 0.6 * emergeT;
     this.drawBossTelegraphs(b, cam, camY);
-    const def = BOSS_DEFS[b.defId];
-    // one base color per boss, shaded into torso/head/limb tones —
-    // parameterizes the art instead of duplicating this ~90-line anatomy per boss
-    const cTorso = def.color;
-    const cArmFront = def.color;
-    const cHead = shadeHex(def.color, 0.78);
-    const cLegBack = shadeHex(def.color, 0.73);
-    const cLegFront = shadeHex(def.color, 0.64);
-    const cArmBack = shadeHex(def.color, 0.87);
 
     c.fillStyle = "rgba(0,0,0,0.5)";
     c.beginPath();
-    c.ellipse(px, py + 8 + riseOffset, 30 * b.scale * visScale, 15 * b.scale * visScale, 0, 0, TAU);
+    c.ellipse(px, py + 6, b.r * 0.95 * visScale, b.r * 0.7 * visScale, 0, 0, TAU);
     c.fill();
 
-    const walk = b.state === "windup" ? 0 : b.t * 2.1;
-    const shamble = Math.sin(walk);
-    const windupPct = b.state === "windup" && b.attack ? 1 - clamp(b.timer / windupFor(b.attack, b.phase, def), 0, 1) : 0;
-    const coreColor = b.attack ? Engine.BOSS_TELL_COLOR[b.attack] : "#ef4444";
-
+    const frame = b.state === "windup" ? 0 : Math.floor(b.t * 3.2) % BOSS_FRAMES;
+    const spr = this.atlas.boss(b.defId, def.color, b.r, dirFor(Math.atan2(b.vy, b.vx), BOSS_DIRS), frame);
+    const half = (spr.width * PX_SCALE) / 2 * visScale;
     c.save();
     c.globalAlpha = 0.35 + 0.65 * emergeT;
-    c.translate(px, py + riseOffset);
-    c.scale(b.face * b.scale * visScale, b.scale * visScale);
+    c.drawImage(spr, px - half, py - half, half * 2, half * 2);
+    c.restore();
 
-    // legs
-    const l1 = shamble * 6;
-    this.limb(-6, -34, -7 + l1 * 0.5, -18, -8 + l1, -2, 8, 6, cLegBack);
-    this.limb(6, -34, 7 - l1 * 0.5, -18, 8 - l1, -2, 8, 6, cLegFront);
-
-    // torso — hulking slab
-    c.fillStyle = cTorso;
-    this.rr(-17, -70, 34, 42, 8);
-    c.fill();
-    c.fillStyle = "rgba(0,0,0,0.3)";
-    this.rr(-17, -70, 34, 14, 8);
-    c.fill();
-    // cracked-plate texture
-    c.strokeStyle = "rgba(0,0,0,0.35)";
-    c.lineWidth = 1.4;
-    for (let i = -1; i <= 1; i++) {
-      c.beginPath(); c.moveTo(i * 9, -68); c.lineTo(i * 9 + 4, -30); c.stroke();
-    }
-
-    // arms
-    const armSwing = Math.sin(walk * 0.8) * 4;
-    this.limb(-14, -58, -24 + armSwing, -38, -28 + armSwing, -14, 8, 6.4, cArmBack);
-    this.limb(14, -58, 24 - armSwing, -38, 28 - armSwing, -14, 8, 6.4, cArmFront);
-
-    // riot shield accessory — the Neighborhood Watch only, over the forward arm
-    if (def.shield) {
+    // hit flash — the pre-baked white silhouette, never a ctx.filter
+    if (b.flash > 0) {
       c.save();
-      c.fillStyle = "#334155";
-      c.strokeStyle = "rgba(226,232,240,0.35)";
-      c.lineWidth = 1.2;
-      this.rr(22, -48, 12, 32, 3);
-      c.fill();
-      c.stroke();
+      c.globalAlpha = clamp(b.flash * 9, 0, 0.8);
+      c.drawImage(this.atlas.mask(spr), px - half, py - half, half * 2, half * 2);
       c.restore();
     }
 
-    // head, small relative to the frame
-    c.fillStyle = cHead;
-    c.beginPath(); c.ellipse(0, -78, 10, 9.4, 0, 0, TAU); c.fill();
-    c.fillStyle = coreColor;
-    c.globalAlpha = 0.35 + 0.4 * windupPct;
-    c.beginPath(); c.arc(3, -80, 3, 0, TAU); c.fill();
-    c.globalAlpha = 1;
-    c.fillStyle = coreColor;
-    c.beginPath(); c.arc(3.2, -80, 1.4, 0, TAU); c.fill();
-
-    // chest core — glows brighter and faster the deeper into the windup
-    const coreR = 7 + windupPct * 5 + Math.sin(t * (6 + windupPct * 14)) * 1.2;
-    c.globalCompositeOperation = "lighter";
-    const gr = c.createRadialGradient(0, -50, 1, 0, -50, coreR);
-    gr.addColorStop(0, coreColor);
-    gr.addColorStop(1, "rgba(0,0,0,0)");
-    c.fillStyle = gr;
-    c.globalAlpha = 0.5 + 0.4 * windupPct;
-    c.beginPath(); c.arc(0, -50, coreR, 0, TAU); c.fill();
-    c.globalAlpha = 1;
-    c.globalCompositeOperation = "source-over";
-
-    if (b.flash > 0) {
-      c.globalAlpha = clamp(b.flash * 9, 0, 0.8);
-      c.fillStyle = "#ffffff";
-      c.beginPath(); c.ellipse(0, -46, 20, 34, 0, 0, TAU); c.fill();
-      c.globalAlpha = 1;
-    }
-    c.restore();
-
-    // boss hp bar — 3 segments, one per enrage phase
-    const barW = 70 * b.scale, barX = px - barW / 2, barY = py - 128 * b.scale;
-    c.fillStyle = "rgba(0,0,0,0.6)";
-    c.fillRect(barX, barY, barW, 5);
-    const pct = clamp(b.hp / b.maxHp, 0, 1);
-    c.fillStyle = b.phase === 0 ? "#f87171" : b.phase === 1 ? "#fb923c" : "#facc15";
-    c.fillRect(barX, barY, barW * pct, 5);
-    c.strokeStyle = "rgba(0,0,0,0.7)";
-    c.lineWidth = 1;
-    for (const seg of [1 / 3, 2 / 3]) {
-      c.beginPath(); c.moveTo(barX + barW * seg, barY); c.lineTo(barX + barW * seg, barY + 5); c.stroke();
+    // windup core — brighter and faster the deeper into the telegraph
+    const windupPct = b.state === "windup" && b.attack
+      ? 1 - clamp(b.timer / windupFor(b.attack, b.phase, def), 0, 1) : 0;
+    if (windupPct > 0) {
+      const coreColor = b.attack ? Engine.BOSS_TELL_COLOR[b.attack] : "#ef4444";
+      const coreR = (14 + windupPct * 12 + Math.sin(t * (6 + windupPct * 14)) * 2.5) * visScale;
+      c.save();
+      c.globalCompositeOperation = "lighter";
+      c.globalAlpha = 0.5 + 0.4 * windupPct;
+      c.drawImage(this.atlas.glow(coreColor), px - coreR, py - coreR, coreR * 2, coreR * 2);
+      c.restore();
     }
   }
+
 
   /** Player, drawn as seen from directly above: a round body, a head that
    * peeks toward the aim direction, feet that scissor along the heading

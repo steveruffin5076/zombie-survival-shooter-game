@@ -105,7 +105,7 @@ function ControlsTab() {
         <Row icon={<span className="kbd">1</span>}>-<span className="kbd">4</span> Switch weapon class (pistol / SMG / shotgun / carbine) — see WEAPONS for how you unlock more.</Row>
       </Section>
       <Section title="WORLD">
-        <Row icon={<span className="kbd">E</span>}>Hold near a crate to open it. Hold near the boss-arena's repair bench to fix a damaged barricade.</Row>
+        <Row icon={<span className="kbd">E</span>}>Hold near a crate to open it. During a boss fight, tap it to lock your laser onto the boss.</Row>
         <Row icon={<span className="kbd">B</span>} >Use a Bandage — heals a chunk of HP instantly.</Row>
         <Row icon={<span className="kbd">G</span>}>Throw a Grenade.</Row>
         <Row icon={<span className="kbd">T</span>}>Use a Tactical Stim.</Row>
@@ -201,8 +201,8 @@ function SurvivalTab() {
         <p className="mb-2 text-sm leading-relaxed text-zinc-400">
           Each stage is a series of waves, each tougher than the last. Stages 5 and 10 end
           their final wave as a 60-second horde — a continuous swarm with a boss-tier zombie
-          — instead of a normal wave. Every 4th stage is a Terminal Defense stand: a fixed
-          position you build barricades and defenses for, ending in a real boss fight.
+          — instead of a normal wave. Every 4th stage is a Terminal Defense: a tighter
+          map that opens with a 10-second countdown and ends in a real boss fight.
         </p>
       </Section>
       <Section title="KNOW YOUR ENEMY">
@@ -222,7 +222,7 @@ function SurvivalTab() {
         </p>
       </Section>
       <Section title="SCORE & PROGRESS">
-        <Row icon={<Gem className="h-4 w-4" />}>Scrap feeds your account level and (on Terminal Defense stages) buys/repairs defenses.</Row>
+        <Row icon={<Gem className="h-4 w-4" />}>Scrap drops from kills and feeds your permanent account level — grab it.</Row>
         <Row icon={<Waves className="h-4 w-4" />}>Survive as many stages as you can — this is Endless mode, so it keeps going and keeps getting harder.</Row>
       </Section>
     </div>

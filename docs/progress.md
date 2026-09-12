@@ -7,7 +7,7 @@
 - **Completed plan (Phases 0–7):** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
 - **Design doc driving Phases 8+:** `enhancement-1.md` (repo root, on `main`)
-- **Last updated:** 2026-09-12 (pixel-art Phase 2 — environment — shipped; Phases 3-4 outlined at the end of this file)
+- **Last updated:** 2026-09-12 (Terminal Defense deleted, stage 4 is now an ordinary boss stage; pixel-art Phases 3-4 outlined at the end of this file)
 - ⚠ **`~/.claude/plans/logical-moseying-reddy.md` has been recycled.** That one path has held three unrelated plans now (Phases 8-12, then the pixel-art overhaul, then the shotgun reload). It is *not* an archive — whatever it holds is just the most recent planning session. This file is the durable record; don't send anyone to that path for history.
 
 ---
@@ -16,7 +16,7 @@
 
 **As of Phase 21, the campaign/mission system (Phases 8–20, the whole `enhancement-1.md` Aetheris/Redshift arc) is gone.** The user's explicit direction: "remove all campaign and its features, it's not suitable for this." The game is now Endless-mode-only, with a persistent, lifetime meta-progression system replacing the old campaign's fixed Hideout loadout, and the noise/threat/suppressor system removed outright (a same-session follow-up request). Everything below Phase 21 in this file is history — kept for context on decisions made along the way, not a description of the current build.
 
-**Immediate next action:** pixel-art overhaul **Phase 3 — enemy labels** (floating name + HP bar over zombies and bosses). Phases 1 (characters) and 2 (environment) are shipped; the Phase 3-4 outline is at the end of this file.
+**Immediate next action:** playtest stage 4. It was rebuilt from a side-view defence stage into an ordinary 2D boss stage and the balance is untested. After that, pixel-art **Phase 3 — enemy labels**; the Phase 3-4 outline is at the end of this file.
 
 ### Phase 21 — Major pivot: campaign removed, Endless-only with persistent progression — DONE (2026-09-10)
 
@@ -636,6 +636,93 @@ as much. Small viewports pay ~0.4 ms, since there the old grid was nearly free.
 Worst case is ~3% of a 16.7 ms frame. Note these are render-call costs, not
 end-to-end fps: headless throttles rAF, so only the before/after comparison
 within one session means anything.
+
+---
+
+## Stage 4: Terminal Defense removed — DONE (2026-09-12)
+
+Stage 4 (and every 4th stage) carried `fixedCamera: true`, and that one flag
+made it a different game from the three stages around it. It was the original
+two-lane side-scroller preserved inside a game that had become 2D top-down:
+zombies never moved in y, separation was x-only, spitters lobbed a side-view
+arc, bullets and blood landed on a `GROUND` line, the camera was locked at 1x,
+and deployables sat in 12 fixed slots along one horizontal line.
+
+The user's call, after being shown the options: delete the whole Terminal
+Defense subsystem. No prep phase, no deployables, no building. Stage 4 is now an
+ordinary stage that happens to have a boss, opening with a **10-second
+countdown** because it is the only real boss fight. Bundle went **down** 13.4 KB
+(477 -> 463.5 KB) — the deletions outweigh the new boss sprite module.
+
+### The prep phase was broken on its own terms
+
+Worth recording why this started. Scrap only dropped on arena stages and reset
+to 0 on entry, and entering the stage called `beginRest()`, which for a
+`fixedCamera` stage opened a **45-second** prep. So the first thing stage 4 ever
+did was sit the player in a build screen showing three tools they could not
+afford, with nothing to do but wait or press ENTER. Even after wave 1, 0.22
+scrap per kill gave 2-3 scrap against a barricade costing 4.
+
+### The boss was the real find
+
+The plan flagged "the boss is unaudited" as the top risk, and it was right.
+The boss was **x-only**: `b.y` never changed, its melee check was
+`Math.abs(dx) < b.r + 18 && Math.abs(p.y - b.y) < 56`, and Ground Slam and
+Shield Charge were horizontal bands. That was invisible while the player was
+locked to the same lane. Open the stage to 2D and the player can stand 400 units
+above the boss and it can never reach them — the fight becomes unloseable and
+unwinnable at once. It now pursues in 2D and its attacks are real radii.
+
+`drawBoss` was also a side-view anatomy — legs, torso, head stacked upward from
+a ground line — so it would have been lying flat in a top-down world. It is now
+an atlas blit on the Phase 1 pipeline (`art/sprites/boss.ts`), one body tinted
+per boss from the `color` that `BOSS_DEFS` already carried for exactly that
+purpose.
+
+**Sizing it 1:1 to its hitbox made it smaller than a common zombie.** The
+Juggernaut's `r` is 40, so a 40-art-pixel sprite came out *below* the brute's
+52. The old art got its bulk from `BossDef.scale`, which a pixel sprite cannot
+apply without resampling off the grid. `bossArtSize` is 1.6x the hitbox instead
+— a deliberate overhang, like the tree canopy in Phase 2, because the
+silhouette has to say "boss" at a glance and `r` stays the tuned number.
+
+### Scrap survives, spending does not
+
+Scrap feeds `profile.totalScrap` and `gainMetaXp(2)` per pickup, which is what
+unlocks weapons, and it is a lifetime stat on the Profile screen. Deleting it
+outright would have quietly slowed weapon unlocks and zeroed a visible stat, so
+on the user's call the pickup stays and now drops on **every** stage rather than
+only the old arena. Only the run-local bank and everything that spent it are
+gone.
+
+### What else went
+
+`fixedCamera` is deleted from `StageDef`: `bossId != null` already marked
+exactly the same stages, so two flags that always agreed became one. It now also
+gates the 10s countdown and the between-wave resupply — the latter was never
+about the camera, and a 10-wave stage still needs it. `arena.ts`,
+`arena.test.ts` and `RepairPanel.tsx` are gone, along with `camOrigin()`, the
+forced 1x zoom, the engine's private `limb`/`shadeHex` side-view helpers, and
+the `blockedBy`/`slowT` zombie fields. `GROUND` survives only for the menu's
+attract mode and a screen-space fog band.
+
+Two balance changes ride along, both deliberate: every stage now full-heals on
+advance (the arena's exception was a difficulty tax not worth a special case),
+and the stage keeps `worldW: 1600`, so the boss fight stays tighter than the
+2880-wide exploration stages.
+
+### Verified in the browser
+
+Driving `window.__engine` at `?debug=1`: scrap drops on stage 1 (10 gems from 40
+kills, ~22% as configured); stage 4 reports `zoom 1.3` rather than a forced 1;
+entering stages 2/3/5 gives a 2.6 s break with no countdown while stage 4 gives
+10.0 s with one; and with the player parked 420 units directly above the boss,
+the boss closed to 326 — the exact case the old x-only code could never handle.
+
+Two harness traps worth remembering: `startWave()` clears any standing boss, so
+a hand-spawned boss vanishes when the countdown ends; and `advanceStage()`
+no-ops unless `stageIntermission` is true. Both made a correct build look broken
+until the test was fixed.
 
 ---
 

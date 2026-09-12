@@ -1,20 +1,13 @@
 import type { HudState, InventorySnapshot } from "../game/types";
-import { DEPLOYABLE_DEFS, type DeployableKind } from "../game/arena";
 import { ATTACK_LABELS } from "../game/boss";
 import { CONSUMABLE_ITEMS, ITEMS, type ConsumableKey } from "../game/items";
 import { ICONS } from "./ui";
 import {
   Heart, Skull, Pause, Volume2, VolumeX, Crosshair, Zap, Trophy, Lock,
-  Bot, Hand, Gem, Maximize, Minimize,
+  Bot, Hand, Maximize, Minimize,
 } from "lucide-react";
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
-
-const TOOL_KEYS: { kind: DeployableKind; key: string }[] = [
-  { kind: "barricade", key: "1" },
-  { kind: "wire", key: "2" },
-  { kind: "claymore", key: "3" },
-];
 
 interface Props {
   hud: HudState;
@@ -23,7 +16,6 @@ interface Props {
   onPause: () => void;
   onSwitch: (id: string) => void;
   onFireMode: () => void;
-  onSelectTool: (kind: DeployableKind) => void;
   onUseItem: (key: ConsumableKey) => void;
   touch?: boolean;
   /** hidden where the Fullscreen API isn't available (notably iPhone Safari) */
@@ -33,7 +25,7 @@ interface Props {
 }
 
 export default function Hud({
-  hud, inv, onMute, onPause, onSwitch, onFireMode, onSelectTool, onUseItem, touch = false,
+  hud, inv, onMute, onPause, onSwitch, onFireMode, onUseItem, touch = false,
   canFullscreen = false, fullscreen = false, onFullscreen,
 }: Props) {
   const hpPct = Math.max(0, Math.min(1, hud.hp / hud.maxHp));
@@ -95,46 +87,19 @@ export default function Hud({
           STAGE {hud.stage}
         </div>
         <div className="text-base font-semibold text-white">{hud.stageName}</div>
-        {hud.phase === "prep" ? (
+        {hud.phase === "break" && hud.breakT > 3 ? (
           <>
             <div className="font-display text-3xl tracking-[0.18em] text-emerald-300 drop-shadow-[0_0_14px_rgba(52,211,153,0.45)]">
-              PREP — WAVE {Math.max(1, hud.waveInStage + 1)}
+              GET READY — WAVE {Math.max(1, hud.waveInStage + 1)}
             </div>
             <div className="mx-auto mt-1.5 h-1.5 w-56 overflow-hidden rounded-full border border-white/10 bg-black/60">
               <div
                 className="h-full rounded-full bg-gradient-to-r from-emerald-600 to-emerald-300 transition-[width] duration-100"
-                style={{ width: `${(hud.prepT / hud.prepMax) * 100}%` }}
+                style={{ width: `${(hud.breakT / Math.max(1, hud.breakMax)) * 100}%` }}
               />
             </div>
             <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[13px] font-semibold tracking-widest text-white/55">
-              {Math.ceil(hud.prepT)}s · <span className="kbd">ENTER</span> READY
-            </div>
-            <div className="pointer-events-auto mt-2 flex items-center justify-center gap-2">
-              <div className="flex items-center gap-1.5 rounded-full border border-slate-400/30 bg-black/60 px-3 py-1.5 text-[13px] font-bold tracking-widest text-slate-200 backdrop-blur-sm">
-                <Gem className="h-3.5 w-3.5 text-slate-400" /> {hud.scrap}
-              </div>
-              {TOOL_KEYS.map(({ kind, key }) => {
-                const def = DEPLOYABLE_DEFS[kind];
-                const active = hud.placingKind === kind;
-                const affordable = hud.scrap >= def.buildCost;
-                return (
-                  <button
-                    key={kind}
-                    onClick={() => onSelectTool(kind)}
-                    title={`${def.desc} — ${def.buildCost} scrap`}
-                    className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12px] font-bold tracking-wide backdrop-blur-sm transition ${
-                      active
-                        ? "border-emerald-400/70 bg-emerald-400/15 text-emerald-200 shadow-[0_0_14px_rgba(52,211,153,0.35)]"
-                        : affordable
-                          ? "border-white/12 bg-black/50 text-white/60 hover:border-white/30"
-                          : "border-white/5 bg-black/40 text-white/25"
-                    }`}
-                  >
-                    <span className="kbd">{key}</span> {def.short}
-                    <span className={affordable ? "text-slate-400" : "text-red-400/70"}>{def.buildCost}</span>
-                  </button>
-                );
-              })}
+              {Math.ceil(hud.breakT)}s · <span className="kbd">ENTER</span> READY
             </div>
           </>
         ) : (
@@ -235,11 +200,6 @@ export default function Hud({
             <span className="flex gap-1">
               <Trophy className="text-amber-400/80 h-3.5 w-3.5" /> {hud.high.toLocaleString()}
             </span>
-            {hud.arena && (
-              <span className="text-slate-300 flex gap-1">
-                <Gem className="text-slate-400 h-3.5 w-3.5" /> {hud.scrap}
-              </span>
-            )}
           </div>
         </div>
         <div className="pointer-events-auto flex flex-col gap-2">

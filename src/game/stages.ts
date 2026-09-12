@@ -9,10 +9,10 @@ export interface StageDef {
   bossWaves: number[];
   worldW: number;
   themeId: string;
-  /** the stage's boss id, set only on the fixed-camera arena stage */
+  /** the stage's boss id — set only on the Terminal Defense stage, and the one
+   * flag that marks it: it also gates the 10s opening countdown and the
+   * between-wave resupply */
   bossId?: string;
-  /** fixed-camera arena mode — prep phase, deployables, scrap */
-  fixedCamera: boolean;
   /** act this stage belongs to (1-6) */
   actId: number;
   /** 0-3: which stage within the act (0-2 exploration, 3 Terminal Defense) */
@@ -36,7 +36,6 @@ export const STAGES: StageDef[] = ACTS.flatMap((act, actIndex) => [
     bossWaves: [],
     worldW: act.worldW,
     themeId: act.themeId,
-    fixedCamera: false,
     actId: act.id,
     indexInAct: 0,
   },
@@ -48,7 +47,6 @@ export const STAGES: StageDef[] = ACTS.flatMap((act, actIndex) => [
     bossWaves: [],
     worldW: act.worldW,
     themeId: act.themeId,
-    fixedCamera: false,
     actId: act.id,
     indexInAct: 1,
   },
@@ -60,7 +58,6 @@ export const STAGES: StageDef[] = ACTS.flatMap((act, actIndex) => [
     bossWaves: [],
     worldW: act.worldW,
     themeId: act.themeId,
-    fixedCamera: false,
     actId: act.id,
     indexInAct: 2,
   },
@@ -73,7 +70,6 @@ export const STAGES: StageDef[] = ACTS.flatMap((act, actIndex) => [
     bossWaves: ARENA_BOSS_WAVES,
     worldW: 1600,
     themeId: act.arenaThemeId,
-    fixedCamera: true,
     bossId: act.bossId,
     actId: act.id,
     indexInAct: 3,

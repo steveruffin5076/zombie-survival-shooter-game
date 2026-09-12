@@ -13,16 +13,14 @@ describe("STAGES table", () => {
   it("stages 4, 8, 12, 16, 20, 24 are fixedCamera Terminal Defense with boss", () => {
     const arenaIndices = [3, 7, 11, 15, 19, 23];
     for (const idx of arenaIndices) {
-      expect(STAGES[idx].fixedCamera).toBe(true);
       expect(STAGES[idx].bossId).toBeTruthy();
       expect(STAGES[idx].indexInAct).toBe(3);
     }
   });
 
-  it("stages 1-3, 5-7, 9-11, 13-15, 17-19, 21-23 are exploration (not fixedCamera)", () => {
+  it("stages 1-3, 5-7, 9-11, 13-15, 17-19, 21-23 are exploration (no boss)", () => {
     const explorationIndices = [0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 16, 17, 18, 20, 21, 22];
     for (const idx of explorationIndices) {
-      expect(STAGES[idx].fixedCamera).toBe(false);
       expect(STAGES[idx].bossId).toBeUndefined();
       expect(STAGES[idx].indexInAct).toBeLessThan(3);
     }

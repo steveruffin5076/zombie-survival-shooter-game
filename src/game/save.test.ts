@@ -5,7 +5,6 @@ const valid: SaveData = {
   version: SAVE_VERSION, stage: 2, level: 3, xp: 5, xpNext: 40,
   score: 1200, kills: 30, playTime: 210,
   kind: "p365", stacks: { dmg: 2 }, deposit: [], backpack: [{ id: "a", itemId: "bandage", x: 0, y: 0 }],
-  scrap: 7,
 };
 
 describe("migrate", () => {
@@ -41,6 +40,5 @@ describe("migrate", () => {
     expect(result?.xp).toBe(0);
     expect(result?.score).toBe(0);
     expect(result?.kind).toBe("p365");
-    expect(result?.scrap).toBe(0);
   });
 });

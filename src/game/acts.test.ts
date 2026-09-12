@@ -61,16 +61,14 @@ describe("Acts", () => {
     ];
 
     for (const idx of explorationStages) {
-      expect(STAGES[idx].fixedCamera).toBe(false);
       expect(STAGES[idx].bossId).toBeUndefined();
     }
   });
 
-  it("stages 4, 8, 12, 16, 20, 24 are Terminal Defense (fixed camera with boss)", () => {
+  it("stages 4, 8, 12, 16, 20, 24 are Terminal Defense (the boss stages)", () => {
     const arenaStages = [3, 7, 11, 15, 19, 23];
 
     for (const idx of arenaStages) {
-      expect(STAGES[idx].fixedCamera).toBe(true);
       expect(STAGES[idx].bossId).toBeTruthy();
       expect(STAGES[idx].indexInAct).toBe(3);
     }

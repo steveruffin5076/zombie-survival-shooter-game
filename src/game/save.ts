@@ -19,8 +19,6 @@ export interface SaveData {
   /** persistent stash (item ids, unordered) — survives death, unlike the carried backpack */
   deposit: string[];
   backpack: PlacedItem[];
-  /** this run's spendable scrap bank — resets each new run (see ProfileData.totalScrap for the lifetime count) */
-  scrap: number;
 }
 
 const SAVE_KEY = "graveyard-shift-save";
@@ -47,7 +45,6 @@ export function migrate(raw: unknown): SaveData | null {
     stacks: d.stacks ?? {},
     deposit: d.deposit,
     backpack: d.backpack,
-    scrap: d.scrap ?? 0,
   };
 }
 

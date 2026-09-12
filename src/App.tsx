@@ -3,14 +3,12 @@ import { Engine } from "./game/engine";
 import type {
   EngineEvent, GameStats, HudState, InventorySnapshot, ProfileSnapshot, UpgradeChoice,
 } from "./game/types";
-import type { Deployable, DeployableKind } from "./game/arena";
 import type { ConsumableKey } from "./game/items";
 import type { AttachmentId } from "./game/attachments";
 import Hud from "./components/Hud";
 import { Menu, LevelUpModal, PauseMenu, GameOver, StageClear } from "./components/Overlays";
 import InventoryOverlay from "./components/InventoryOverlay";
 import SafeHouseOverlay from "./components/SafeHouseOverlay";
-import RepairPanel from "./components/RepairPanel";
 import TouchControls from "./components/TouchControls";
 import LoadoutProfile from "./components/LoadoutProfile";
 import Tutorial from "./components/Tutorial";
@@ -77,7 +75,6 @@ export default function App() {
   const [safeHouse, setSafeHouse] = useState(false);
   const [inv, setInv] = useState<InventorySnapshot | null>(null);
   const [showInventory, setShowInventory] = useState(false);
-  const [deployables, setDeployables] = useState<Deployable[]>([]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -127,8 +124,6 @@ export default function App() {
       // invVer so it doesn't force a re-render of grid UI every 66ms for no reason
       const snap = eng.getInventory();
       setInv((prev) => (prev && prev.invVer === snap.invVer ? prev : snap));
-      // the arena's deployable list is small (<=12) — cheap to just re-poll while it's relevant
-      if (h.arena) setDeployables(eng.getDeployables());
     }, 66);
 
     return () => {
@@ -231,14 +226,6 @@ export default function App() {
     (cls: string) => engineRef.current?.selectClass(cls as never),
     []
   );
-  const selectTool = useCallback(
-    (kind: DeployableKind) => engineRef.current?.selectDeployable(kind),
-    []
-  );
-  const repairDeployable = useCallback(
-    (id: string) => engineRef.current?.repairDeployable(id),
-    []
-  );
   const toggleFireMode = useCallback(() => engineRef.current?.toggleFireMode(), []);
   const useItem = useCallback((key: ConsumableKey) => engineRef.current?.useConsumable(key), []);
   const choose = useCallback((id: string) => engineRef.current?.applyUpgrade(id), []);
@@ -322,21 +309,11 @@ export default function App() {
             onPause={togglePause}
             onSwitch={switchWeapon}
             onFireMode={toggleFireMode}
-            onSelectTool={selectTool}
             onUseItem={useItem}
             touch={touch}
             canFullscreen={canFullscreen}
             fullscreen={fullscreen}
             onFullscreen={goFullscreen}
-          />
-        )}
-        {screen === "game" && hud && hud.repairWindowT > 0 && (
-          <RepairPanel
-            deployables={deployables}
-            scrap={hud.scrap}
-            windowT={hud.repairWindowT}
-            windowMax={hud.repairWindowMax}
-            onRepair={repairDeployable}
           />
         )}
         {screen === "game" && touch && !paused && !choices && !over && !stageClear && !showInventory && (

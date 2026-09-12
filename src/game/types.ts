@@ -1,4 +1,3 @@
-import type { DeployableKind } from "./arena";
 import type { BossAttack } from "./boss";
 import type { WeaponClass } from "./weapons";
 
@@ -66,17 +65,10 @@ export interface HudState {
   crateTier: 0 | 1 | 2 | 3;
   /** 0..1 hold-to-open progress */
   crateOpenPct: number;
-  /** stage 4 only — gates the prep/deployables/scrap UI */
-  arena: boolean;
-  /** seconds left in the arena's prep phase */
-  prepT: number;
-  prepMax: number;
-  /** deployable tool currently selected for placement, if any */
-  placingKind: DeployableKind | null;
-  scrap: number;
-  /** seconds left in the per-prep repair window — RepairPanel shows while > 0 */
-  repairWindowT: number;
-  repairWindowMax: number;
+  /** seconds left in the rest before the next wave, and what it started at —
+   * the HUD only draws a countdown for the long ones (the boss stage's opener) */
+  breakT: number;
+  breakMax: number;
   /** a Terminal Defense boss is alive — gates the 3-segment boss bar */
   bossActive: boolean;
   /** display name for the boss bar — data-driven per BOSS_DEFS, null when no boss is active */
