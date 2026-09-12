@@ -35,19 +35,53 @@ export interface BossDef {
   color: string;
   cooldownBase: number;
   cooldownStep: number;
+  /**
+   * Pursuit speed in world units/sec, before the enrage-phase multiplier.
+   *
+   * Sits deliberately under the player's 275: the fight should let you buy
+   * space by running flat out, and take it straight back the moment you turn,
+   * reload or stop. It used to be a hardcoded 68, which in the old locked lane
+   * was fine — you could not leave — and in open 2D meant you simply walked
+   * away from the boss forever.
+   */
+  speed: number;
   /** draws a riot-shield accessory over the forward arm */
   shield?: boolean;
 }
+
+/** Pursuit speed gained per enrage phase — phase 2 is ~1.32x the base. */
+export const BOSS_PHASE_SPEEDUP = 0.16;
+
+/** Pursuit speed actually in force for a boss at a given enrage phase. */
+export function bossSpeed(def: BossDef, phase: 0 | 1 | 2): number {
+  return def.speed * (1 + phase * BOSS_PHASE_SPEEDUP);
+}
+
+/**
+ * How fast a Shield Charge crosses the ground, and for how long. Above the
+ * player's own 275 on purpose — it is a committed lunge you sidestep, not a
+ * race you win.
+ *
+ * The product is the reach, and the reach is the point: at 520 x 0.45 the lane
+ * was 234 units, short enough that a charge picked at any normal engagement
+ * range simply fell short. ~350 covers the distance the boss actually opens
+ * attacks from. The longer commit is also the player's punish window.
+ */
+export const CHARGE_SPEED = 560;
+export const CHARGE_TIME = 0.62;
 
 export const BOSS_DEFS: Record<string, BossDef> = {
   juggernaut: {
     id: "juggernaut", name: "THE JUGGERNAUT ALPHA",
     tellName: "◤ THE JUGGERNAUT ALPHA ◢", tellSub: "it doesn't flinch",
     deathBanner: "THE JUGGERNAUT FALLS", deathSub: "it's not getting back up",
-    attacks: ["slam", "mortar", "call"],
+    // shieldcharge is in the pool despite the name being the Watch's: every
+    // act currently resolves to the Juggernaut, so without it the charge —
+    // the one attack that punishes kiting — would never appear in play.
+    attacks: ["slam", "mortar", "call", "shieldcharge"],
     windup: {},
     hpMul: 1.6, scale: 2.1, r: 40, color: "#3a2c1e",
-    cooldownBase: 1.8, cooldownStep: 0.45,
+    cooldownBase: 1.8, cooldownStep: 0.45, speed: 155,
   },
   neighborhood_watch: {
     id: "neighborhood_watch", name: "THE NEIGHBORHOOD WATCH",
@@ -56,7 +90,7 @@ export const BOSS_DEFS: Record<string, BossDef> = {
     attacks: ["shieldcharge", "mortar", "call"],
     windup: { shieldcharge: 1.3 },
     hpMul: 0.8, scale: 1.85, r: 34, color: "#1c2b3a",
-    cooldownBase: 1.6, cooldownStep: 0.35,
+    cooldownBase: 1.6, cooldownStep: 0.35, speed: 175,
     shield: true,
   },
 };

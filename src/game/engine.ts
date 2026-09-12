@@ -17,7 +17,7 @@ import {
   loadProfile, saveProfile, type ProfileData,
 } from "./save";
 import {
-  BOSS_DEFS, cooldownFor, phaseFor, pickAttack, windupFor,
+  BOSS_DEFS, CHARGE_SPEED, CHARGE_TIME, bossSpeed, cooldownFor, phaseFor, pickAttack, windupFor,
   type AimTarget, type BossAttack,
 } from "./boss";
 import {
@@ -145,6 +145,8 @@ interface Boss extends AimTarget {
   atk: number;
   /** locked-in strike point for Puke Mortar, set the instant its windup starts */
   targetX: number; targetY: number;
+  /** unit vector a Shield Charge is committed to, locked when its windup ends */
+  chargeX: number; chargeY: number;
   tint: number; wob: number; t: number;
 }
 
@@ -1502,8 +1504,9 @@ export class Engine {
     const def = BOSS_DEFS[b.defId];
     if (b.state === "seek" || b.state === "cooldown") {
       const bd = Math.hypot(dx, dy) || 1;
-      b.vx = lerp(b.vx, (dx / bd) * 68, Math.min(1, 4 * dt));
-      b.vy = lerp(b.vy, (dy / bd) * 68, Math.min(1, 4 * dt));
+      const sp = bossSpeed(def, b.phase);
+      b.vx = lerp(b.vx, (dx / bd) * sp, Math.min(1, 4 * dt));
+      b.vy = lerp(b.vy, (dy / bd) * sp, Math.min(1, 4 * dt));
       b.x = clamp(b.x + b.vx * dt, 10, this.worldW - 10);
       b.y = clamp(b.y + b.vy * dt, 30, WORLD_H - 30);
       b.timer -= dt;
@@ -1531,6 +1534,37 @@ export class Engine {
       b.timer -= dt;
       if (b.timer <= 0) {
         this.executeBossAttack(b);
+        // Shield Charge hands off to the charge state, which ends in cooldown
+        // itself; every other attack resolves instantly and falls through here
+        if (b.state === "windup") {
+          b.state = "cooldown";
+          b.timer = cooldownFor(b.phase, def);
+        }
+      }
+    } else if (b.state === "attack") {
+      // A committed lunge along the vector locked when the windup ended. It
+      // deliberately does NOT steer: sidestepping is the counter-play, and a
+      // charge that tracks you is just a fast chase with extra steps.
+      b.vx = b.chargeX * CHARGE_SPEED;
+      b.vy = b.chargeY * CHARGE_SPEED;
+      b.x = clamp(b.x + b.vx * dt, 10, this.worldW - 10);
+      b.y = clamp(b.y + b.vy * dt, 30, WORLD_H - 30);
+      b.timer -= dt;
+      if (b.atk > 0) b.atk -= dt;
+      else if (Math.hypot(dx, dy) < b.r + 34) {
+        b.atk = 1.1;
+        this.hurtPlayer(34 * (1 + (this.power - 1) * 0.05), b.chargeX * 420);
+        this.shake(7);
+      }
+      // dust off the shoulder, so the lunge reads as weight rather than a slide
+      this.particles.push({
+        x: b.x - b.chargeX * b.r, y: b.y - b.chargeY * b.r,
+        vx: R(-70, 70) - b.chargeX * 120, vy: R(-70, 70) - b.chargeY * 120,
+        life: R(0.2, 0.4), max: 0.4, size: R(2, 4.5), color: "#6b7280", grav: 0, add: false,
+      });
+      if (b.timer <= 0) {
+        b.vx = 0;
+        b.vy = 0;
         b.state = "cooldown";
         b.timer = cooldownFor(b.phase, def);
       }
@@ -1565,21 +1599,19 @@ export class Engine {
           life: R(0.3, 0.65), max: 0.65, size: R(2, 5), color: "#65a30d", grav: 0, add: true,
         });
     } else if (b.attack === "shieldcharge") {
-      // The Neighborhood Watch's signature move — same melee-AOE-and-knockback
-      // shape as Ground Slam, just a tighter radius (a forward charge, not an
-      // omnidirectional ground pound) and its own tell color. No new physics.
-      const radius = 110;
+      // The Neighborhood Watch's signature move. It used to be a standing AOE
+      // with a different tell colour — fine in a lane, useless once the player
+      // could walk away. Now it is the lunge its name promises: lock a heading
+      // and commit, handing off to the "attack" state which does the travel.
+      const dx = p.x - b.x, dy = p.y - b.y;
+      const d = Math.hypot(dx, dy) || 1;
+      b.chargeX = dx / d;
+      b.chargeY = dy / d;
+      b.state = "attack";
+      b.timer = CHARGE_TIME;
+      b.atk = 0; // the charge gets its own contact hit, not the seek cooldown's
       this.sfx.bossSlam();
       this.shake(9);
-      const dx = p.x - b.x;
-      if (Math.hypot(dx, p.y - b.y) < radius) {
-        this.hurtPlayer(30 * (1 + (this.power - 1) * 0.05), Math.sign(dx || 1) * 320);
-      }
-      for (let i = 0; i < 20; i++)
-        this.particles.push({
-          x: b.x + R(-radius, radius), y: b.y + R(-radius * 0.6, radius * 0.6), vx: R(-100, 100), vy: R(-100, 100),
-          life: R(0.3, 0.6), max: 0.6, size: R(2, 5), color: "#38bdf8", grav: 0, add: false,
-        });
     } else {
       // Screaming Call — reuses the existing runner-ambush system rather than
       // rebuilding add-spawning; "one active ambush max" falls out for free
@@ -2340,11 +2372,16 @@ export class Engine {
   // into stage 2, since power only reaches ~1.7 by the end of a 10-wave
   // stage 1. Every type now has some presence from wave 1, growing with power.
   private zombieWeights(power: number): Partial<Record<string, number>> {
+    // Runners (speed 128) are the only fodder that can stay with a moving
+    // player at all — everything else is slower than a walk. On the boss
+    // stages the cap is raised so the crowd actually applies pressure instead
+    // of trailing behind in a line.
+    const boss = this.stageDef.bossId != null;
     return {
       walker: 1,
-      runner: Math.min(0.6, 0.16 + power * 0.05),
+      runner: Math.min(boss ? 1.2 : 0.6, 0.16 + power * 0.05),
       spitter: Math.max(0, Math.min(0.4, (power - 0.5) * 0.08)),
-      brute: Math.max(0, Math.min(0.35, (power - 0.8) * 0.06)),
+      brute: Math.max(0, Math.min(boss ? 0.5 : 0.35, (power - 0.8) * 0.06)),
       screamer: SCREAMER_WEIGHT,
     };
   }
@@ -2354,9 +2391,14 @@ export class Engine {
     const boss = this.stageDef.bossWaves.includes(inStage);
     // inStage adds its own escalation on top of power, so each wave within a
     // stage visibly spawns more than the last, not just a slow difficulty drift
-    const count = boss
-      ? Math.min(40, Math.round(6 + power * 1.5 + inStage * 1.2))
-      : Math.min(72, Math.round(6 + power * 3.0 + power * power * 0.12 + inStage * 1.6));
+    // The fodder count used to drop to roughly half on a boss wave, on the
+    // reasoning that the boss itself carried the wave. In a lane that held;
+    // in open 2D it made the two boss waves the LIGHTEST in the stage, which
+    // is backwards for the one stage that's meant to be the wall. Boss waves
+    // now run at 0.85 of the ordinary curve — still a step down, since the
+    // boss is genuinely worth something, but no longer a discount.
+    const normal = Math.min(72, Math.round(6 + power * 3.0 + power * power * 0.12 + inStage * 1.6));
+    const count = boss ? Math.round(normal * 0.85) : normal;
     const weights = this.zombieWeights(power);
     for (let i = 0; i < count; i++) items.push({ type: rollEnemy(weights) as ZType });
     // shuffle the fodder
@@ -2497,7 +2539,7 @@ export class Engine {
       vx: 0, vy: 0, face: -side as 1 | -1, flash: 0, hurtT: 0,
       hp: maxHp, maxHp, phase: 0,
       state: "emerge", attack: null, timer: BOSS_EMERGE_DURATION, atk: 0,
-      targetX: this.pl.x, targetY: this.pl.y,
+      targetX: this.pl.x, targetY: this.pl.y, chargeX: 0, chargeY: 0,
       tint: Math.random(), wob: R(0, TAU), t: 0,
     };
     // a large grave splits open under the entrance point — drawn directly
@@ -2594,8 +2636,16 @@ export class Engine {
     const speedMul = 1 + Math.min(0.55, (power - 1) * 0.035);
     const dmgMul = 1 + (power - 1) * 0.07;
 
-    // Top-down: spawn from all directions around player edge
-    const angle = Math.random() * TAU;
+    // Spawn ring around the player. On the boss stages most of it is biased
+    // into the direction they're actually running: a uniform ring is trivially
+    // outrun at 275 against a 52-speed walker, so sprinting into open space
+    // used to be free forever. The rest stays uniform so it reads as bad luck
+    // rather than a scripted wall, and it only applies while they're moving —
+    // standing still should not conjure enemies in front of you.
+    const p = this.pl;
+    const moving = Math.hypot(p.vx, p.vy) > 60;
+    const ahead = this.stageDef.bossId != null && moving && chance(0.55);
+    const angle = ahead ? Math.atan2(p.vy, p.vx) + R(-0.7, 0.7) : Math.random() * TAU;
     const dist = 450 + R(0, 200);
     let x = this.pl.x + Math.cos(angle) * dist;
     let y = this.pl.y + Math.sin(angle) * dist;
@@ -3466,11 +3516,32 @@ export class Engine {
     const def = BOSS_DEFS[b.defId];
     const pct = 1 - clamp(b.timer / windupFor(b.attack, b.phase, def), 0, 1);
     const color = Engine.BOSS_TELL_COLOR[b.attack];
+
+    // Shield Charge telegraphs a LANE, not a circle — the counter-play is to
+    // step out of the line, so the tell has to show where the line is. A ring
+    // here would say "back away", which is the one thing that doesn't work.
+    if (b.attack === "shieldcharge") {
+      const dx = this.pl.x - b.x, dy = this.pl.y - b.y;
+      const len = CHARGE_SPEED * CHARGE_TIME;
+      const half = (b.r + 34) * (0.5 + 0.5 * pct);
+      c.save();
+      c.translate(b.x - cam, b.y + camY);
+      c.rotate(Math.atan2(dy, dx));
+      c.globalAlpha = 0.22 + 0.2 * Math.sin(pct * 18);
+      c.fillStyle = color;
+      c.fillRect(0, -half, len, half * 2);
+      c.globalAlpha = 0.6;
+      c.strokeStyle = color;
+      c.lineWidth = 2;
+      c.strokeRect(0, -half, len, half * 2);
+      c.restore();
+      return;
+    }
+
     const isMortar = b.attack === "mortar";
     const cx = isMortar ? b.targetX - cam : b.x - cam;
     const cy = isMortar ? b.targetY + camY : b.y + camY;
-    const meleeRadius = b.attack === "slam" ? 150 : b.attack === "shieldcharge" ? 110 : 0;
-    const radius = (isMortar ? 95 : meleeRadius) * (0.35 + 0.65 * pct);
+    const radius = (isMortar ? 95 : b.attack === "slam" ? 150 : 0) * (0.35 + 0.65 * pct);
     if (radius > 0) {
       c.save();
       c.globalAlpha = 0.35 + 0.25 * Math.sin(pct * 18);

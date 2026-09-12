@@ -7,7 +7,7 @@
 - **Completed plan (Phases 0–7):** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
 - **Design doc driving Phases 8+:** `enhancement-1.md` (repo root, on `main`)
-- **Last updated:** 2026-09-12 (Terminal Defense deleted, stage 4 is now an ordinary boss stage; pixel-art Phases 3-4 outlined at the end of this file)
+- **Last updated:** 2026-09-12 (stage 4 retuned after playtest — the boss chases for real; pixel-art Phases 3-4 outlined at the end of this file)
 - ⚠ **`~/.claude/plans/logical-moseying-reddy.md` has been recycled.** That one path has held three unrelated plans now (Phases 8-12, then the pixel-art overhaul, then the shotgun reload). It is *not* an archive — whatever it holds is just the most recent planning session. This file is the durable record; don't send anyone to that path for history.
 
 ---
@@ -16,7 +16,7 @@
 
 **As of Phase 21, the campaign/mission system (Phases 8–20, the whole `enhancement-1.md` Aetheris/Redshift arc) is gone.** The user's explicit direction: "remove all campaign and its features, it's not suitable for this." The game is now Endless-mode-only, with a persistent, lifetime meta-progression system replacing the old campaign's fixed Hideout loadout, and the noise/threat/suppressor system removed outright (a same-session follow-up request). Everything below Phase 21 in this file is history — kept for context on decisions made along the way, not a description of the current build.
 
-**Immediate next action:** playtest stage 4. It was rebuilt from a side-view defence stage into an ordinary 2D boss stage and the balance is untested. After that, pixel-art **Phase 3 — enemy labels**; the Phase 3-4 outline is at the end of this file.
+**Immediate next action:** re-playtest stage 4. It was rebuilt as a 2D boss stage, played too easy, and has now been retuned aggressively — the user asked for "the hardest thing in the rotation", so overshooting is a live possibility and the main levers are single constants. After that, pixel-art **Phase 3 — enemy labels**; the Phase 3-4 outline is at the end of this file.
 
 ### Phase 21 — Major pivot: campaign removed, Endless-only with persistent progression — DONE (2026-09-10)
 
@@ -723,6 +723,77 @@ Two harness traps worth remembering: `startWave()` clears any standing boss, so
 a hand-spawned boss vanishes when the countdown ends; and `advanceStage()`
 no-ops unless `stageIntermission` is true. Both made a correct build look broken
 until the test was fixed.
+
+---
+
+## Stage 4 retune: closing the escape route — DONE (2026-09-12)
+
+Playtest verdict on the rebuilt stage 4: too easy. The diagnosis is the one the
+conversion should have anticipated — **the old stage was hard because you could
+not disengage**, not because its enemies were strong. Pinned in a lane with
+enemies closing from both sides, you had to fight. In an open 1600x1440 world
+you simply leave.
+
+The numbers were stark. Player speed **275**; boss **68**, walker 52, brute 36.
+Only runners (128) could pursue at all, at ~24% of the mix, and spawns arrived
+in a uniform ring 450-650 out — so running in any direction was free and stayed
+free. The user asked for "the hardest thing in the rotation", and chose closing
+the escape route over inflating numbers.
+
+### Four levers, all gated on `bossId != null`
+
+- **Boss speed is data now.** `BossDef.speed` (Juggernaut 155) replaces a
+  hardcoded 68, scaled by enrage phase via `bossSpeed()` — ~205 at phase 2
+  against the player's 275. Measured: sprinting flat out in a straight line
+  opens 400 -> 968 over 8s, and standing still for 3s gives back 968 -> 616.
+  That is the intended shape — space is something you spend, not something you
+  have — and the world is only 1600 wide, so the sprint runs out of map.
+- **Shield Charge is an actual charge.** It was a standing AOE with a different
+  tell colour; its own `desc` admitted "No new physics". It now locks a heading
+  at windup end and commits, using the `"attack"` state that the `Boss` union
+  had declared and nothing ever used. 560 units/s for 0.62s.
+- **Spawns lean into the run.** On boss stages ~55% of spawns land in a ±0.7
+  rad cone around the player's heading while they're moving. Measured: 150 of
+  200 spawns ahead of a sprinting player, against 104/200 on stage 1.
+- **More of the crowd can chase.** Runner cap 0.6 -> 1.2 on boss stages: 24% ->
+  37% of the mix. Runners are the only fodder faster than a walking player.
+
+### Two things the numbers exposed
+
+**Boss waves were the lightest waves in the stage.** `buildWave` gave a boss
+wave `min(40, …)` against an ordinary wave's `min(72, …)` — 40 vs 72 at stage 4.
+Right when the boss dominated a lane and fodder was garnish; backwards for the
+stage that is supposed to be the wall. Now 0.85 of the ordinary curve (61),
+still a step down because the boss is worth something, no longer a discount.
+
+**The charge would never have appeared.** Every act in `acts.ts` sets
+`bossId: "juggernaut"`, and the Juggernaut's pool was `["slam", "mortar",
+"call"]`. Shield Charge belongs to the Neighborhood Watch, which nothing
+reaches — so the anti-kiting attack was unreachable dead code until
+`shieldcharge` was added to the Juggernaut's pool. Worth remembering that
+`BOSS_DEFS` contains more bosses than the game can actually spawn.
+
+### The telegraph is part of the mechanic, not decoration
+
+`drawBossTelegraphs` drew a 110-radius ring for shieldcharge. A ring says "back
+away", which is the one response that does not work against a lunge. It now
+draws the **lane** — a rect from the boss along the locked heading, length
+exactly `CHARGE_SPEED * CHARGE_TIME` — so the tell shows the real danger zone
+and stepping out of the line is legible as the counter-play.
+
+That length is also why the first numbers were wrong: at 520 x 0.45 the lane
+was 234 units, and the boss picks attacks at any range, so a charge chosen at
+normal engagement distance simply fell short. 560 x 0.62 (~347) covers the
+range it actually opens from, and the longer commit doubles as the player's
+punish window.
+
+### Untested
+
+Whether this overshot. The tuning was deliberately aggressive on request, and
+melee contact is 26 per 1.1s against ~100 HP — roughly four seconds of sustained
+contact is death, and the boss is now much better at maintaining contact. Every
+main lever is a single constant (`BossDef.speed`, `CHARGE_SPEED`/`CHARGE_TIME`,
+the 0.55 spawn-bias chance, the 1.2 runner cap), so walking it back is cheap.
 
 ---
 
