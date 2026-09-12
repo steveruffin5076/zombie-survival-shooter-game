@@ -17,11 +17,18 @@ import {
 } from "./sheets";
 import { DIRS, FRAMES, GUN_SIZE, SOLDIER_SIZE } from "./sprites/soldier";
 import { Z_DIRS, Z_FRAMES, Z_SIZE, Z_VARIANTS, type ZSpriteType } from "./sprites/zombies";
+import { TILE_PX, TILE_VARIANTS, buildTileBufs, type GroundTheme } from "./sprites/tiles";
+import { PROP_SIZE, buildPropBufs } from "./sprites/props";
 import type { WeaponClass } from "../weapons";
 
 export { PX_SCALE, dirFor };
 export { DIRS, FRAMES, SOLDIER_SIZE, GUN_SIZE } from "./sprites/soldier";
 export { Z_DIRS, Z_FRAMES, Z_SIZE, Z_VARIANTS, type ZSpriteType } from "./sprites/zombies";
+export { TILE_PX, TILE_VARIANTS, tileVariant, groundTheme, type GroundTheme } from "./sprites/tiles";
+export { PROP_KINDS, PROP_VARIANTS, PROP_SIZE, WRECK_KIND } from "./sprites/props";
+
+/** Tile edge in CANVAS units — what the render loop steps by. */
+export const TILE_UNITS = TILE_PX * PX_SCALE;
 
 /** Turn one authored buffer into a canvas at 1:1 art-pixel scale. */
 function toCanvas(buf: PixelBuf): HTMLCanvasElement {
@@ -43,6 +50,8 @@ export class SpriteAtlas {
   private soldierPoses: HTMLCanvasElement[] | null = null;
   private gunPoses = new Map<WeaponClass, HTMLCanvasElement[]>();
   private zombiePoses = new Map<ZSpriteType, HTMLCanvasElement[]>();
+  private tileSets = new Map<GroundTheme, HTMLCanvasElement[]>();
+  private propSets = new Map<number, HTMLCanvasElement[]>();
   /** White silhouettes for hit flashes, keyed by the pose they mask. */
   private masks = new WeakMap<HTMLCanvasElement, HTMLCanvasElement>();
   /** Pre-rendered radial glows, keyed by color. */
@@ -86,6 +95,37 @@ export class SpriteAtlas {
     }
     const i = zombieIndex(variant % Z_VARIANTS, dir % Z_DIRS, frame % Z_FRAMES);
     return poses[i];
+  }
+
+  /**
+   * One ground tile variant. Built per theme on first use — a run only ever
+   * stands on the themes its stages actually use.
+   */
+  tile(theme: GroundTheme, variant: number): HTMLCanvasElement {
+    let set = this.tileSets.get(theme);
+    if (!set) {
+      set = this.timed(() => buildTileBufs(theme).map(toCanvas));
+      this.tileSets.set(theme, set);
+    }
+    return set[variant % TILE_VARIANTS];
+  }
+
+  /** One decor prop variant, built per kind on first use. */
+  prop(kind: number, variant: number): HTMLCanvasElement {
+    let set = this.propSets.get(kind);
+    if (!set) {
+      set = this.timed(() => buildPropBufs(kind).map(toCanvas));
+      this.propSets.set(kind, set);
+    }
+    // modulo the built set, not PROP_VARIANTS: the stage wreck has one entry
+    // per theme rather than three cosmetic variants
+    return set[variant % set.length];
+  }
+
+  /** Half-extent of a prop sprite in CANVAS units, as [halfW, halfH]. */
+  propHalf(kind: number): readonly [number, number] {
+    const [w, h] = PROP_SIZE[kind];
+    return [(w * PX_SCALE) / 2, (h * PX_SCALE) / 2];
   }
 
   /**

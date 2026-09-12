@@ -25,8 +25,8 @@ import {
   type AimTarget, type BossAttack,
 } from "./boss";
 import {
-  DIRS, FRAMES, GUN_HALF, PX_SCALE, SOLDIER_HALF, SpriteAtlas,
-  Z_DIRS, Z_FRAMES, dirFor, type ZSpriteType,
+  DIRS, FRAMES, GUN_HALF, PROP_VARIANTS, PX_SCALE, SOLDIER_HALF, SpriteAtlas, TILE_UNITS, WRECK_KIND,
+  Z_DIRS, Z_FRAMES, dirFor, groundTheme, tileVariant, type ZSpriteType,
 } from "./art/cache";
 import { muzzleReach } from "./art/sprites/soldier";
 import type { EngineEvent, GameStats, HudState, InventorySnapshot, ProfileSnapshot, UpgradeChoice } from "./types";
@@ -40,6 +40,8 @@ const H = 720;
 const GROUND = 584; // Kept for compatibility with attract mode and particle effects
 // Top-down camera: world bounds for player movement
 const WORLD_H = 1440; // vertical play area height
+/** Theme order the per-theme stage wrecks are authored in (see props.ts). */
+const WRECK_THEMES = ["cemetery", "suburbs", "highway", "arena"];
 const TAU = Math.PI * 2;
 /** Settings zoom bounds. The floor is 1 on purpose: at >= 1 the visible world
  * only ever shrinks, so render()'s culling bounds stay a superset and need no
@@ -184,10 +186,13 @@ interface Decal { x: number; y: number; s: number; a: number }
 interface SpawnItem { type: ZType; boss?: boolean }
 interface Banner { text: string; sub: string; t: number; dur: number }
 // kind 0 stone-a 1 stone-b 2 tree 3 lamp 4 wrecked car 5 barrier 6 rubble pile
-interface Decor { x: number; y: number; kind: number; s: number; ph: number }
+interface Decor { x: number; y: number; kind: number; v: number; ph: number }
 /** Solid-collision radius per decor kind (world units, scaled by the decor's own `s`).
  * 0 means walk-through — just the lamp post's thin light pole. */
-const DECOR_SOLID_R = [11, 13, 16, 0, 18, 14, 16];
+const DECOR_SOLID_R = [11, 13, 16, 0, 18, 14, 16, 34];
+// These are no longer scaled per instance. Variety is three authored sprite
+// variants per kind instead of a 0.7-1.25x scale, so every prop of a kind now
+// has the hitbox its art actually draws — the Phase 1 art/hitbox fix again.
 interface Crate { x: number; y: number; tier: CrateTier; opened: boolean }
 interface GrenadeProj { x: number; y: number; vx: number; vy: number; fuse: number }
 
@@ -660,8 +665,23 @@ export class Engine {
         y = R(40, WORLD_H - 40);
         if (Math.hypot(x - spawnX, y - spawnY) > 120) break;
       }
-      this.decor.push({ x, y, kind, s: R(0.7, 1.25), ph: R(0, TAU) });
+      this.decor.push({ x, y, kind, v: Math.floor(R(0, PROP_VARIANTS)), ph: R(0, TAU) });
     }
+
+    // One set-piece wreck per stage — a landmark to navigate by, in the spirit
+    // of the crashed plane in the reference art. Placed from the stage number
+    // rather than randomly, so a given stage always reads the same, and pushed
+    // clear of the spawn point: it is the only prop big enough that landing on
+    // the player would matter. At 112x80 against a 2880x1440 world it is a
+    // feature to walk around, not a wall that funnels the fight.
+    const themeIdx = WRECK_THEMES.indexOf(theme.id);
+    const wx = worldW * (0.22 + ((this.stage * 7) % 5) * 0.14);
+    let wy = WORLD_H * (0.2 + ((this.stage * 3) % 4) * 0.2);
+    if (Math.hypot(wx - spawnX, wy - spawnY) < 260) {
+      wy += wy < spawnY ? -WORLD_H * 0.18 : WORLD_H * 0.18;
+    }
+    wy = clamp(wy, 90, WORLD_H - 90);
+    this.decor.push({ x: wx, y: wy, kind: WRECK_KIND, v: Math.max(0, themeIdx), ph: 0 });
     // ground tufts, scattered the same way (world coords, no parallax)
     const tuftCount = Math.round(area / 9000);
     for (let i = 0; i < tuftCount; i++) {
@@ -677,7 +697,7 @@ export class Engine {
     const p = this.pl;
     const playerR = 13;
     for (const d of this.decor) {
-      const solidR = DECOR_SOLID_R[d.kind] * d.s;
+      const solidR = DECOR_SOLID_R[d.kind];
       if (solidR <= 0) continue;
       const dx = p.x - d.x, dy = p.y - d.y;
       const dist = Math.hypot(dx, dy) || 1;
@@ -3108,33 +3128,49 @@ export class Engine {
     c.fillStyle = theme.groundDeep;
     c.fillRect(0, 0, W, H);
 
-    // soft pool of light around the player, anchored to their real screen position
-    const pool = c.createRadialGradient(px, py, 40, px, py, H * 0.62);
-    pool.addColorStop(0, theme.groundTop);
-    pool.addColorStop(1, theme.groundMid);
-    c.fillStyle = pool;
-    c.fillRect(0, 0, W, H);
-
     c.save();
     this.camTransform(cam, camY);
     // visible world-space bounds, inverse of the translate above
     const wx0 = cam - 80, wx1 = cam + W + 80;
     const wy0 = -camY - 80, wy1 = H - camY + 80;
 
-    // fine scan grid — sells top-down motion without a horizon line
-    c.strokeStyle = "rgba(255,255,255,0.035)";
-    c.lineWidth = 1;
-    const grid = 64;
-    c.beginPath();
-    for (let gx = Math.floor(wx0 / grid) * grid; gx < wx1; gx += grid) {
-      c.moveTo(gx, wy0);
-      c.lineTo(gx, wy1);
+    // tiled floor. Variant per tile comes from hashing its coordinates, so the
+    // layout is a pure function of position — no per-tile state, and identical
+    // across a reload.
+    const gt = groundTheme(theme.id);
+    const t0x = Math.floor(wx0 / TILE_UNITS), t1x = Math.floor(wx1 / TILE_UNITS);
+    const t0y = Math.floor(wy0 / TILE_UNITS), t1y = Math.floor(wy1 / TILE_UNITS);
+    for (let ty = t0y; ty <= t1y; ty++) {
+      for (let tx = t0x; tx <= t1x; tx++) {
+        c.drawImage(
+          this.atlas.tile(gt, tileVariant(tx, ty)),
+          tx * TILE_UNITS, ty * TILE_UNITS, TILE_UNITS, TILE_UNITS
+        );
+      }
     }
-    for (let gy = Math.floor(wy0 / grid) * grid; gy < wy1; gy += grid) {
-      c.moveTo(wx0, gy);
-      c.lineTo(wx1, gy);
-    }
-    c.stroke();
+    c.restore();
+
+    // The light pool used to BE the ground — a radial fill from groundTop to
+    // groundMid. With a textured floor underneath it has to darken rather than
+    // paint, so it is the same gradient composited `multiply`: white at the
+    // player leaves the tile untouched, groundDeep at the rim crushes it to
+    // black. Screen-space on purpose, so the lit area doesn't grow with zoom.
+    c.save();
+    c.globalCompositeOperation = "multiply";
+    const pool = c.createRadialGradient(px, py, 40, px, py, H * 0.72);
+    // Neutral greys, not the theme's ground colors: the tiles already carry the
+    // stage's hue, so the falloff only has to change brightness. Multiplying by
+    // a near-black theme color instead crushes the floor to nothing about two
+    // tiles out and throws away the texture this phase exists to add.
+    pool.addColorStop(0, "#ffffff");
+    pool.addColorStop(0.45, "#9299a0");
+    pool.addColorStop(1, "#0b0e12");
+    c.fillStyle = pool;
+    c.fillRect(0, 0, W, H);
+    c.restore();
+
+    c.save();
+    this.camTransform(cam, camY);
 
     // ground tufts (world-space, no parallax — the ground is directly beneath you)
     c.strokeStyle = "rgba(52,84,56,0.7)";
@@ -3445,125 +3481,35 @@ export class Engine {
     c.restore();
   }
 
-  /** Top-down footprint for each decor kind — drawn flat, as seen from directly above. */
+  /**
+   * Top-down footprint for each decor kind — one atlas blit, plus the two
+   * effects that can't be baked into a sprite because they're state-driven:
+   * the contact shadow and the lamp's flicker.
+   *
+   * The tree's sway and the barrier's pulsing hazard stripe are gone. Both were
+   * per-prop canvas work every frame, and a swaying canopy read as almost
+   * nothing from directly above — not worth re-animating a bitmap for.
+   */
   private drawDecor(d: Decor, t: number) {
     const c = this.ctx;
-    c.save();
-    c.translate(d.x, d.y);
-    c.scale(d.s, d.s);
-    // contact shadow every kind shares, drawn first so accessories sit on top
-    c.fillStyle = "rgba(0,0,0,0.35)";
-    c.beginPath();
-    c.ellipse(1.5, 2, 15, 12, 0, 0, TAU);
-    c.fill();
-    if (d.kind === 0 || d.kind === 1) {
-      // tombstone slab, seen from above
-      c.fillStyle = "#141b29";
-      c.strokeStyle = "rgba(148,163,184,0.18)";
-      c.lineWidth = 1;
-      if (d.kind === 0) {
-        this.rr(-9, -13, 18, 26, 6);
-        c.fill();
-        c.stroke();
-        c.strokeStyle = "rgba(148,163,184,0.28)";
-        c.beginPath();
-        c.moveTo(-5, 0); c.lineTo(5, 0);
-        c.moveTo(0, -5); c.lineTo(0, 5);
-        c.stroke();
-      } else {
-        this.rr(-12, -12, 24, 24, 4);
-        c.fill();
-        c.stroke();
-      }
-    } else if (d.kind === 2) {
-      // dead tree canopy, viewed from above — irregular blob + radiating cracks
-      const sway = Math.sin(t * 0.7 + d.ph) * 1.5;
-      c.fillStyle = "#0c1119";
-      c.beginPath();
-      c.moveTo(20 + sway, 0);
-      for (let i = 1; i <= 8; i++) {
-        const a = (i / 8) * TAU;
-        const rr = 15 + Math.sin(a * 3 + d.ph) * 5;
-        c.lineTo(Math.cos(a) * rr + sway * 0.3, Math.sin(a) * rr);
-      }
-      c.closePath();
-      c.fill();
-      c.strokeStyle = "#1c2634";
-      c.lineWidth = 1.4;
-      c.beginPath();
-      c.moveTo(0, 0); c.lineTo(12, -10);
-      c.moveTo(0, 0); c.lineTo(-14, -4);
-      c.moveTo(0, 0); c.lineTo(4, 14);
-      c.stroke();
-    } else if (d.kind === 3) {
-      // lamp post — a small pole cross-section with a pool of light beneath it
+    const [hw, hh] = this.atlas.propHalf(d.kind);
+
+    if (d.kind === 3) {
+      // lamp pool, from the pre-baked glow rather than a fresh
+      // createRadialGradient per lamp per frame
       const flick = 0.75 + 0.25 * Math.sin(t * 9 + d.ph) * Math.sin(t * 3.7 + d.ph);
-      const lg = c.createRadialGradient(0, 0, 2, 0, 0, 60);
-      lg.addColorStop(0, `rgba(251,146,60,${0.22 * flick})`);
-      lg.addColorStop(1, "rgba(251,146,60,0)");
-      c.fillStyle = lg;
-      c.fillRect(-60, -60, 120, 120);
-      c.fillStyle = "#0b0f18";
-      c.beginPath(); c.arc(0, 0, 4, 0, TAU); c.fill();
-      c.fillStyle = `rgba(253,186,116,${0.85 * flick})`;
-      c.beginPath(); c.arc(0, 0, 2.4, 0, TAU); c.fill();
-    } else if (d.kind === 4) {
-      // burnt-out car, roof/hood/trunk seen from above
-      c.fillStyle = "#12161c";
-      this.rr(-15, -28, 30, 56, 6);
-      c.fill();
-      c.fillStyle = "#1c222b";
-      this.rr(-11, -16, 22, 30, 4);
-      c.fill();
-      c.fillStyle = "rgba(0,0,0,0.6)";
-      c.fillRect(-9, -13, 18, 10);
-      c.fillRect(-9, 5, 18, 8);
-      c.fillStyle = "#05070a";
-      c.beginPath(); c.arc(-15, -18, 5, 0, TAU); c.fill();
-      c.beginPath(); c.arc(15, -18, 5, 0, TAU); c.fill();
-      c.beginPath(); c.arc(-15, 18, 5, 0, TAU); c.fill();
-      c.beginPath(); c.arc(15, 18, 5, 0, TAU); c.fill();
-      // drifting smoke, blooming outward from the wreck
-      const wob = Math.sin(t * 0.8 + d.ph) * 4;
-      c.fillStyle = "rgba(148,163,184,0.12)";
-      c.beginPath();
-      c.ellipse(wob, -4, 20, 20, 0, 0, TAU);
-      c.fill();
-    } else if (d.kind === 5) {
-      // concrete jersey barrier, a long slab with hazard stripes
-      c.fillStyle = "#1a1d22";
-      this.rr(-8, -22, 16, 44, 3);
-      c.fill();
-      c.strokeStyle = "rgba(148,163,184,0.18)";
-      c.lineWidth = 1;
-      c.stroke();
-      c.fillStyle = `rgba(251,191,36,${0.35 + 0.15 * Math.sin(t * 2 + d.ph)})`;
-      c.fillRect(-6, -3, 12, 3);
-      c.fillRect(-6, 6, 12, 3);
+      c.save();
+      c.globalAlpha = flick;
+      c.drawImage(this.atlas.glow("rgba(251,146,60,0.5)"), d.x - 60, d.y - 60, 120, 120);
+      c.restore();
     } else {
-      // collapsed rubble pile, exposed rebar lying flat
-      c.fillStyle = "#15181c";
+      c.fillStyle = "rgba(0,0,0,0.35)";
       c.beginPath();
-      c.moveTo(-18, -10);
-      c.lineTo(-4, -20);
-      c.lineTo(10, -8);
-      c.lineTo(18, 6);
-      c.lineTo(2, 18);
-      c.lineTo(-14, 10);
-      c.closePath();
+      c.ellipse(d.x + 1.5, d.y + 2, hw * 0.9, hh * 0.75, 0, 0, TAU);
       c.fill();
-      c.strokeStyle = "rgba(148,163,184,0.12)";
-      c.lineWidth = 1;
-      c.stroke();
-      c.strokeStyle = "#3f2a18";
-      c.lineWidth = 2;
-      c.lineCap = "round";
-      c.beginPath();
-      c.moveTo(-8, -4); c.lineTo(10, -10);
-      c.moveTo(-4, 8); c.lineTo(8, 4);
-      c.stroke();
     }
-    c.restore();
+
+    c.drawImage(this.atlas.prop(d.kind, d.v), d.x - hw, d.y - hh, hw * 2, hh * 2);
   }
 
   private drawDeployable(d: Deployable, t: number) {

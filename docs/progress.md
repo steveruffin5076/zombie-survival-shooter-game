@@ -7,7 +7,7 @@
 - **Completed plan (Phases 0–7):** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
 - **Design doc driving Phases 8+:** `enhancement-1.md` (repo root, on `main`)
-- **Last updated:** 2026-09-12 (tube-shotgun reload; pixel-art Phase 1 shipped, Phases 2-4 outlined at the end of this file)
+- **Last updated:** 2026-09-12 (pixel-art Phase 2 — environment — shipped; Phases 3-4 outlined at the end of this file)
 - ⚠ **`~/.claude/plans/logical-moseying-reddy.md` has been recycled.** That one path has held three unrelated plans now (Phases 8-12, then the pixel-art overhaul, then the shotgun reload). It is *not* an archive — whatever it holds is just the most recent planning session. This file is the durable record; don't send anyone to that path for history.
 
 ---
@@ -16,7 +16,7 @@
 
 **As of Phase 21, the campaign/mission system (Phases 8–20, the whole `enhancement-1.md` Aetheris/Redshift arc) is gone.** The user's explicit direction: "remove all campaign and its features, it's not suitable for this." The game is now Endless-mode-only, with a persistent, lifetime meta-progression system replacing the old campaign's fixed Hideout loadout, and the noise/threat/suppressor system removed outright (a same-session follow-up request). Everything below Phase 21 in this file is history — kept for context on decisions made along the way, not a description of the current build.
 
-**Immediate next action:** pixel-art overhaul **Phase 2 — environment** (tiled ground, prop sprites, one set-piece wreck per stage). Phase 1 (characters) is shipped and live; the full Phase 2-4 outline is at the end of this file.
+**Immediate next action:** pixel-art overhaul **Phase 3 — enemy labels** (floating name + HP bar over zombies and bosses). Phases 1 (characters) and 2 (environment) are shipped; the Phase 3-4 outline is at the end of this file.
 
 ### Phase 21 — Major pivot: campaign removed, Endless-only with persistent progression — DONE (2026-09-10)
 
@@ -554,39 +554,97 @@ tube-full plays `reloadEnd()`, chosen by reading `audio.ts`, never heard.
 
 ---
 
-## Pixel-art overhaul — Phases 2-4 (planned, not started)
+## Pixel-art overhaul, Phase 2: environment — DONE (2026-09-12)
 
-Phase 1 (characters) is shipped; see the section above it for what landed and
-what it cost. The remaining phases, in the order they were agreed with the user.
-Each ships and gets verified in the browser before the next starts.
+The floor was one flat theme color, a radial light pool and a 64px scan grid.
+Against the Phase 1 characters standing on it that read as grey-box. Phase 2
+replaces the ground with tiles, the decor vectors with sprites, and adds one
+set-piece landmark per stage. Cost: **6.6 KB** of bundle (470 -> 477 KB).
 
-### Phase 2 — Environment (next)
+**Layout.** `art/sprites/tiles.ts` (5 ground variants x 4 themes) and
+`art/sprites/props.ts` (3 variants x 7 decor kinds, plus a per-theme stage
+wreck). Both pure, both asserted under vitest; `cache.ts` gains `tile()` and
+`prop()` alongside the Phase 1 groups, lazily per theme and per kind.
 
-Today `render()` paints a flat theme color, a radial light pool, a faint 64 px
-grid, grass tufts and blood decals — that is the entire world, and it is what
-now looks thin next to the Phase 1 characters standing on it.
+### What the tiling actually needed
 
-1. **`sprites/tiles.ts`** — 4-6 ground variants per theme (cracked concrete,
-   weathered, stained, asphalt, gravel), authored with the same `PixelBuf`
-   primitives as the characters. Which variant lands on which tile comes from
-   hashing the tile's x/y, so the layout is deterministic, identical every run,
-   and needs no storage. Use a real hash (MurmurHash3-style), not `x * 31 + y` —
-   a weak mix visibly stripes on a grid.
-2. **Tile the ground** — replace the flat fill + grid with a blit loop over the
-   already-computed visible bounds (`wx0/wx1/wy0/wy1`). The radial light pool
-   stays on top; it is what sells the darkness mechanic and must not be tiled
-   over.
-3. **`sprites/props.ts`** — turn `drawDecor()` from ellipses into sprite blits.
-   The kinds and their per-theme weights already exist as `decorWeights` in
-   `themes.ts`: tombstoneA/B, tree, lamp, car, barrier, rubble. Only the draw
-   path changes; spawning and collision stay as they are.
-4. **One set-piece wreck per stage** — a large focal prop in the spirit of the
-   crashed plane in the user's reference screenshot, at a fixed per-stage world
-   position rather than randomly placed. Watch that a ~100-unit obstacle doesn't
-   funnel play into a corridor.
+- **The light pool had to stop being the ground.** It was a radial fill from
+  `groundTop` to `groundMid` — it *was* the floor color. With a textured floor
+  underneath it has to darken rather than paint, so it is now the same gradient
+  composited `multiply`.
+- **And it had to stop using theme colors.** The first pass multiplied by
+  `theme.groundDeep` at the rim. Those values are near-black (`#04060a` for
+  cemetery) because they were the finished on-screen color; as a multiplier they
+  crush the floor to nothing about two tiles out, throwing away the texture the
+  phase exists to add. It is neutral greys now — the tiles carry the stage's
+  hue, so the falloff only has to change brightness. Tile palettes are
+  correspondingly authored *brighter* than the matching `groundTop`.
+- **The hash has to actually mix.** `tileVariant` is a full integer avalanche.
+  A cheap `x * 31 + y` leaves the low bits correlated along a row, and the floor
+  stripes — the exact artifact tiling is meant to hide. There is a test that
+  walks 60 tiles along a fixed row and column and fails unless all 5 variants
+  appear in both.
 
-Phase 1's rules apply unchanged: variants not scaling, no gradient or
-`ctx.filter` per entity per frame, composite-then-outline.
+### Props: variants, not scale
+
+Decor used to carry `s: R(0.7, 1.25)` and scale its vectors by it. Non-integer
+scaling of a bitmap resamples it off the pixel grid, so `s` is gone and
+per-instance variety is three authored variants per kind. That also removed a
+quiet art/hitbox mismatch: `DECOR_SOLID_R` was multiplied by the same `s`, so
+collision varied with a factor the art no longer uses. Radii are fixed per kind
+now and sprites are sized to roughly 2x them — the Phase 1 lesson again.
+
+Two animations were dropped rather than re-implemented against a bitmap: the
+tree's sway and the barrier's pulsing hazard stripe. Both were per-prop canvas
+work every frame, and a swaying canopy read as almost nothing from directly
+above. The lamp keeps its flicker, but now as `globalAlpha` over the pre-baked
+`atlas.glow()` instead of a fresh `createRadialGradient` per lamp per frame.
+
+**The first dead tree read as a mound of dirt.** It was authored as a filled
+ring of lobes — i.e. as foliage, which is exactly what a dead tree doesn't have.
+Rebuilt as bare limbs radiating from a trunk with ground visible between them.
+
+**A test caught two identical lamp variants.** `lampPole` only branched on
+`v === 2`, so variants 0 and 1 were byte-identical and a third of the claimed
+variety didn't exist. The "variants of a kind must differ" assertion is cheap
+and found a real gap the screenshots did not — three fixtures now.
+
+### Set-piece wrecks
+
+One per stage: collapsed crypt, overturned bus, jackknifed semi, downed
+helicopter, at 112x80 world units. Registered as decor kind 7 so it reuses the
+existing collision, culling and draw path, but never rolled by the weighted
+spawner — the engine places exactly one, positioned from the stage number so a
+given stage always reads the same. Its four "variants" are the four themes,
+which is why `prop()` indexes modulo the built set rather than `PROP_VARIANTS`.
+Against a 2880x1440 world it is a landmark to walk around, not a wall; measured
+400-900 units from every stage's spawn point.
+
+### Cost
+
+Render time per frame with 47 zombies, measured by wrapping `render()` and
+taking the baseline in the same headless session so rAF throttling cancels:
+
+| viewport | before | after |
+|---|---|---|
+| 568x320 | 1.52 ms | 2.06 ms |
+| 844x390 | 1.57 ms | 1.93 ms |
+| 1400x900 | 2.05 ms | 1.94 ms |
+
+Desktop is a wash — the tile blits replace a large stroked grid that cost about
+as much. Small viewports pay ~0.4 ms, since there the old grid was nearly free.
+Worst case is ~3% of a 16.7 ms frame. Note these are render-call costs, not
+end-to-end fps: headless throttles rAF, so only the before/after comparison
+within one session means anything.
+
+---
+
+## Pixel-art overhaul — Phases 3-4 (planned, not started)
+
+Phases 1 (characters) and 2 (environment) are shipped; see their own sections
+for what landed and what it cost. The remaining phases, in the order they were
+agreed with the user. Each ships and gets verified in the browser before the
+next starts.
 
 ### Phase 3 — Enemy labels
 
