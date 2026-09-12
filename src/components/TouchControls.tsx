@@ -191,8 +191,11 @@ export default function TouchControls({
 
       {/* dash + fire-mode sit above the right stick, clear of both thumbs.
        * Hud.tsx hides its own fire-mode/dash panels on touch (`touch` prop),
-       * so this is the only copy of that UI on a touch device. */}
-      <div className="pointer-events-auto absolute bottom-60 right-6 flex flex-col items-center gap-4">
+       * so this is the only copy of that UI on a touch device.
+       * Side by side rather than stacked: at a 44px real-pixel minimum these grow
+       * in layer units as the screen shrinks, and on a 320px-tall phone a column
+       * here plus the HUD's own column above leaves no gap between them. */}
+      <div className="pointer-events-auto absolute bottom-60 right-6 flex items-center gap-4">
         <button
           className={`${btnClass} ${dashReady ? "border-cyan-300/60 text-cyan-200 shadow-[0_0_14px_rgba(103,232,249,0.4)]" : ""}`}
           onPointerDown={(e) => {

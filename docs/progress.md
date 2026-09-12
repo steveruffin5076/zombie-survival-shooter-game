@@ -382,3 +382,39 @@ Phases 8–12 are all DONE. The 6-Act campaign framework exists for all 24 stage
 - **Three features in `enhancement-1.md` assume mechanics that don't exist.** Act III's "Blind Smasher — immune to body damage, target the legs" and Act VI's "lasers alter lane positioning" both need systems strictly larger than the headshot change rejected in Phase 10. Act II's Vaulter is tractable — `acquireTarget`'s lane check is a single line (`engine.ts:914`). All three are **unbudgeted**; settle scope before committing to Acts III/VI.
 - **`private boss` is a singleton** (`engine.ts:208`). Fine for one boss per act; any future two-boss encounter is an array refactor touching `updateBullets:1403`, `acquireTarget`, `getHud`, and `drawBoss`.
 - **`enhancement-1.md` is itself incomplete** — it cuts off mid-sentence inside the intel-panel mockup (the `THE METRO CHRONICLE` example), so all document copy in Phase 11 is ours to write.
+
+---
+
+## Tap targets on the scaled UI layer
+
+The React UI is authored at 1280×720 and scaled by `uiScale = boxWidth / 1280`
+(`App.tsx`), so every CSS pixel inside it draws at `uiScale` real pixels. On a
+844×390 phone that factor is ~0.54, which put a 36px desktop button at ~19 real
+pixels — well under the ~44px Apple and Google both give as the comfortable
+minimum, and the direct cause of "the UI touch screen button are not match".
+
+The fix is one rule rather than per-component phone sizes: `App.tsx` publishes
+`--ui-scale` on the layer, and `index.css` floors every `button` and
+`input[type=range]` at `calc(44px / var(--ui-scale, 1))`. That expresses the
+minimum in **real screen pixels at any viewport**, desktop included.
+
+Two layout consequences follow from this, and any new UI has to respect them:
+
+- **Controls grow in layer units as the screen shrinks.** A 44px target is 81
+  layer units at `uiScale` 0.54 and 99 at 0.44. Anything positioned near a
+  button — especially an `absolute` element — must be checked at the *smallest*
+  supported viewport (568×320), not just at 844×390.
+- **Corner clusters go one button wide.** A row of three system buttons reached
+  far enough left on a small phone to clip the "D" of GRAVEYARD, so the menu's
+  cluster is a column; conversely the touch dash/fire-mode pair became a **row**,
+  because a column there plus the HUD's own column above left no gap between
+  them on a 320px-tall screen. The close buttons in Settings / Tutorial /
+  LoadoutProfile moved out of `absolute` and into the title row for the same
+  reason.
+
+Verified with a Playwright audit at 568×320, 844×390, 915×412 and 1400×900 across
+menu / settings / tutorial / loadout / weapon-category / in-game: zero controls
+under 44px, zero horizontal overflow, and zero overlaps between buttons, the two
+joysticks, and any text. The overlap check must clip each rect against its
+scrolling ancestors — text scrolled out of an `overflow-y: auto` region keeps its
+rect and otherwise reads as a false collision.

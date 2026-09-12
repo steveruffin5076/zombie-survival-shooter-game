@@ -27,7 +27,11 @@ export function Menu({
 }) {
   return (
     <div className="pointer-events-auto absolute inset-0 z-30 flex flex-col items-center justify-center overflow-y-auto bg-gradient-to-b from-black/60 via-transparent to-black/85 px-4 py-4">
-      <div className="absolute flex items-center gap-2 right-6 top-6">
+      {/* stacked, not a row: each button is a 44px touch target in REAL pixels, so in
+        * the layer's own 1280x720 units it grows as uiScale shrinks. A row of three
+        * reaches far enough left on a small phone to clip the "D" of GRAVEYARD; a
+        * column is only ever one button wide, so it clears the title at every size. */}
+      <div className="absolute flex flex-col items-end gap-2 right-6 top-6">
         {canFullscreen && (
           <button
             onClick={onFullscreen}

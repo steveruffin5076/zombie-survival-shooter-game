@@ -20,15 +20,19 @@ export default function Settings({
   return (
     <div className="pointer-events-auto absolute inset-0 z-50 flex items-center-safe justify-center overflow-y-auto bg-black/85 p-3 backdrop-blur-[6px]">
       <div className="anim-pop relative flex max-h-full w-full max-w-md flex-col gap-6 overflow-y-auto rounded-xl border border-amber-500/20 bg-zinc-950/95 p-6 shadow-[0_0_80px_rgba(0,0,0,0.7)]">
-        <button
-          onClick={onClose}
-          className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-zinc-400 transition hover:border-white/25 hover:text-white"
-          aria-label="Close"
-        >
-          <X className="h-4 w-4" />
-        </button>
-
-        <div className="text-[12px] font-bold tracking-[0.4em] text-amber-400/70">SETTINGS</div>
+        {/* the close button shares a row with the title rather than floating over the
+          * panel: it grows to a 44px touch target on phones (see .ui-layer in index.css)
+          * and an absolute one at that size covers the first setting's readout */}
+        <div className="flex items-start justify-between gap-3">
+          <div className="text-[12px] font-bold tracking-[0.4em] text-amber-400/70">SETTINGS</div>
+          <button
+            onClick={onClose}
+            className="-mr-2 -mt-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-zinc-400 transition hover:border-white/25 hover:text-white"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
 
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between text-sm font-bold tracking-[0.1em] text-zinc-300">

@@ -304,8 +304,15 @@ export default function App() {
          * game view. pointer-events-none so the canvas still gets mouse aim —
          * every interactive child opts back in with pointer-events-auto. */}
         <div
-          className="pointer-events-none absolute left-0 top-0 z-20 origin-top-left"
-          style={{ width: UI_W, height: UI_H, transform: `scale(${uiScale})` }}
+          className="ui-layer pointer-events-none absolute left-0 top-0 z-20 origin-top-left"
+          style={{
+            width: UI_W,
+            height: UI_H,
+            transform: `scale(${uiScale})`,
+            // published so CSS can size tap targets in real screen pixels —
+            // everything in here is drawn at 1/uiScale, see index.css
+            "--ui-scale": uiScale,
+          } as React.CSSProperties}
         >
         {screen === "game" && hud && inv && (
           <Hud

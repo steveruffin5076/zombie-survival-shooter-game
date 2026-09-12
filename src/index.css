@@ -139,3 +139,26 @@ body {
   width: min(100vw, 177.78dvh);
   aspect-ratio: 16 / 9;
 }
+
+/* ---------- tap targets ----------
+ * The whole UI layer is rendered at 1280x720 and scaled to fit the play box, so
+ * on a phone it draws at roughly half size and a 36px desktop button lands at
+ * ~19 real pixels — far under the ~44px both Apple and Google recommend as the
+ * comfortable minimum. Dividing by the layer's own scale expresses these
+ * minimums in REAL screen pixels at any size, so one rule covers every button
+ * instead of each component carrying its own phone-specific sizes. */
+.ui-layer button,
+.ui-layer input[type="range"] {
+  min-height: calc(44px / var(--ui-scale, 1));
+}
+
+.ui-layer button {
+  min-width: calc(44px / var(--ui-scale, 1));
+}
+
+/* a grown button with a tiny glyph in the middle reads as broken, so the icons
+ * get a floor of their own */
+.ui-layer button svg {
+  min-width: calc(18px / var(--ui-scale, 1));
+  min-height: calc(18px / var(--ui-scale, 1));
+}
