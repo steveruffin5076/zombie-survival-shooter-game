@@ -363,11 +363,6 @@ export default function Hud({
                   >
                     {w.ammo}/{w.mag}
                   </span>
-                  {w.variants > 1 && (
-                    <span className="absolute right-1 top-0.5 text-[10px] font-bold text-cyan-300/70">
-                      ×{w.variants}
-                    </span>
-                  )}
                 </>
               ) : (
                 <>
