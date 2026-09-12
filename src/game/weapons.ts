@@ -28,6 +28,8 @@ export interface WeaponDef {
   range: number;
   /** trigger-limited, not cyclic — no full-auto hold-to-fire */
   semiAuto?: boolean;
+  /** tube/pump feed: loads one shell at a time and can be cut short to fire */
+  tubeReload?: boolean;
   /** multiplier on the pivot turn-delay; 1 = baseline */
   pivotMul?: number;
   /** hideout mag upgrade tiers — data only, not read until the hideout exists */
@@ -36,6 +38,11 @@ export interface WeaponDef {
 }
 
 const rps = (rpm: number) => rpm / 60;
+
+/** Seconds to feed a single shell. `reload` is the empty-to-full time for every
+ * weapon, so a tube gun's per-shell cost is that divided by its capacity — a
+ * full reload still takes exactly as long, it just no longer has to finish. */
+export const shellReloadTime = (w: WeaponDef) => w.reload / w.mag;
 
 /* screen is 1280 wide — range is expressed in screen fractions */
 const SCREEN = 1280;
@@ -158,7 +165,8 @@ export const WEAPONS: Record<string, WeaponDef> = {
     speed: 820, pierce: 0, knock: 210, recoil: 92, shake: 5.0,
     mag: 7, reserve: 56, reload: 1.6, moveMul: 0.92, swap: 0.24, critBonus: 0,
     range: RANGE.shotgun * 1.2,
-    desc: "7 shells, devastating. Fast tube reload between lulls.",
+    tubeReload: true,
+    desc: "7 shells, devastating. Feeds one shell at a time — fire without waiting for a full tube.",
   },
   spas12: {
     id: "spas12", name: "SPAS-12", short: "SPAS-12", cls: "shotgun",
@@ -166,7 +174,8 @@ export const WEAPONS: Record<string, WeaponDef> = {
     speed: 780, pierce: 0, knock: 180, recoil: 80, shake: 4.8,
     mag: 10, reserve: 60, reload: 2.3, moveMul: 0.88, swap: 0.26, critBonus: 0,
     range: RANGE.shotgun * 1.1,
-    desc: "Combat shotgun, 10-shell tube. Versatile close-range devastation.",
+    tubeReload: true,
+    desc: "Combat shotgun, 10-shell tube. Feeds one shell at a time — fire without waiting for a full tube.",
   },
   w1200: {
     id: "w1200", name: "Winchester 1200", short: "W1200", cls: "shotgun",
@@ -176,7 +185,8 @@ export const WEAPONS: Record<string, WeaponDef> = {
     mag: 8, reserve: 56, reload: 2.0, moveMul: 0.9, swap: 0.22, critBonus: 0,
     range: RANGE.shotgun * 1.15,
     semiAuto: true,
-    desc: "Pump-action reliability. Slow cycle, brutal per-shell payload.",
+    tubeReload: true,
+    desc: "Pump-action reliability. Brutal payload. Feeds one shell at a time — fire without waiting for a full tube.",
   },
 
   /* ---------------- CARBINES — longest range ---------------- */

@@ -1,7 +1,7 @@
 import { UPGRADES, type UpgradeDef } from "./upgrades";
 import {
   WEAPONS as WDEF, WEAPON_IDS, CLASS_ORDER, CLASS_LABEL, CLASS_ROLE, byClass, STARTER,
-  type WeaponClass, type WeaponDef,
+  shellReloadTime, type WeaponClass, type WeaponDef,
 } from "./weapons";
 import { Sfx } from "./audio";
 import { loadSettings, saveSettings } from "./settings";
@@ -1008,14 +1008,23 @@ export class Engine {
 
     // reload + auto-fire (all weapons are full-auto; rate differs per weapon)
     this.updateReload(dt);
+    const wantsFire = this.autoFire ? this.onTarget : this.mouse.down;
     if (this.reloading) {
-      // can't shoot mid-reload
+      // a tube gun cuts its reload short the moment it has a shell to fire
+      if (
+        wantsFire && this.ammo[this.kind] > 0 && p.cd <= 0 && p.useT <= 0 &&
+        this.effWeapon(this.kind).tubeReload
+      ) {
+        this.reloading = false;
+        this.reloadT = 0;
+        this.fire();
+      }
     } else if (this.ammo[this.kind] <= 0) {
       this.startReload(); // auto reload the instant the mag runs dry
     } else if (p.cd <= 0 && p.useT <= 0) {
       // AUTO-FIRE ON: shoot only when a zombie is on the laser line.
       // AUTO-FIRE OFF: manual trigger via mouse.
-      if (this.autoFire ? this.onTarget : this.mouse.down) this.fire();
+      if (wantsFire) this.fire();
     }
     if (this.ambushT > 0) this.ambushT -= dt;
 
@@ -1266,15 +1275,19 @@ export class Engine {
       }
     }
     this.reloading = true;
-    this.reloadDur = w.reload;
-    this.reloadT = w.reload;
+    // a tube gun clocks one shell at a time — same empty-to-full total, it just
+    // no longer has to run to completion
+    this.reloadDur = w.tubeReload ? shellReloadTime(w) : w.reload;
+    this.reloadT = this.reloadDur;
     this.sfx.reloadStart();
-    // eject spent magazine
-    const p = this.pl;
-    this.particles.push({
-      x: p.x, y: p.y - 40, vx: -p.face * R(40, 90), vy: R(-40, 10),
-      life: 0.7, max: 0.7, size: 3, color: "#78716c", grav: 1400, add: false,
-    });
+    if (!w.tubeReload) {
+      // eject spent magazine — a tube gun has none to drop
+      const p = this.pl;
+      this.particles.push({
+        x: p.x, y: p.y - 40, vx: -p.face * R(40, 90), vy: R(-40, 10),
+        life: 0.7, max: 0.7, size: 3, color: "#78716c", grav: 1400, add: false,
+      });
+    }
   }
 
   private finishReload() {
@@ -1299,7 +1312,35 @@ export class Engine {
   private updateReload(dt: number) {
     if (!this.reloading) return;
     this.reloadT -= dt;
-    if (this.reloadT <= 0) this.finishReload();
+    if (this.reloadT > 0) return;
+    const w = this.effWeapon(this.kind);
+    if (!w.tubeReload) {
+      this.finishReload();
+      return;
+    }
+    this.loadOneShell();
+    const full = this.ammo[this.kind] >= w.mag;
+    if (full || this.reserve[this.kind] === 0) {
+      this.reloading = false;
+      this.reloadT = 0;
+      this.sfx.reloadEnd();
+      if (full) {
+        this.texts.push({
+          x: this.pl.x, y: this.pl.y - 78, vy: -46, life: 0.7, max: 0.7,
+          text: "RELOADED", color: "#fbbf24", size: 12,
+        });
+      }
+      return;
+    }
+    this.reloadT += this.reloadDur; // keep feeding, carrying any overshoot
+  }
+
+  /** One shell into a tube gun. A reserve of -1 means unlimited — no tube
+   * shotgun carries that today, but the guard keeps the arithmetic honest. */
+  private loadOneShell() {
+    this.ammo[this.kind]++;
+    if (this.reserve[this.kind] > 0) this.reserve[this.kind]--;
+    this.sfx.click();
   }
 
   private fire() {
