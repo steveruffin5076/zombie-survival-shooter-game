@@ -12,7 +12,7 @@ export interface GameSettings {
 }
 
 const KEY = "graveyard-shift-settings";
-const DEFAULTS: GameSettings = { volume: 0.45, brightness: 1, zoom: 1 };
+const DEFAULTS: GameSettings = { volume: 0.45, brightness: 1, zoom: 1.3 };
 
 export function loadSettings(): GameSettings {
   try {
@@ -44,5 +44,5 @@ function clampBrightness(v: number) {
   return Math.max(0.5, Math.min(1.5, v));
 }
 function clampZoom(v: number) {
-  return Math.max(1, Math.min(1.5, v));
+  return Math.max(1, Math.min(2, v));
 }

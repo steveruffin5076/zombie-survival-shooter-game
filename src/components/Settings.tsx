@@ -74,7 +74,7 @@ export default function Settings({
           <input
             type="range"
             min={1}
-            max={1.5}
+            max={2}
             step={0.05}
             value={zoom}
             onChange={(e) => onZoomChange(Number(e.target.value))}

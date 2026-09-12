@@ -418,3 +418,57 @@ under 44px, zero horizontal overflow, and zero overlaps between buttons, the two
 joysticks, and any text. The overlap check must clip each rect against its
 scrolling ancestors — text scrolled out of an `overflow-y: auto` region keeps its
 rect and otherwise reads as a false collision.
+
+---
+
+## Pixel-art overhaul, Phase 1: characters
+
+Replaces the vector player and zombies with pre-rendered procedural pixel-art
+sprites. No image files: sprites are authored in code as RGBA buffers, blitted
+once into canvases, then `drawImage`d. The whole system costs **5.8 KB** of
+bundle (463 KB -> 469 KB), which is the entire reason for staying procedural.
+
+**Layout.** `src/game/art/` — `pixel.ts` (a `PixelBuf` grid with px/rect/oval/
+line/outline), `palette.ts` (material ramps), `sprites/soldier.ts` and
+`sprites/zombies.ts` (pure pose functions), `sheets.ts` (builds every pose as
+buffers — pure, so vitest's `node` environment can assert on all of them), and
+`cache.ts` (the one DOM seam, plus lazy per-type building).
+
+Sprites are authored per facing direction rather than rotated at draw time:
+`ctx.rotate` resamples a bitmap and smears exactly the pixels the art exists to
+keep sharp. Player 16 facings x 4 walk frames; zombies 8 facings x 4 frames x 2
+body variants. `ctx.imageSmoothingEnabled = false` in the constructor is what
+keeps the upscale crisp.
+
+### Three findings that changed the plan
+
+- **Sizing to hitboxes beat scaling units up.** The plan called for scaling
+  characters ~1.5x. Measuring first showed the old art was already much smaller
+  than its own hitbox — a walker drew ~22 units wide against a 38-unit collision
+  diameter, and a brute drew ~44 against 90. Sizing each sprite to roughly 2x its
+  ZCONF radius gets the "bigger characters" result *and* fixes a real
+  visual/hitbox mismatch, with no balance change at all.
+- **The zoom change went the other way.** The plan lowered `ZOOM_MIN` to 0.75.
+  In practice the art needed the camera *closer*, not further: `ZOOM_MAX` went
+  1.5 -> 2 and the default 1 -> 1.3. The floor stays at 1 — below it an art pixel
+  falls under a screen pixel and detail is lost rather than gained.
+- **"Blitting is faster" was not free.** The first working version was *slower*
+  than the vector art it replaced (21/22/18 fps vs 31/30/24 at 44 zombies).
+  Cause: a `createRadialGradient` per glowing zombie per frame, and `ctx.filter`
+  for hit flashes. Pre-rendering both — `SpriteAtlas.glow(color)` and
+  `.mask(sprite)` — turned that into 36/36/23 vs 31/30/24 at matched zoom:
+  ~20% faster on phone-sized viewports, a wash on desktop. Never assume a
+  rendering change is a win; measure against the branch point.
+
+### Rules for anything added here
+
+- Draw functions do **not** outline themselves — the caller composites, then
+  outlines once, or a gun's border gets stamped across the body beneath it.
+- Per-instance variety comes from **variants**, never from scaling a sprite:
+  non-integer scaling is what makes pixel art look muddy. `z.tint` picks a
+  variant now.
+- Anything drawn per entity per frame must be a `drawImage` of something
+  pre-built. Gradients and `ctx.filter` belong in the atlas, once.
+
+Atlas build cost is ~70 ms for the full set, lazily per type, reported as
+`__engine.atlas.buildMs` under `?debug=1`.

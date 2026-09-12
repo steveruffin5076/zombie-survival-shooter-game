@@ -24,6 +24,11 @@ import {
   BOSS_DEFS, cooldownFor, phaseFor, pickAttack, windupFor,
   type AimTarget, type BossAttack,
 } from "./boss";
+import {
+  DIRS, FRAMES, GUN_HALF, PX_SCALE, SOLDIER_HALF, SpriteAtlas,
+  Z_DIRS, Z_FRAMES, dirFor, type ZSpriteType,
+} from "./art/cache";
+import { muzzleReach } from "./art/sprites/soldier";
 import type { EngineEvent, GameStats, HudState, InventorySnapshot, ProfileSnapshot, UpgradeChoice } from "./types";
 
 /* ------------------------------------------------------------------ */
@@ -39,8 +44,14 @@ const TAU = Math.PI * 2;
 /** Settings zoom bounds. The floor is 1 on purpose: at >= 1 the visible world
  * only ever shrinks, so render()'s culling bounds stay a superset and need no
  * rework. Allowing zoom-out would break that. */
+// Zoom range. The floor stays at 1: the pixel sprites are authored at
+// PX_SCALE canvas units per art pixel, and zooming below 1 shrinks an art
+// pixel under one screen pixel, which drops detail rather than showing more.
+// The ceiling was raised for the pixel-art pass — at zoom 1 a 24x24 sprite is
+// a small figure on a 1280-wide field, and the detail it now carries only
+// reads once the camera is closer.
 const ZOOM_MIN = 1;
-const ZOOM_MAX = 1.5;
+const ZOOM_MAX = 2;
 
 const R = (a: number, b: number) => a + Math.random() * (b - a);
 const RI = (a: number, b: number) => Math.floor(R(a, b + 1));
@@ -105,8 +116,6 @@ const WAVE_SUBS = [
   "stay quiet, stay dark",
 ];
 
-const SKIN = ["#7a8f66", "#6d8560", "#87976b", "#5f7a55"];
-const CLOTH = ["#2a3040", "#33272b", "#24303a", "#3a3230"];
 const BLOOD = ["#7f1d1d", "#991b1b", "#b91c1c", "#5f1118"];
 
 interface Zombie {
@@ -330,6 +339,8 @@ export class Engine {
   private high = 0;
 
   // decor
+  /** Pre-rendered pixel-art sprites, built lazily per entity type. */
+  private atlas = new SpriteAtlas();
   private decor: Decor[] = [];
   private tufts: { x: number; y: number; h: number; s: number }[] = [];
 
@@ -341,6 +352,10 @@ export class Engine {
     canvas.width = W * dpr;
     canvas.height = H * dpr;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Sprites are authored at one art pixel per PX_SCALE canvas units and
+    // blitted up. Left smoothing on, the browser bilinear-filters that upscale
+    // and the pixel art turns to mush — this single line is what keeps it crisp.
+    this.ctx.imageSmoothingEnabled = false;
     this.high = Number(localStorage.getItem("graveyard-shift-high") || 0);
     const saved = loadSettings();
     this.sfx.setVolume(saved.volume);
@@ -3669,152 +3684,98 @@ export class Engine {
     const px = z.x - cam;
     if (px < -100 || px > W + 100) return;
     const py = z.y + camY;
+
+    const type = z.type as ZSpriteType;
+    const half = this.atlas.zombieHalf(type);
+
     // soft shadow, directly beneath — top-down, so it tracks the zombie's
     // own position rather than a fixed horizon line
     c.fillStyle = "rgba(0,0,0,0.45)";
     c.beginPath();
-    c.ellipse(px, py + 6, 16 * z.scale, 8 * z.scale, 0, 0, TAU);
+    c.ellipse(px, py + half * 0.28, half * 0.72, half * 0.38, 0, 0, TAU);
     c.fill();
 
-    const skinIdx = Math.floor(z.tint * SKIN.length) % SKIN.length;
-    const skin = SKIN[skinIdx];
-    const skinDark = CLOTH[skinIdx];
-    const cloth = CLOTH[Math.floor(z.tint * 7) % CLOTH.length];
-    const clothDark = "#161b26";
-
-    // per-type proportions
-    const bulk = z.type === "brute" ? 1.35 : z.type === "runner" ? 0.88 : 1;
+    // Facing: the sprite is pre-rendered per direction, so pick the nearest
+    // baked one rather than rotating the bitmap — ctx.rotate would resample
+    // the art and smear the pixels it exists to keep crisp.
     const moving = Math.hypot(z.vx, z.vy) > 4;
     const heading = moving ? Math.atan2(z.vy, z.vx) : z.face >= 0 ? 0 : Math.PI;
-    const walk = z.dormant ? 0 : z.t * (2.4 + z.speed * 0.03);
-    const shamble = Math.sin(walk);
-    const shamble2 = Math.cos(walk * 0.6 + z.wob);
-    const attacking = z.atk > (z.type === "brute" ? 0.75 : 0.42);
-    const reach = attacking ? 4 : 0;
+    const dir = dirFor(heading, Z_DIRS);
+    // shamble phase -> frame index, matching the old `z.t * (2.4 + speed*0.03)`
+    const phase = z.dormant ? 0 : z.t * (2.4 + z.speed * 0.03);
+    const frame = z.dormant ? 0 : Math.floor(phase / (Math.PI / 2)) % Z_FRAMES;
+    // `tint` used to pick a flat body color; it now picks a whole body variant,
+    // which varies a crowd without the per-instance scaling that would break
+    // pixel alignment
+    const variant = z.tint < 0.5 ? 0 : 1;
 
-    c.save();
-    c.translate(px, py);
-    c.scale(z.scale, z.scale);
-    c.rotate(heading);
-    // everything below is drawn as if facing +x ("forward")
+    const spr = this.atlas.zombie(type, variant, dir, frame);
+    const size = half * 2;
+    c.drawImage(spr, px - half, py - half, size, size);
 
-    // ---- legs, scissoring behind the body along the heading ----
-    const l1 = shamble * 6 * bulk, l2 = -shamble * 6 * bulk;
-    c.fillStyle = skinDark;
-    c.beginPath(); c.ellipse(-8 + Math.abs(l1) * 0.2, 5 + l1, 4.2 * bulk, 3, 0, 0, TAU); c.fill();
-    c.beginPath(); c.ellipse(-8 + Math.abs(l2) * 0.2, -5 + l2, 4.2 * bulk, 3, 0, 0, TAU); c.fill();
-
-    // ---- torso, a ragged oval seen from above ----
-    const torsoGrad = c.createRadialGradient(-2, -2, 1, 0, 0, 11 * bulk);
-    torsoGrad.addColorStop(0, cloth);
-    torsoGrad.addColorStop(1, clothDark);
-    c.fillStyle = torsoGrad;
-    c.beginPath();
-    c.ellipse(0, 0, 11 * bulk, 9 * bulk, 0, 0, TAU);
-    c.fill();
-    // grime + torn rips
-    c.fillStyle = "rgba(0,0,0,0.22)";
-    c.beginPath(); c.ellipse(-2, 1, 5 * bulk, 4, 0, 0, TAU); c.fill();
-    c.fillStyle = "rgba(80,14,18,0.32)";
-    c.beginPath(); c.ellipse(3, -3, 3 * bulk, 2.6, -0.3, 0, TAU); c.fill();
-
-    // ---- arms, clawed, reaching forward when attacking ----
-    c.lineCap = "round";
-    c.strokeStyle = skinDark;
-    c.lineWidth = 3.4 * bulk;
-    c.globalAlpha = 0.75;
-    c.beginPath();
-    c.moveTo(-2, -6 * bulk);
-    c.lineTo(6 + reach, -10 * bulk - shamble2 * 1.5);
-    c.stroke();
-    c.globalAlpha = 1;
-    c.strokeStyle = skin;
-    c.beginPath();
-    c.moveTo(-2, 6 * bulk);
-    c.lineTo(7 + reach, 10 * bulk + shamble2 * 1.5);
-    c.stroke();
-    // claws on the front arm
-    c.strokeStyle = "rgba(230,230,225,0.6)";
-    c.lineWidth = 1.1;
-    for (let i = -1; i <= 1; i++) {
-      c.beginPath();
-      c.moveTo(7 + reach, 10 * bulk + i * 1.5);
-      c.lineTo(11 + reach + i, 12 * bulk + i * 1.8);
-      c.stroke();
+    // hit flash — re-blit the same sprite forced to white, so the flash takes
+    // the sprite's exact silhouette instead of an approximating oval
+    if (z.flash > 0) {
+      c.save();
+      c.globalAlpha = clamp(z.flash * 9, 0, 0.85);
+      c.drawImage(this.atlas.mask(spr), px - half, py - half, size, size);
+      c.restore();
     }
 
-    // ---- head, forward, with a hanging jaw ----
-    const headX = 9.5 * bulk;
-    c.fillStyle = skin;
-    c.beginPath();
-    c.ellipse(headX, 0, 7.4, 7, 0, 0, TAU);
-    c.fill();
-    c.fillStyle = "rgba(0,0,0,0.18)";
-    c.beginPath(); c.ellipse(headX - 2, 1.6, 5, 4.6, 0, 0, TAU); c.fill();
-    // hanging jaw
-    c.save();
-    c.translate(headX + 3.5, 3);
-    c.rotate(0.4 + shamble2 * 0.1);
-    c.fillStyle = skin;
-    this.rr(0, 0, 5.4, 5, 2.2);
-    c.fill();
-    c.fillStyle = "rgba(0,0,0,0.45)";
-    for (let i = 0; i < 2; i++) c.fillRect(1 + i * 2.1, 0.8, 1.3, 2.8);
-    c.restore();
-    // eyes — glowing, unless asleep (closed, no glow to give it away). The
-    // Screamer's eyes stay a normal yellow until she's actually alerted, then
-    // escalate to crimson as her scream windup counts down — the only tell
-    // she gives before it fires
+    // eyes — the sprite bakes in a hostile stare, so the only thing left to
+    // draw is the state the art can't carry: a dormant zombie's eyes are shut,
+    // and a screamer's escalate once her windup starts
     if (!z.dormant) {
-      const eye = z.boss || z.type === "brute" || (z.type === "screamer" && z.alertT > 0)
-        ? "#ef4444" : "#fde047";
-      c.globalAlpha = 0.3;
-      c.fillStyle = eye;
-      c.beginPath(); c.arc(headX + 2, -2.8, 3, 0, TAU); c.fill();
-      c.beginPath(); c.arc(headX + 2, 2.8, 2.6, 0, TAU); c.fill();
-      c.globalAlpha = 1;
-      c.fillStyle = eye;
-      c.beginPath(); c.arc(headX + 2.4, -2.8, 1.4, 0, TAU); c.fill();
-      c.beginPath(); c.arc(headX + 2.4, 2.8, 1.2, 0, TAU); c.fill();
+      const alert = z.boss || z.type === "brute" || (z.type === "screamer" && z.alertT > 0);
+      if (alert) {
+        c.save();
+        c.globalCompositeOperation = "lighter";
+        // sized to the head, not the body: a glow the width of a brute reads
+        // as the whole zombie lighting up rather than its eyes catching you
+        const hx = px + Math.cos(heading) * half * 0.34;
+        const hy = py + Math.sin(heading) * half * 0.34;
+        const er = half * 0.34;
+        c.globalAlpha = 0.42;
+        c.drawImage(this.atlas.glow("#ef4444"), hx - er, hy - er, er * 2, er * 2);
+        c.restore();
+      }
+    } else {
+      // shut eyes: darken the whole body so a sleeper doesn't give itself away.
+      // A black silhouette at partial alpha does this without ctx.filter, which
+      // is far too slow to run per zombie per frame.
+      c.save();
+      c.globalAlpha = 0.45;
+      c.globalCompositeOperation = "source-atop";
+      c.drawImage(spr, px - half, py - half, size, size);
+      c.restore();
     }
 
     // spitter sac, glowing at the chest
     if (z.type === "spitter") {
       const pulse = 1 + Math.sin(t * 5 + z.wob) * 0.12;
+      const gr = half * 0.8 * pulse;
+      c.save();
       c.globalCompositeOperation = "lighter";
-      const gr = c.createRadialGradient(-1, 0, 1, -1, 0, 8 * pulse);
-      gr.addColorStop(0, "rgba(190,242,100,0.6)");
-      gr.addColorStop(1, "rgba(132,204,22,0)");
-      c.fillStyle = gr;
-      c.fillRect(-10, -10, 20, 20);
-      c.globalCompositeOperation = "source-over";
+      c.globalAlpha = 0.55;
+      c.drawImage(this.atlas.glow("#bef264"), px - gr, py - gr, gr * 2, gr * 2);
+      c.restore();
     }
 
     // boss crown of gore (finale-swarm tier, distinct from the unique Boss)
     if (z.boss) {
+      c.save();
       c.fillStyle = "rgba(127,29,29,0.5)";
-      c.beginPath(); c.ellipse(headX - 4, 0, 4, 8, 0, 0, TAU); c.fill();
+      c.beginPath();
+      c.ellipse(px, py, half * 0.95, half * 0.95, 0, 0, TAU);
+      c.fill();
+      c.restore();
     }
 
-    // hit flash
-    if (z.flash > 0) {
-      c.globalAlpha = clamp(z.flash * 9, 0, 0.8);
-      c.fillStyle = "#ffffff";
-      c.beginPath();
-      c.ellipse(0, 0, 12 * bulk, 10 * bulk, 0, 0, TAU);
-      c.fill();
-      c.beginPath();
-      c.ellipse(headX, 0, 7.6, 7.2, 0, 0, TAU);
-      c.fill();
-      c.globalAlpha = 1;
-    }
-    c.restore(); // root
-
-    // hp bar
+    // hp bar, clear of the taller sprite
     if (z.hp < z.maxHp) {
-      const wBar = 30 * z.scale;
+      const wBar = half * 1.2;
       const xBar = px - wBar / 2;
-      const yBar = py - 24 * z.scale;
+      const yBar = py - half - 6;
       c.fillStyle = "rgba(0,0,0,0.55)";
       c.fillRect(xBar, yBar, wBar, 3.4);
       c.fillStyle = z.boss ? "#f87171" : "#dc2626";
@@ -3830,7 +3791,7 @@ export class Engine {
       for (let i = 0; i < 3; i++) {
         const ph = (t * 0.6 + i * 0.9) % 2.7;
         c.globalAlpha = clamp(1 - ph / 2.7, 0, 1) * 0.7;
-        c.fillText("z", px + 6 * z.scale + i * 3, py - 20 * z.scale - ph * 10);
+        c.fillText("z", px + half * 0.5 + i * 3, py - half - 2 - ph * 10);
       }
       c.restore();
     }
@@ -3843,12 +3804,11 @@ export class Engine {
       c.strokeStyle = "#ef4444";
       c.lineWidth = 2;
       c.beginPath();
-      c.arc(px, py, (10 + pct * 4) * z.scale, 0, TAU);
+      c.arc(px, py, half * (0.8 + pct * 0.3), 0, TAU);
       c.stroke();
       c.restore();
     }
   }
-
   private static readonly BOSS_TELL_COLOR: Record<BossAttack, string> = {
     slam: "#f97316", mortar: "#84cc16", call: "#c084fc", shieldcharge: "#38bdf8",
   };
@@ -4007,178 +3967,76 @@ export class Engine {
     // soft contact shadow, directly beneath — no side-view foot offset needed
     c.fillStyle = "rgba(0,0,0,0.45)";
     c.beginPath();
-    c.ellipse(px, py + 3, 14, 12, 0, 0, TAU);
+    c.ellipse(px, py + 6, SOLDIER_HALF * 0.6, SOLDIER_HALF * 0.5, 0, 0, TAU);
     c.fill();
 
     c.save();
-    c.translate(px, py);
     if (p.ifr > 0) c.globalAlpha = 0.55 + 0.45 * Math.sin(t * 42);
     if (p.dashT > 0) c.globalAlpha = 0.82;
 
+    // Body points along the movement heading, the weapon along the aim angle —
+    // they are separate sprites precisely so the two can disagree, which is
+    // what makes twin-stick aiming read.
     const vel = Math.hypot(p.vx, p.vy);
     const run = vel > 26;
     const heading = run ? Math.atan2(p.vy, p.vx) : p.aim;
-    const bob = run ? Math.abs(Math.sin(p.walk)) * 1.4 : Math.sin(t * 2.1) * 0.5;
-    const stride = run ? Math.sin(p.walk) * 6 : 0;
+    const bodyDir = dirFor(heading, DIRS);
+    const frame = run ? Math.floor(p.walk / (Math.PI / 2)) % FRAMES : 0;
 
-    // ---- feet, scissoring beneath the body along the movement heading ----
-    c.save();
-    c.rotate(heading);
-    c.fillStyle = "#080c13";
-    c.beginPath(); c.ellipse(-7 + Math.abs(stride) * 0.3, 6 + stride, 4.4, 3, 0, 0, TAU); c.fill();
-    c.beginPath(); c.ellipse(-7 + Math.abs(stride) * 0.3, -6 - stride, 4.4, 3, 0, 0, TAU); c.fill();
+    const body = this.atlas.soldier(bodyDir, frame);
+    const bs = SOLDIER_HALF * 2;
+    c.drawImage(body, px - SOLDIER_HALF, py - SOLDIER_HALF, bs, bs);
+
+    const wcls = WDEF[this.kind].cls;
+    const gun = this.atlas.gun(wcls, dirFor(p.aim, DIRS));
+    const gs = GUN_HALF * 2;
+    c.drawImage(gun, px - GUN_HALF, py - GUN_HALF, gs, gs);
+
+    // hurt flash takes the sprite's own silhouette
+    if (p.hurtT > 0) {
+      c.save();
+      c.globalAlpha = clamp(p.hurtT * 3, 0, 0.6);
+      c.drawImage(this.atlas.mask(body), px - SOLDIER_HALF, py - SOLDIER_HALF, bs, bs);
+      c.restore();
+    }
     c.restore();
 
-    // ---- torso, a rounded tactical-vest body seen from above ----
-    c.save();
-    c.translate(0, bob);
-    const torsoGrad = c.createRadialGradient(-3, -3, 2, 0, 0, 13);
-    torsoGrad.addColorStop(0, "#0e7490");
-    torsoGrad.addColorStop(1, "#0a3542");
-    c.fillStyle = torsoGrad;
-    c.beginPath();
-    c.ellipse(0, 0, 12, 12, 0, 0, TAU);
-    c.fill();
-    c.strokeStyle = "rgba(255,255,255,0.15)";
-    c.lineWidth = 1;
-    c.stroke();
-    // backpack, trailing opposite the aim direction
-    c.fillStyle = "#0b3a47";
-    c.beginPath();
-    c.ellipse(Math.cos(p.aim + Math.PI) * 8, Math.sin(p.aim + Math.PI) * 8, 7, 8, p.aim, 0, TAU);
-    c.fill();
-    // chest rig pouch
-    c.fillStyle = "#0c4a5e";
-    c.beginPath();
-    c.ellipse(Math.cos(p.aim) * 5, Math.sin(p.aim) * 5, 4.5, 4.5, 0, 0, TAU);
-    c.fill();
-
-    // ---- head + beanie, peeking slightly toward the aim direction ----
-    const headX = Math.cos(p.aim) * 5, headY = Math.sin(p.aim) * 5;
-    c.fillStyle = "#7f1d1d";
-    c.beginPath();
-    c.ellipse(headX, headY, 7, 7, 0, 0, TAU);
-    c.fill();
-    c.fillStyle = "#5b1414";
-    c.beginPath();
-    c.arc(headX, headY, 7, p.aim - 0.5, p.aim + 0.5);
-    c.arc(headX, headY, 4.5, p.aim + 0.5, p.aim - 0.5, true);
-    c.fill();
-    c.fillStyle = "#e8b892"; // face sliver facing the aim direction
-    c.beginPath();
-    c.ellipse(headX + Math.cos(p.aim) * 3.2, headY + Math.sin(p.aim) * 3.2, 3.6, 3.6, 0, 0, TAU);
-    c.fill();
-    c.fillStyle = "#1c1917"; // eyes, a hint of direction
-    c.beginPath();
-    c.ellipse(headX + Math.cos(p.aim) * 4.6, headY + Math.sin(p.aim) * 4.6, 1.3, 1.3, 0, 0, TAU);
-    c.fill();
-    c.restore(); // torso translate
-
-    // ---- arm + weapon, rotating a full 360° with the aim angle ----
-    const kick = clamp(p.flash * 12, 0, 1);
-    const recoil = kick * 4;
-    const wcls = WDEF[this.kind].cls;
-    const gunLen =
-      this.kind === "deagle" ? 32
-      : wcls === "carbine" ? 38
-      : wcls === "smg" ? 32
-      : wcls === "shotgun" ? 36
-      : 26;
-    c.save();
-    c.translate(0, bob);
-    c.rotate(p.aim);
-    // weapon body
-    const bx = 7 + recoil;
-    c.fillStyle = "#111a26";
-    this.rr(bx, -4.5, gunLen - bx, 8, 2);
-    c.fill();
-    c.fillStyle = "#28323f";
-    const tail = gunLen;
-    if (wcls === "shotgun") {
-      c.fillRect(tail - gunLen * 0.5, -3.2, gunLen * 0.5, 3.6);
-      if (this.kind === "benelli") {
-        c.fillStyle = "#3f2a18";
-        c.fillRect(bx - 3.5, 1, 7, 5.5); // classic stock, tube fed
-      } else {
-        c.fillStyle = "#1c2634";
-        c.beginPath();
-        c.arc(bx + 6, 5, 4.6, 0, TAU); // big drum magazine
-        c.fill();
-      }
-    } else if (wcls === "carbine") {
-      c.fillRect(tail - gunLen * 0.5, -2.6, gunLen * 0.5, 3.2);
-      c.fillStyle = "#1c2634";
-      this.rr(bx - 3, -3.8, 6.5, 5, 2);
-      c.fill(); // optic
-      c.fillRect(bx + 6, 2.6, 3.4, 8); // straight mag
-      if (this.kind === "asval") {
-        c.fillStyle = "#0d141d";
-        c.fillRect(tail - gunLen * 0.36, -3.4, gunLen * 0.34, 5); // suppressor shroud
-      }
-    } else if (wcls === "smg") {
-      c.fillRect(tail - gunLen * 0.42, -2.8, gunLen * 0.42, 2.8);
-      c.fillStyle = "#1c2634";
-      if (this.kind === "bizon") {
-        this.rr(bx + 3, 2.6, 14, 4.4, 2); // helical mag under barrel
-        c.fill();
-      } else if (this.kind === "p90") {
-        this.rr(bx - 2, -7, 16, 3.4, 2); // top-mounted horizontal mag
-        c.fill();
-      } else {
-        c.fillRect(bx + 5, 2.6, 3.4, 8.5); // vector box mag
-      }
-    } else {
-      // pistols
-      c.fillRect(tail - gunLen * 0.4, -2.9, gunLen * 0.4, 2.9);
-      c.fillStyle = "#3f2a18";
-      c.fillRect(bx - 2.5, 0.8, 5, 7); // grip
-      if (this.kind === "deagle") {
-        c.fillStyle = "#4b5563";
-        c.fillRect(tail - gunLen * 0.4, -4, gunLen * 0.4, 1.6); // heavy slab slide rib
-      } else if (this.kind === "tec9") {
-        c.fillStyle = "#1c2634";
-        c.fillRect(bx + 3.2, 1.8, 3, 9); // long stick mag
-      }
-    }
-    // hand
-    c.fillStyle = "#e8b892";
-    c.beginPath();
-    c.arc(bx - 1, 0, 2.4, 0, TAU);
-    c.fill();
-    // muzzle flash
+    // ---- muzzle flash, at the real barrel tip ----
+    // muzzleReach is in ART pixels; PX_SCALE converts to canvas units, so this
+    // tracks whatever barrel length the sprite actually draws rather than a
+    // constant left over from the old vector art
+    const reach = muzzleReach(wcls) * PX_SCALE;
     if (p.flash > 0) {
       const fa = clamp(p.flash * 16, 0, 1);
-      const mx = gunLen + recoil;
+      const mx = px + Math.cos(p.aim) * reach;
+      const my = py + Math.sin(p.aim) * reach;
+      c.save();
       c.globalCompositeOperation = "lighter";
-      const fg = c.createRadialGradient(mx, 0, 0, mx, 0, 24);
+      const fg = c.createRadialGradient(mx, my, 0, mx, my, 24);
       fg.addColorStop(0, `rgba(254,240,138,${0.95 * fa})`);
       fg.addColorStop(0.4, `rgba(251,146,60,${0.55 * fa})`);
       fg.addColorStop(1, "rgba(251,146,60,0)");
       c.fillStyle = fg;
-      c.fillRect(mx - 24, -24, 48, 48);
+      c.fillRect(mx - 24, my - 24, 48, 48);
       c.strokeStyle = `rgba(254,240,138,${0.85 * fa})`;
       c.lineWidth = 2;
       c.beginPath();
-      c.moveTo(mx, 0); c.lineTo(mx + 14 * fa, -6 * fa);
-      c.moveTo(mx, 0); c.lineTo(mx + 16 * fa, 5 * fa);
-      c.moveTo(mx, 0); c.lineTo(mx + 10 * fa, 0);
+      const ca = Math.cos(p.aim), sa = Math.sin(p.aim);
+      c.moveTo(mx, my); c.lineTo(mx + ca * 14 * fa - sa * 6 * fa, my + sa * 14 * fa + ca * 6 * fa);
+      c.moveTo(mx, my); c.lineTo(mx + ca * 16 * fa + sa * 5 * fa, my + sa * 16 * fa - ca * 5 * fa);
+      c.moveTo(mx, my); c.lineTo(mx + ca * 10 * fa, my + sa * 10 * fa);
       c.stroke();
-      c.globalCompositeOperation = "source-over";
-    }
-    c.restore();
-    c.restore(); // root
+      c.restore();
 
-    // muzzle world light
-    if (p.flash > 0) {
-      const mzx = p.x + Math.cos(p.aim) * (gunLen + 4) - cam;
-      const mzy = p.y + bob + Math.sin(p.aim) * (gunLen + 4) + camY;
-      this.ctx.globalCompositeOperation = "lighter";
-      const lg = this.ctx.createRadialGradient(mzx, mzy, 4, mzx, mzy, 120);
-      lg.addColorStop(0, `rgba(251,191,36,${0.16 * clamp(p.flash * 16, 0, 1)})`);
+      // muzzle world light
+      c.save();
+      c.globalCompositeOperation = "lighter";
+      const lg = c.createRadialGradient(mx, my, 4, mx, my, 120);
+      lg.addColorStop(0, `rgba(251,191,36,${0.16 * fa})`);
       lg.addColorStop(1, "rgba(251,191,36,0)");
-      this.ctx.fillStyle = lg;
-      this.ctx.fillRect(mzx - 120, mzy - 120, 240, 240);
-      this.ctx.globalCompositeOperation = "source-over";
+      c.fillStyle = lg;
+      c.fillRect(mx - 120, my - 120, 240, 240);
+      c.restore();
     }
   }
 }
