@@ -238,6 +238,13 @@ export class Engine {
    * have fired, so they only ever play once per shift. */
   private firedFirstPaint = false;
   private firedFirstShot = false;
+  /** Shift 2's "shots call the other lane": which side (world-right=1,
+   * left=-1) the player's last shot faced, and a decaying window during
+   * which spawnZombie() biases new spawns toward the opposite side. */
+  private shotSide: 1 | -1 = 1;
+  private shotSideT = 0;
+  private firedLaneRedirect = false;
+  private firedRunnerClose = false;
   /** resolver for whichever binary story choice (Diaz, Vault) is currently
    * prompted — set by promptChoice(), invoked by pickChoice() with the
    * option id the player picked. */
@@ -723,6 +730,9 @@ export class Engine {
       this.shotsThisShift = 0;
       this.firedFirstPaint = false;
       this.firedFirstShot = false;
+      this.shotSideT = 0;
+      this.firedLaneRedirect = false;
+      this.firedRunnerClose = false;
       return;
     }
     this.stage = stageNum;
@@ -1144,6 +1154,7 @@ export class Engine {
       }
     } else if (this.phase === "active") {
       if (this.spawnSuppressT > 0) this.spawnSuppressT -= dt;
+      if (this.shotSideT > 0) this.shotSideT -= dt;
       this.spawnT -= dt;
       const cap = Math.min(42, 10 + this.power * 1.1);
       if (this.hordeT > 0) {
@@ -1461,6 +1472,11 @@ export class Engine {
     if (this.runMode === "campaign") {
       this.shotsThisShift++;
       if (!this.firedFirstShot) { this.firedFirstShot = true; this.fireRadio("first-shot"); }
+      if (this.campaignDef.mechanic === "lane-redirect") {
+        this.shotSide = Math.cos(p.aim) >= 0 ? 1 : -1;
+        this.shotSideT = 3.2;
+        if (!this.firedLaneRedirect) { this.firedLaneRedirect = true; this.fireRadio("lane-redirect"); }
+      }
     }
     // Tactical Stim: temporary fire-rate rush
     p.cd = 1 / (st.fireRate * (this.stimT > 0 ? 1.4 : 1));
@@ -1512,6 +1528,15 @@ export class Engine {
     for (const z of this.zombies) {
       z.t += dt;
       z.flash -= dt;
+      // Shift 2's "First Runner close" cue — fires once, the first time a
+      // Runner gets within earshot, regardless of dormant/awake state.
+      if (
+        this.runMode === "campaign" && this.campaignDef.mechanic === "lane-redirect" &&
+        !this.firedRunnerClose && z.type === "runner" && Math.hypot(p.x - z.x, p.y - z.y) < 220
+      ) {
+        this.firedRunnerClose = true;
+        this.fireRadio("runner-close");
+      }
       if (z.dormant) {
         // sleepers wake when the player passes close while running/dashing
         const near = Math.abs(p.x - z.x) < 90;
@@ -2938,8 +2963,17 @@ export class Engine {
     // standing still should not conjure enemies in front of you.
     const p = this.pl;
     const moving = Math.hypot(p.vx, p.vy) > 60;
+    // Shift 2 (Service Road): "shots call the other lane" — same biased-ring
+    // shape as the boss-stage `ahead` bias below, mirrored around a shot side
+    // instead of a movement heading, and independent of movement since the
+    // doc's beat ("if you pop one, the left side starts running") fires the
+    // instant you shoot, not only while sprinting.
+    const laneRedirect = this.runMode === "campaign"
+      && this.campaignDef.mechanic === "lane-redirect" && this.shotSideT > 0 && chance(0.65);
     const ahead = this.stageDef.bossId != null && moving && chance(0.55);
-    const angle = ahead ? Math.atan2(p.vy, p.vx) + R(-0.7, 0.7) : Math.random() * TAU;
+    const angle = laneRedirect
+      ? (this.shotSide === 1 ? Math.PI : 0) + R(-0.6, 0.6)
+      : ahead ? Math.atan2(p.vy, p.vx) + R(-0.7, 0.7) : Math.random() * TAU;
     const dist = 450 + R(0, 200);
     let x = this.pl.x + Math.cos(angle) * dist;
     let y = this.pl.y + Math.sin(angle) * dist;
