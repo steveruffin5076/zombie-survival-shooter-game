@@ -2054,6 +2054,16 @@ export class Engine {
     const p = this.pl;
     for (let i = 0; i < 40; i++)
       this.particles.push({ x: p.x, y: p.y - 34, vx: R(-260, 260), vy: R(-320, 40), life: R(0.4, 1), max: 1, size: R(2, 6), color: chance(0.6) ? BLOOD[RI(0, BLOOD.length - 1)] : "#0e7490", grav: 1100, add: false });
+
+    // Campaign has its own checkpoint/ending flow — Endless's SaveData/
+    // profile.bestWave use a different, incompatible scale (campaignWaveIndex
+    // tops out around 28 vs. Endless's unbounded ramp) and must not be touched
+    // by a campaign death.
+    if (this.runMode === "campaign") {
+      this.dieCampaign();
+      return;
+    }
+
     this.profile.bestWave = Math.max(this.profile.bestWave, this.waveIndex);
     saveProfile(this.profile);
     // Decisions locked: restart at the last safe house, keep level/XP/upgrades/
@@ -2077,6 +2087,42 @@ export class Engine {
     this.onEvent({ type: "gameover", stats });
   }
 
+  /** Story Campaign's death handling: restore from the last shift checkpoint
+   * if one exists, else resolve the "You Woke the Rows" fail ending — never
+   * Endless's gameover screen, and never Endless's SaveData/bestWave. */
+  private dieCampaign() {
+    const checkpoint = loadCampaign();
+    if (checkpoint) {
+      this.retryCampaignShift(checkpoint);
+      return;
+    }
+    this.finishCampaign(true);
+  }
+
+  /** reset() then restore from the last campaign checkpoint — the campaign
+   * analogue of restoreFrom()/retryStage(), kept separate rather than shared
+   * since the two save shapes (SaveData vs. CampaignSaveData) don't overlap
+   * enough to unify without touching more than this fix needs. */
+  private retryCampaignShift(checkpoint: CampaignSaveData) {
+    this.campaignFlags = { ...checkpoint.flags };
+    this.reset();
+    this.setStage(checkpoint.shift);
+    this.pl.level = checkpoint.level;
+    this.pl.xp = checkpoint.xp;
+    this.pl.xpNext = checkpoint.xpNext;
+    this.shotsThisShift = checkpoint.shotsThisShift;
+    this.recompute();
+    this.pl.hp = this.st.maxHp;
+    this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
+    this.pl.y = WORLD_H / 2;
+    this.cam = clamp(this.pl.x - this.viewW / 2, 0, this.worldW - this.viewW);
+    this.camY = clamp(this.pl.y - this.viewH / 2, 0, WORLD_H - this.viewH);
+    this.mode = "play";
+    this.beginRest(2.4);
+    this.announce("YOU DIED", `back at the checkpoint — ${this.campaignDef.name}`, 2.8);
+    this.fireRadio("enter");
+  }
+
   /** reset() then restore progression from the last safe-house checkpoint. Shared
    * by dying (which drops the carried backpack as the penalty) and by resuming a
    * saved run from the menu (which doesn't — nobody died, the player just
@@ -2087,6 +2133,10 @@ export class Engine {
     // this.stageDef still points at the old stage until setStage() below runs
     opts: { keepBackpack: boolean; banner: string; subFor: (stageName: string) => string }
   ) {
+    // Only ever called on Endless's own paths (retryStage/continueRun), but a
+    // prior Story Campaign run may have left runMode = "campaign" — without
+    // this, setStage() below takes the campaign branch and throws past Shift 8.
+    this.runMode = "endless";
     this.reset();
     this.setStage(checkpoint.stage);
     this.pl.level = checkpoint.level;
@@ -2729,7 +2779,7 @@ export class Engine {
     this.onEvent({
       type: "stageclear", stage: cleared, next: cleared + 1,
       stageName: this.stageDef.name, stageSub: this.stageDef.sub,
-      wavesPerStage: this.stageDef.wavesPerStage,
+      wavesPerStage: this.stageDef.wavesPerStage, isCampaign: false,
     });
   }
 
@@ -2761,7 +2811,7 @@ export class Engine {
     this.onEvent({
       type: "stageclear", stage: cleared, next: cleared + 1,
       stageName: this.campaignDef.name, stageSub: this.campaignDef.sub,
-      wavesPerStage: this.campaignDef.wavesPerStage,
+      wavesPerStage: this.campaignDef.wavesPerStage, isCampaign: true,
     });
   }
 

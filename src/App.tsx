@@ -81,7 +81,7 @@ export default function App() {
     return () => ro.disconnect();
   }, []);
 
-  const [stageClear, setStageClear] = useState<{ stage: number; next: number; stageName: string; wavesPerStage: number } | null>(null);
+  const [stageClear, setStageClear] = useState<{ stage: number; next: number; stageName: string; wavesPerStage: number; isCampaign: boolean } | null>(null);
   const [stageLoadout, setStageLoadout] = useState(false);
   const [safeHouse, setSafeHouse] = useState(false);
   const [inv, setInv] = useState<InventorySnapshot | null>(null);
@@ -106,7 +106,7 @@ export default function App() {
           setPaused(false);
           break;
         case "stageclear":
-          setStageClear({ stage: e.stage, next: e.next, stageName: e.stageName, wavesPerStage: e.wavesPerStage });
+          setStageClear({ stage: e.stage, next: e.next, stageName: e.stageName, wavesPerStage: e.wavesPerStage, isCampaign: e.isCampaign });
           setStageLoadout(false);
           setSafeHouse(false);
           break;
@@ -433,6 +433,7 @@ export default function App() {
             stageName={stageClear.stageName}
             wavesPerStage={stageClear.wavesPerStage}
             onContinue={openStageLoadout}
+            isCampaign={stageClear.isCampaign}
           />
         )}
 

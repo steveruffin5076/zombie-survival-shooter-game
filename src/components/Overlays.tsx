@@ -261,8 +261,13 @@ export function PauseMenu({
 /* ------------------------------------------------------------------ */
 
 export function StageClear({
-  stage, next, stageName, wavesPerStage, onContinue,
-}: { stage: number; next: number; stageName: string; wavesPerStage: number; onContinue: () => void }) {
+  stage, next, stageName, wavesPerStage, onContinue, isCampaign = false,
+}: {
+  stage: number; next: number; stageName: string; wavesPerStage: number; onContinue: () => void;
+  /** swaps "STAGE"/"STAGE BONUS" wording for "SHIFT"/"SHIFT BONUS" during a Story Campaign run */
+  isCampaign?: boolean;
+}) {
+  const label = isCampaign ? "SHIFT" : "STAGE";
   return (
     <div className="pointer-events-auto absolute inset-0 z-40 flex items-center-safe justify-center overflow-y-auto bg-gradient-to-b from-emerald-950/30 via-black/80 to-black/90 py-4 backdrop-blur-[5px]">
       <div className="anim-pop flex w-full max-w-lg flex-col items-center px-8 text-center">
@@ -275,7 +280,7 @@ export function StageClear({
           className="anim-rise font-display text-6xl tracking-[0.1em] text-emerald-300 drop-shadow-[0_0_34px_rgba(52,211,153,0.45)]"
           style={{ animationDelay: "60ms" }}
         >
-          STAGE {stage} CLEAR
+          {label} {stage} CLEAR
         </h2>
         <p className="anim-rise mt-2 text-lg font-semibold text-white" style={{ animationDelay: "90ms" }}>
           {stageName}
@@ -299,7 +304,7 @@ export function StageClear({
 
         <div className="anim-rise mt-5 flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-4 py-1.5 text-[13px] font-bold tracking-[0.2em] text-emerald-300" style={{ animationDelay: "200ms" }}>
           <HeartPulse className="h-3.5 w-3.5" />
-          FULL HEAL + STAGE BONUS
+          FULL HEAL + {label} BONUS
         </div>
 
         <button

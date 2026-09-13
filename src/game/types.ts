@@ -153,7 +153,7 @@ export type EngineEvent =
   | { type: "levelup"; choices: UpgradeChoice[] }
   | { type: "resume" }
   | { type: "gameover"; stats: GameStats }
-  | { type: "stageclear"; stage: number; next: number; stageName: string; stageSub: string; wavesPerStage: number }
+  | { type: "stageclear"; stage: number; next: number; stageName: string; stageSub: string; wavesPerStage: number; isCampaign: boolean }
   | { type: "pause"; value: boolean }
   | { type: "choice"; prompt: string; options: ChoiceOption[] }
   | { type: "campaign-ending"; ending: CampaignEnding };

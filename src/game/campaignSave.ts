@@ -40,7 +40,7 @@ function migrateCampaignSave(raw: unknown): CampaignSaveData | null {
   if (!raw || typeof raw !== "object") return null;
   const d = raw as Partial<CampaignSaveData>;
   if (typeof d.version !== "number" || d.version > CAMPAIGN_SAVE_VERSION) return null;
-  if (typeof d.shift !== "number" || d.shift < 1 || d.shift > 8) return null;
+  if (typeof d.shift !== "number" || !Number.isInteger(d.shift) || d.shift < 1 || d.shift > 8) return null;
   const base = defaultCampaignSave();
   return {
     version: CAMPAIGN_SAVE_VERSION,
