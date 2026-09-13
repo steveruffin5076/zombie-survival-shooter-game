@@ -279,6 +279,9 @@ export class Engine {
   private firedBadgeWall = false;
   private firedStrayTraffic = false;
   private firedVaultDoorBrute = false;
+  /** Shift 7's mid-shift vault choice — same one-shot pattern as Shift 4's
+   * Diaz prompt. */
+  private firedVaultChoice = false;
   /** resolver for whichever binary story choice (Diaz, Vault) is currently
    * prompted — set by promptChoice(), invoked by pickChoice() with the
    * option id the player picked. */
@@ -780,6 +783,7 @@ export class Engine {
       this.firedBadgeWall = false;
       this.firedStrayTraffic = false;
       this.firedVaultDoorBrute = false;
+      this.firedVaultChoice = false;
       return;
     }
     this.stage = stageNum;
@@ -1265,6 +1269,22 @@ export class Engine {
           if (this.campaignDef.mechanic === "badge-lore" && !this.firedStrayTraffic && this.waveInStage === 3) {
             this.firedStrayTraffic = true;
             this.fireRadio("stray-traffic");
+          }
+          // Shift 7's vault choice: "vault-terminal-solo" only adds a line
+          // when Vale is dead (gated in radio.ts), so firing it unconditionally
+          // alongside "rack-prompt" gets the right variant either way.
+          if (this.campaignDef.mechanic === "vault-choice" && !this.firedVaultChoice && this.waveInStage === 3) {
+            this.firedVaultChoice = true;
+            this.fireRadio("vault-terminal-solo");
+            this.fireRadio("rack-prompt");
+            this.promptChoice(
+              "Recover or deny.",
+              [
+                { id: "destroy", label: "Dump the racks" },
+                { id: "take", label: "Lift one vial" },
+              ],
+              (id) => this.resolveVaultChoice(id),
+            );
           }
         }
       }
@@ -3122,6 +3142,18 @@ export class Engine {
     }
   }
 
+  /** Resolver for Shift 7's vault choice — dump the racks (deny) or lift a
+   * vial (recover), per the doc's two verbs. */
+  private resolveVaultChoice(id: string) {
+    if (id === "destroy") {
+      this.campaignFlags.VIAL_DESTROYED = true;
+      this.fireRadio("vault-destroyed");
+    } else {
+      this.campaignFlags.VIAL_TAKEN = true;
+      this.fireRadio("vault-taken");
+    }
+  }
+
   /** Player confirmed the stage-clear screen. */
   advanceStage() {
     if (this.runMode === "campaign") { this.advanceCampaignShift(); return; }
@@ -3281,6 +3313,10 @@ export class Engine {
       this.fireRadio("escort-start");
     } else if (this.campaignDef.mechanic === "decoy-canister") {
       this.decoy = { x: this.worldW * 0.6, y: WORLD_H / 2, hit: false };
+    } else if (this.campaignDef.mechanic === "vault-choice") {
+      // Shift 7 has no generic "enter" lines scripted (see radio.ts) —
+      // "vault-enter" is this shift's stand-in for that beat.
+      this.fireRadio("vault-enter");
     }
   }
 
