@@ -111,7 +111,9 @@ export default function Hud({
                   : "text-amber-300 drop-shadow-[0_0_14px_rgba(245,158,11,0.45)]"
               }`}
             >
-              {hud.hordeT > 0 ? "HORDE" : hud.isBossWave ? "BOSS WAVE" : `WAVE ${Math.max(1, hud.waveInStage)}`}
+              {hud.hordeT > 0
+                ? (hud.isCampaign ? "DAWN" : "HORDE")
+                : hud.isBossWave ? "BOSS WAVE" : `WAVE ${Math.max(1, hud.waveInStage)}`}
             </div>
             {/* per-stage wave pips */}
             <div className="mt-1.5 flex items-center justify-center gap-1">
@@ -139,7 +141,9 @@ export default function Hud({
             <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[13px] font-semibold tracking-widest text-white/55">
               <Skull className="h-3.5 w-3.5" />
               {hud.hordeT > 0
-                ? `SURVIVE ${Math.ceil(hud.hordeT)}s`
+                ? hud.isCampaign
+                  ? `SANITATION IN ${Math.ceil(hud.hordeT)}s`
+                  : `SURVIVE ${Math.ceil(hud.hordeT)}s`
                 : hud.waveInStage > 0 ? `${hud.remaining} REMAIN` : "GET READY"}
             </div>
           </>

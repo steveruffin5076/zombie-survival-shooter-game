@@ -282,6 +282,18 @@ export class Engine {
   /** Shift 7's mid-shift vault choice — same one-shot pattern as Shift 4's
    * Diaz prompt. */
   private firedVaultChoice = false;
+  /** Shift 8's timed escape. A dedicated field rather than reusing
+   * `hordeT`/`hordeTotal`: those drive Endless's phase==="active"
+   * continuous-spawn logic unconditionally whenever nonzero (no runMode
+   * gate on the consuming side, only on what starts one), so repurposing
+   * them here would double-decrement and flood the shift with extra
+   * spawns. `getHud()` maps `dawnT`/`dawnTotal` onto the existing
+   * `hordeT`/`hordeTotal` HUD fields for display only. */
+  private dawnT = 0;
+  private dawnTotal = 0;
+  private firedDawnNearFail = false;
+  private firedDawnFail = false;
+  private firedDawnGateBrute = false;
   /** resolver for whichever binary story choice (Diaz, Vault) is currently
    * prompted — set by promptChoice(), invoked by pickChoice() with the
    * option id the player picked. */
@@ -784,6 +796,11 @@ export class Engine {
       this.firedStrayTraffic = false;
       this.firedVaultDoorBrute = false;
       this.firedVaultChoice = false;
+      this.firedDawnNearFail = false;
+      this.firedDawnFail = false;
+      this.firedDawnGateBrute = false;
+      this.dawnT = 0;
+      this.dawnTotal = 0;
       return;
     }
     this.stage = stageNum;
@@ -1305,6 +1322,20 @@ export class Engine {
       this.firedBadgeWall = true;
       this.fireRadio("badge-wall");
     }
+    // Shift 8's dawn timer: ticks regardless of phase (a breather between
+    // waves doesn't stop sanitation from closing in). Zero once cleared
+    // (setStage resets it to 0 on the next shift) so this can't re-fire.
+    if (this.campaignDef.mechanic === "dawn-escape" && this.dawnT > 0) {
+      this.dawnT = Math.max(0, this.dawnT - dt);
+      if (!this.firedDawnNearFail && this.dawnT <= this.dawnTotal * 0.2) {
+        this.firedDawnNearFail = true;
+        this.fireRadio("dawn-near-fail");
+      }
+      if (this.dawnT <= 0 && !this.firedDawnFail) {
+        this.firedDawnFail = true;
+        this.finishCampaign(true);
+      }
+    }
     this.updateBoss(dt);
     this.updateBullets(dt);
     this.updateEshots(dt);
@@ -1725,6 +1756,12 @@ export class Engine {
         if (z.type === "brute" && this.campaignDef.mechanic === "badge-lore" && !this.firedVaultDoorBrute) {
           this.firedVaultDoorBrute = true;
           this.fireRadio("vault-door-brute");
+        }
+        // Shift 8's gate bar: the last of the three "heavy hits something
+        // narratively important" beats (wall, vault door, gate bar).
+        if (z.type === "brute" && this.campaignDef.mechanic === "dawn-escape" && !this.firedDawnGateBrute) {
+          this.firedDawnGateBrute = true;
+          this.fireRadio("dawn-gate-brute");
         }
       }
     }
@@ -3023,6 +3060,10 @@ export class Engine {
   private completeCampaignShift() {
     const cleared = this.campaignDef.shift;
     if (cleared === 1 && this.shotsThisShift === 0) this.campaignFlags.QUIET_S1 = true;
+    // Shift 8's hidden "stayed dark" requirement: a deliberately tight
+    // budget against 6 waves of walker/runner/spitter/brute/screamer —
+    // clearing it with itchy trigger discipline, not by accident.
+    if (cleared === 8 && this.shotsThisShift <= 60) this.campaignFlags.SHOT_BUDGET_LOW = true;
     // Vale surviving the whole shift is the "office reached" beat — her
     // death already got its own escort-fail line, so this only fires when
     // she made it through.
@@ -3317,6 +3358,13 @@ export class Engine {
       // Shift 7 has no generic "enter" lines scripted (see radio.ts) —
       // "vault-enter" is this shift's stand-in for that beat.
       this.fireRadio("vault-enter");
+    } else if (this.campaignDef.mechanic === "dawn-escape") {
+      // 3 minutes to clock out — generous against 6 waves, but real enough
+      // that dawdling on loot has a cost.
+      this.dawnT = 180;
+      this.dawnTotal = 180;
+      if (this.campaignFlags.VIAL_TAKEN) this.fireRadio("dawn-vial-taken");
+      else if (this.campaignFlags.VIAL_DESTROYED) this.fireRadio("dawn-vial-destroyed");
     }
   }
 
@@ -3340,8 +3388,11 @@ export class Engine {
       isBossWave: this.stageDef.bossWaves.includes(this.waveInStage),
       waveTotal: this.waveTotal,
       remaining: this.queue.length + this.zombies.length,
-      hordeT: Math.max(0, this.hordeT),
-      hordeTotal: this.hordeTotal,
+      // Shift 8's dawn timer rides the horde-bar HUD slot for display only —
+      // `dawnT` is a separate engine field (see its declaration) so it
+      // never collides with the horde-finale spawn logic that field drives.
+      hordeT: this.campaignDef.mechanic === "dawn-escape" ? Math.max(0, this.dawnT) : Math.max(0, this.hordeT),
+      hordeTotal: this.campaignDef.mechanic === "dawn-escape" ? this.dawnTotal : this.hordeTotal,
       phase: this.phase,
       score: this.score,
       kills: this.kills,
@@ -4242,6 +4293,20 @@ export class Engine {
       c.globalCompositeOperation = "lighter";
       c.globalAlpha = 0.55;
       c.drawImage(this.atlas.glow("#bef264"), px - gr, py - gr, gr * 2, gr * 2);
+      c.restore();
+    }
+
+    // Shift 8's lamp-crew: if the vial was taken, the doc's "their lamps do
+    // what your laser does" beat reads as every runner carrying one — purely
+    // cosmetic, reusing the existing runner AI/stats rather than a new type.
+    if (this.runMode === "campaign" && this.campaignDef.mechanic === "dawn-escape"
+        && this.campaignFlags.VIAL_TAKEN && z.type === "runner") {
+      const bob = Math.sin(t * 6 + z.wob) * 2;
+      c.save();
+      c.globalCompositeOperation = "lighter";
+      c.globalAlpha = 0.5;
+      const lr = half * 0.4;
+      c.drawImage(this.atlas.glow("#fde68a"), px - lr, py - half * 1.3 + bob - lr, lr * 2, lr * 2);
       c.restore();
     }
 
