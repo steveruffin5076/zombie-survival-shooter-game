@@ -273,6 +273,12 @@ export class Engine {
   private decoy: DecoyState | null = null;
   private firedDecoySeen = false;
   private firedCanisterPickup = false;
+  /** Shift 6's one-time beats: the badge-wall lore stop, a mid-shift flavor
+   * nag, and the vault door's own Brute slam (same beat shape as Shift 4's
+   * wall-break, on a different mechanic). */
+  private firedBadgeWall = false;
+  private firedStrayTraffic = false;
+  private firedVaultDoorBrute = false;
   /** resolver for whichever binary story choice (Diaz, Vault) is currently
    * prompted — set by promptChoice(), invoked by pickChoice() with the
    * option id the player picked. */
@@ -771,6 +777,9 @@ export class Engine {
       this.decoy = null;
       this.firedDecoySeen = false;
       this.firedCanisterPickup = false;
+      this.firedBadgeWall = false;
+      this.firedStrayTraffic = false;
+      this.firedVaultDoorBrute = false;
       return;
     }
     this.stage = stageNum;
@@ -1251,6 +1260,12 @@ export class Engine {
               (id) => this.resolveDiazChoice(id),
             );
           }
+          // Shift 6's stray-traffic: a flavor-only mid-shift nag, no flag or
+          // mechanic attached — same shape as the lantern-on reminder.
+          if (this.campaignDef.mechanic === "badge-lore" && !this.firedStrayTraffic && this.waveInStage === 3) {
+            this.firedStrayTraffic = true;
+            this.fireRadio("stray-traffic");
+          }
         }
       }
     }
@@ -1262,6 +1277,13 @@ export class Engine {
     if (this.decoy && !this.firedDecoySeen && Math.hypot(this.decoy.x - this.pl.x, this.decoy.y - this.pl.y) < 350) {
       this.firedDecoySeen = true;
       this.fireRadio("decoy-seen");
+    }
+    // Shift 6's badge wall: a fixed lore stop at the shift's midpoint, no
+    // physical prop needed — the doc's beat is the line itself.
+    if (this.campaignDef.mechanic === "badge-lore" && !this.firedBadgeWall
+        && Math.hypot(this.worldW * 0.5 - this.pl.x, WORLD_H / 2 - this.pl.y) < 350) {
+      this.firedBadgeWall = true;
+      this.fireRadio("badge-wall");
     }
     this.updateBoss(dt);
     this.updateBullets(dt);
@@ -1677,6 +1699,12 @@ export class Engine {
         if (z.type === "brute" && this.campaignDef.mechanic === "wall-break-choice" && !this.firedWallBreak) {
           this.firedWallBreak = true;
           this.fireRadio("wall-break");
+        }
+        // Shift 6's vault door: same beat, different door — the first Brute
+        // slam of the shift is the "if it hits the door it opens" moment.
+        if (z.type === "brute" && this.campaignDef.mechanic === "badge-lore" && !this.firedVaultDoorBrute) {
+          this.firedVaultDoorBrute = true;
+          this.fireRadio("vault-door-brute");
         }
       }
     }
