@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Engine } from "./game/engine";
 import type {
-  EngineEvent, GameStats, HudState, InventorySnapshot, ProfileSnapshot, UpgradeChoice,
+  ChoiceOption, EngineEvent, GameStats, HudState, InventorySnapshot, ProfileSnapshot, UpgradeChoice,
 } from "./game/types";
+import type { CampaignEnding } from "./game/campaign";
 import type { ConsumableKey } from "./game/items";
 import type { AttachmentId } from "./game/attachments";
 import Hud from "./components/Hud";
@@ -13,6 +14,8 @@ import TouchControls from "./components/TouchControls";
 import LoadoutProfile from "./components/LoadoutProfile";
 import Tutorial from "./components/Tutorial";
 import Settings from "./components/Settings";
+import ChoicePrompt from "./components/ChoicePrompt";
+import CampaignEndingScreen from "./components/CampaignEnding";
 import { isTouchCapable } from "./game/input";
 import { loadSettings, saveSettings } from "./game/settings";
 import { isFullscreen, supportsFullscreen, toggleFullscreen } from "./game/fullscreen";
@@ -47,6 +50,14 @@ export default function App() {
   // can change (mount, quitting to the menu, starting/continuing a run) rather
   // than polled — HudState is for the 66ms combat poll, not rare menu data.
   const [savedStage, setSavedStage] = useState<number | null>(null);
+  // same idea, for the separate Story Campaign save (its own checkpoint —
+  // see campaignSave.ts — independent of Endless's savedStage above).
+  const [savedCampaignShift, setSavedCampaignShift] = useState<number | null>(null);
+  // which run type the Loadout screen's START button should launch — set by
+  // whichever Menu button opened it (ENDLESS/NEW RUN vs STORY CAMPAIGN).
+  const [pendingMode, setPendingMode] = useState<"endless" | "campaign">("endless");
+  const [choicePrompt, setChoicePrompt] = useState<{ prompt: string; options: ChoiceOption[] } | null>(null);
+  const [campaignEnding, setCampaignEnding] = useState<CampaignEnding | null>(null);
   const [canFullscreen] = useState(supportsFullscreen);
   const [fullscreen, setFullscreen] = useState(false);
   // track the real state, not just our own clicks — Esc and the system back
@@ -102,11 +113,19 @@ export default function App() {
         case "pause":
           setPaused(e.value);
           break;
+        case "choice":
+          setChoicePrompt({ prompt: e.prompt, options: e.options });
+          break;
+        case "campaign-ending":
+          setCampaignEnding(e.ending);
+          setChoicePrompt(null);
+          break;
       }
     });
     engineRef.current = engine;
     engine.begin();
     setSavedStage(engine.savedRunStage());
+    setSavedCampaignShift(engine.savedCampaignShift());
     // ?debug=1 exposes the engine on window for the same debug tooling that
     // draws the ?debug=1 HUD overlay (see engine.ts render()) — lets manual
     // QA fast-forward wave/stage state instead of grinding real playtime.
@@ -145,20 +164,30 @@ export default function App() {
     setSafeHouse(false);
     setShowInventory(false);
     setPaused(false);
+    setChoicePrompt(null);
+    setCampaignEnding(null);
     setSavedStage(engineRef.current?.savedRunStage() ?? null);
+    setSavedCampaignShift(engineRef.current?.savedCampaignShift() ?? null);
   }, []);
 
   const start = useCallback(() => {
-    engineRef.current?.startGame();
+    if (pendingMode === "campaign") engineRef.current?.startCampaign();
+    else engineRef.current?.startGame();
     enterGame();
-  }, [enterGame]);
+  }, [enterGame, pendingMode]);
 
   const continueGame = useCallback(() => {
     if (!engineRef.current?.continueRun()) return;
     enterGame();
   }, [enterGame]);
 
-  const openLoadout = useCallback(() => setShowLoadout(true), []);
+  const continueCampaignGame = useCallback(() => {
+    if (!engineRef.current?.continueCampaign()) return;
+    enterGame();
+  }, [enterGame]);
+
+  const openLoadout = useCallback(() => { setPendingMode("endless"); setShowLoadout(true); }, []);
+  const openCampaignLoadout = useCallback(() => { setPendingMode("campaign"); setShowLoadout(true); }, []);
   const closeLoadout = useCallback(() => setShowLoadout(false), []);
   const openTutorial = useCallback(() => setShowTutorial(true), []);
   const closeTutorial = useCallback(() => setShowTutorial(false), []);
@@ -189,6 +218,7 @@ export default function App() {
   const quit = useCallback(() => {
     engineRef.current?.toMenu();
     setSavedStage(engineRef.current?.savedRunStage() ?? null);
+    setSavedCampaignShift(engineRef.current?.savedCampaignShift() ?? null);
     setScreen("menu");
     setShowLoadout(false);
     setShowTutorial(false);
@@ -229,6 +259,10 @@ export default function App() {
   const toggleFireMode = useCallback(() => engineRef.current?.toggleFireMode(), []);
   const useItem = useCallback((key: ConsumableKey) => engineRef.current?.useConsumable(key), []);
   const choose = useCallback((id: string) => engineRef.current?.applyUpgrade(id), []);
+  const pickChoice = useCallback((id: string) => {
+    engineRef.current?.pickChoice(id);
+    setChoicePrompt(null);
+  }, []);
   const resume = useCallback(() => engineRef.current?.setPaused(false), []);
   const togglePause = useCallback(() => engineRef.current?.togglePause(), []);
   const toggleMute = useCallback(() => engineRef.current?.toggleMute(), []);
@@ -344,6 +378,9 @@ export default function App() {
             touch={touch}
             savedStage={savedStage}
             onContinue={continueGame}
+            onCampaign={openCampaignLoadout}
+            savedCampaignShift={savedCampaignShift}
+            onContinueCampaign={continueCampaignGame}
             canFullscreen={canFullscreen}
             fullscreen={fullscreen}
             onFullscreen={goFullscreen}
@@ -371,10 +408,23 @@ export default function App() {
             onStart={start}
             onSelectLoadout={selectLoadout}
             onEquipAttachment={equipAttachment}
+            ctaLabel={pendingMode === "campaign" ? "BEGIN SHIFT 1" : "START"}
           />
         )}
 
         {choices && <LevelUpModal choices={choices} level={hud?.level ?? 1} onPick={choose} />}
+
+        {choicePrompt && (
+          <ChoicePrompt
+            prompt={choicePrompt.prompt}
+            options={choicePrompt.options}
+            onPick={pickChoice}
+          />
+        )}
+
+        {campaignEnding && (
+          <CampaignEndingScreen ending={campaignEnding} onQuit={quit} />
+        )}
 
         {stageClear && !stageLoadout && !safeHouse && !choices && !over && (
           <StageClear

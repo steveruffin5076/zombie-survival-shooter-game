@@ -1,5 +1,6 @@
 import type { BossAttack } from "./boss";
 import type { WeaponClass } from "./weapons";
+import type { CampaignEnding } from "./campaign";
 
 export interface WeaponSlot {
   /** weapon class this slot represents */
@@ -24,6 +25,8 @@ export interface HudState {
   level: number;
   stage: number;
   stageName: string;
+  /** Story Campaign run — Hud swaps "STAGE" for "SHIFT" in its label */
+  isCampaign: boolean;
   waveInStage: number;
   wavesPerStage: number;
   /** in-stage wave numbers (1-based) that spawn a boss */
@@ -140,9 +143,17 @@ export interface ProfileSnapshot {
   equippedAttachment: Record<string, string | null>;
 }
 
+export interface ChoiceOption {
+  label: string;
+  /** id passed back to Engine.pickChoice() to resolve the story flag(s) this option sets */
+  id: string;
+}
+
 export type EngineEvent =
   | { type: "levelup"; choices: UpgradeChoice[] }
   | { type: "resume" }
   | { type: "gameover"; stats: GameStats }
   | { type: "stageclear"; stage: number; next: number; stageName: string; stageSub: string; wavesPerStage: number }
-  | { type: "pause"; value: boolean };
+  | { type: "pause"; value: boolean }
+  | { type: "choice"; prompt: string; options: ChoiceOption[] }
+  | { type: "campaign-ending"; ending: CampaignEnding };

@@ -2,7 +2,7 @@ import type { GameStats, UpgradeChoice } from "../game/types";
 import {
   Play, RotateCcw, Home, Trophy, Timer, Skull, TrendingUp, Volume2, VolumeX,
   Crosshair, Gauge, ChevronsRight, HeartPulse, Infinity as InfinityIcon, BookOpen, Settings as SettingsIcon,
-  Maximize, Minimize, FastForward,
+  Maximize, Minimize, FastForward, Radio,
 } from "lucide-react";
 import { ICONS, RARITY_STYLE, MenuButton, StatBox } from "./ui";
 
@@ -11,6 +11,7 @@ import { ICONS, RARITY_STYLE, MenuButton, StatBox } from "./ui";
 export function Menu({
   onEndless, onTutorial, onSettings, high, muted, onMute, touch = false,
   savedStage = null, onContinue,
+  onCampaign, savedCampaignShift = null, onContinueCampaign,
   canFullscreen = false, fullscreen = false, onFullscreen,
 }: {
   onEndless: () => void; onTutorial: () => void; onSettings: () => void;
@@ -20,6 +21,11 @@ export function Menu({
   /** stage a saved run would resume at — null hides Continue entirely */
   savedStage?: number | null;
   onContinue?: () => void;
+  /** opens the loadout screen bound for startCampaign() rather than startGame() */
+  onCampaign?: () => void;
+  /** Shift a saved Story Campaign run would resume at — null hides its Continue */
+  savedCampaignShift?: number | null;
+  onContinueCampaign?: () => void;
   /** hidden where the Fullscreen API isn't available (notably iPhone Safari) */
   canFullscreen?: boolean;
   fullscreen?: boolean;
@@ -101,6 +107,26 @@ export function Menu({
       >
         <InfinityIcon className={savedStage != null ? "h-4 w-4" : "h-5 w-5 transition-transform group-hover:translate-x-0.5"} />
         {savedStage != null ? "NEW RUN" : "ENDLESS MODE"}
+      </button>
+
+      {savedCampaignShift != null && (
+        <button
+          onClick={onContinueCampaign}
+          className="anim-rise group relative mt-3 flex items-center gap-2 overflow-hidden rounded-lg border border-violet-400/30 bg-violet-500/10 px-8 py-2.5 text-sm font-bold tracking-[0.2em] text-violet-200 transition-all duration-200 hover:scale-[1.03] hover:border-violet-400/60 hover:bg-violet-500/20 active:scale-[0.98]"
+          style={{ animationDelay: "225ms" }}
+        >
+          <Radio className="h-4 w-4" />
+          CONTINUE · SHIFT {savedCampaignShift}
+        </button>
+      )}
+
+      <button
+        onClick={onCampaign}
+        className="anim-rise group relative mt-3 flex items-center gap-2 overflow-hidden rounded-lg border border-violet-400/25 bg-violet-500/5 px-8 py-2.5 text-sm font-bold tracking-[0.2em] text-violet-300 transition-all duration-200 hover:scale-[1.03] hover:border-violet-400/50 hover:bg-violet-500/15 active:scale-[0.98]"
+        style={{ animationDelay: "240ms" }}
+      >
+        <Radio className="h-4 w-4" />
+        {savedCampaignShift != null ? "NEW CAMPAIGN" : "STORY CAMPAIGN"}
       </button>
 
       <button

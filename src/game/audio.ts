@@ -167,4 +167,13 @@ export class Sfx {
     this.tone(120, { d: 0.6, type: "sawtooth", g: 0.16, slide: 60 });
     this.noise(0.5, { g: 0.1, f: 700, q: 0.5 });
   }
+  /** Story Campaign radio-line cue — the project has no VO/sample playback,
+   * so an incoming transmission is sold with a two-tone squelch chirp
+   * instead of a voice clip. */
+  radioChirp() {
+    if (this.throttle("radio", 180)) return;
+    this.tone(1800, { d: 0.05, type: "square", g: 0.035 });
+    this.tone(1200, { d: 0.06, type: "square", g: 0.03, delay: 0.06 });
+    this.noise(0.08, { g: 0.02, f: 3000, q: 1.5, delay: 0.02 });
+  }
 }

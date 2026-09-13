@@ -17,6 +17,15 @@ import {
   loadProfile, saveProfile, type ProfileData,
 } from "./save";
 import {
+  CAMPAIGN_STAGES, campaignStageDefFor, campaignWaveIndex, campaignDifficultyFor,
+  defaultCampaignFlags, endingFor,
+  type CampaignFlags, type CampaignStageDef, type ShiftId,
+} from "./campaign";
+import { radioSequenceFor, type RadioTrigger, type Speaker } from "./radio";
+import {
+  saveCampaign, loadCampaign, clearCampaign, defaultCampaignSave, type CampaignSaveData,
+} from "./campaignSave";
+import {
   BOSS_DEFS, CHARGE_SPEED, CHARGE_TIME, bossSpeed, cooldownFor, phaseFor, pickAttack, windupFor,
   type AimTarget, type BossAttack,
 } from "./boss";
@@ -26,7 +35,7 @@ import {
   Z_DIRS, Z_FRAMES, dirFor, groundTheme, tileVariant, type ZSpriteType,
 } from "./art/cache";
 import { muzzleReach } from "./art/sprites/soldier";
-import type { EngineEvent, GameStats, HudState, InventorySnapshot, ProfileSnapshot, UpgradeChoice } from "./types";
+import type { ChoiceOption, EngineEvent, GameStats, HudState, InventorySnapshot, ProfileSnapshot, UpgradeChoice } from "./types";
 
 /* ------------------------------------------------------------------ */
 /* constants + helpers                                                 */
@@ -63,7 +72,7 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
  * derive a boss's torso/limb/head tones from one BossDef.color. */
 
 type ZType = "walker" | "runner" | "brute" | "spitter" | "screamer";
-type ModalKind = "levelup" | "stageclear";
+type ModalKind = "levelup" | "stageclear" | "choice" | "campaignEnding";
 
 interface ZConf {
   hp: number; speed: number; dmg: number; r: number; scale: number; xp: number; score: number;
@@ -177,6 +186,10 @@ interface FloatText { x: number; y: number; vy: number; life: number; max: numbe
 interface Decal { x: number; y: number; s: number; a: number }
 interface SpawnItem { type: ZType; boss?: boolean }
 interface Banner { text: string; sub: string; t: number; dur: number }
+/** Story Campaign radio subtitle — same FIFO one-at-a-time timing model as
+ * Banner (see `radio`/`radioLine`/`updateRadio`), drawn lower-third and
+ * speaker-colored so it never collides with the center-screen banner. */
+interface RadioLine { speaker: Speaker; text: string; t: number; dur: number }
 // kind 0 stone-a 1 stone-b 2 tree 3 lamp 4 wrecked car 5 barrier 6 rubble pile
 interface Decor { x: number; y: number; kind: number; v: number; ph: number }
 /** Solid-collision radius per decor kind (world units, scaled by the decor's own `s`).
@@ -208,6 +221,27 @@ export class Engine {
   private tGlobal = 0;
 
   mode: "attract" | "play" = "attract";
+  /** which run type is active — gates every Story Campaign branch (fixed
+   * 8-shift content, radio lines, story flags) so Endless's 24-stage
+   * rotation and its call sites stay completely untouched when this is
+   * "endless". */
+  private runMode: "endless" | "campaign" = "endless";
+  private campaignFlags: CampaignFlags = defaultCampaignFlags();
+  /** current Shift's content when runMode is "campaign" — mirrors `stageDef`
+   * but typed to the campaign's own shape; `stageDef`/`stage` still drive the
+   * shared simulation (spawns, waves, world size) via setStage()'s branch. */
+  private campaignDef: CampaignStageDef = CAMPAIGN_STAGES[0];
+  /** shots fired since the current shift started — Shift 1's QUIET_S1 and
+   * Shift 8's SHOT_BUDGET_LOW both read this. */
+  private shotsThisShift = 0;
+  /** true once the current shift's "first-paint" / "first-shot" radio cues
+   * have fired, so they only ever play once per shift. */
+  private firedFirstPaint = false;
+  private firedFirstShot = false;
+  /** resolver for whichever binary story choice (Diaz, Vault) is currently
+   * prompted — set by promptChoice(), invoked by pickChoice() with the
+   * option id the player picked. */
+  private pendingChoice: ((id: string) => void) | null = null;
   /** persistent lifetime progression — loaded once, survives every run in this session */
   private profile: ProfileData = loadProfile();
   private over = false;
@@ -323,6 +357,7 @@ export class Engine {
   private playTime = 0;
   private lvlPending = 0;
   private banners: Banner[] = [];
+  private radio: RadioLine[] = [];
   private ambientT = 0;
   private moteT = 0;
   private high = 0;
@@ -367,6 +402,7 @@ export class Engine {
       if (this.mode === "attract") this.updateAttract(dt);
       else if (!this.paused && !this.modalOpen && !this.over) this.update(dt);
       this.updateBanner(dt);
+      this.updateRadio(dt);
       this.render();
     };
     this.raf = requestAnimationFrame(tick);
@@ -391,6 +427,7 @@ export class Engine {
    * RETRY, where starting over should likewise not inherit an old checkpoint. */
   startGame() {
     this.sfx.ensure();
+    this.runMode = "endless";
     clearRun();
     this.reset();
     this.recompute();
@@ -400,6 +437,59 @@ export class Engine {
     this.breakT = 2.2;
     this.breakMax = 2.2;
     this.announce(`STAGE 1 — ${this.stageDef.name}`, this.stageDef.sub, 2.6);
+  }
+
+  /** Starts a fresh Story Campaign run at Shift 1, discarding any saved one —
+   * same discard rationale as startGame(), plus a fresh run should never
+   * inherit a previous playthrough's story flags. */
+  startCampaign() {
+    this.sfx.ensure();
+    this.runMode = "campaign";
+    this.campaignFlags = defaultCampaignFlags();
+    clearCampaign();
+    this.reset();
+    this.recompute();
+    this.pl.hp = this.st.maxHp;
+    this.mode = "play";
+    this.phase = "break";
+    this.breakT = 2.2;
+    this.breakMax = 2.2;
+    this.announce(`SHIFT 1 — ${this.campaignDef.name}`, this.campaignDef.sub, 2.6);
+    this.fireRadio("enter");
+  }
+
+  /** Story Campaign save's shift, or null if there's nothing to continue —
+   * drives the menu's "CONTINUE SHIFT N" button, same role as savedRunStage(). */
+  savedCampaignShift(): number | null {
+    return loadCampaign()?.shift ?? null;
+  }
+
+  /** Resume the last campaign checkpoint. Parallels continueRun() but reads
+   * CampaignSaveData — a separate save from Endless's, per design (the two
+   * modes can't be "in progress" as the same save). */
+  continueCampaign(): boolean {
+    const checkpoint = loadCampaign();
+    if (!checkpoint) return false;
+    this.sfx.ensure();
+    this.runMode = "campaign";
+    this.campaignFlags = { ...checkpoint.flags };
+    this.reset();
+    this.setStage(checkpoint.shift);
+    this.pl.level = checkpoint.level;
+    this.pl.xp = checkpoint.xp;
+    this.pl.xpNext = checkpoint.xpNext;
+    this.shotsThisShift = checkpoint.shotsThisShift;
+    this.recompute();
+    this.pl.hp = this.st.maxHp;
+    this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
+    this.pl.y = WORLD_H / 2;
+    this.cam = clamp(this.pl.x - this.viewW / 2, 0, this.worldW - this.viewW);
+    this.camY = clamp(this.pl.y - this.viewH / 2, 0, WORLD_H - this.viewH);
+    this.mode = "play";
+    this.beginRest(2.4);
+    this.announce(`SHIFT ${checkpoint.shift}`, `picking up where you left off — ${this.campaignDef.name}`, 2.8);
+    this.fireRadio("enter");
+    return true;
   }
 
   toMenu() {
@@ -587,6 +677,7 @@ export class Engine {
     this.playTime = 0;
     this.lvlPending = 0;
     this.banners = [];
+    this.radio = [];
     this.over = false;
     this.paused = false;
     this.modals.clear();
@@ -610,6 +701,30 @@ export class Engine {
 
   /** Switches to a stage's def/world width/theme and regenerates decor to fit. */
   private setStage(stageNum: number) {
+    if (this.runMode === "campaign") {
+      // Fixed, non-repeating content — deliberately NOT stageDefFor(), which
+      // cycles Endless's 24-stage table forever via modulo. campaignStageDefFor
+      // throws past Shift 8 instead of wrapping into Shift 1's content.
+      const shift = stageNum as ShiftId;
+      this.campaignDef = campaignStageDefFor(shift);
+      this.stage = shift;
+      // Adapted into StageDef's shape so every existing stageDef reader
+      // (spawns, waves, HUD) keeps working unmodified for campaign runs too.
+      this.stageDef = {
+        id: shift, name: this.campaignDef.name, sub: this.campaignDef.sub,
+        wavesPerStage: this.campaignDef.wavesPerStage, bossWaves: [],
+        worldW: this.campaignDef.worldW, themeId: this.campaignDef.themeId,
+        actId: 0, indexInAct: 0,
+      };
+      this.worldW = this.stageDef.worldW;
+      this.theme = THEMES[this.stageDef.themeId];
+      this.genDecor(this.theme, this.worldW);
+      this.bossGrave = null;
+      this.shotsThisShift = 0;
+      this.firedFirstPaint = false;
+      this.firedFirstShot = false;
+      return;
+    }
     this.stage = stageNum;
     this.stageDef = stageDefFor(stageNum);
     this.worldW = this.stageDef.worldW;
@@ -986,7 +1101,7 @@ export class Engine {
       }
       this.target = target;
       this.onTarget = target !== null;
-      if (this.onTarget && !had) this.laserFlash = 0.25;
+      if (this.onTarget && !had) { this.laserFlash = 0.25; this.onFreshLaserLock(); }
     } else {
       p.aim = mouseAim;
       this.acquireRayTarget(p.aim);
@@ -1050,7 +1165,8 @@ export class Engine {
           // clearing the last wave finishes the stage directly — no more
           // walk-to-the-safe-house corridor with gates to clear; that was a
           // side-scroller-era mechanic that doesn't fit open 2D exploration
-          this.completeStage();
+          if (this.runMode === "campaign") this.completeCampaignShift();
+          else this.completeStage();
         } else {
           const boss = this.stageDef.bossWaves.includes(this.waveInStage);
           // exploration stages carry no bossWaves at all, so without this,
@@ -1189,7 +1305,17 @@ export class Engine {
     const had = this.onTarget;
     this.target = best;
     this.onTarget = best !== null;
-    if (this.onTarget && !had) this.laserFlash = 0.25;
+    if (this.onTarget && !had) { this.laserFlash = 0.25; this.onFreshLaserLock(); }
+  }
+
+  /** Story Campaign's "first-paint" radio cue — fires once per shift, the
+   * instant the laser first locks onto anything, matching the doc's "First
+   * Walker painted (tutorial trigger)" cue. No-ops outside campaign runs. */
+  private onFreshLaserLock() {
+    if (this.runMode === "campaign" && !this.firedFirstPaint) {
+      this.firedFirstPaint = true;
+      this.fireRadio("first-paint");
+    }
   }
 
   /* ============ AMBUSH ============ */
@@ -1332,6 +1458,10 @@ export class Engine {
       return;
     }
     this.ammo[this.kind]--;
+    if (this.runMode === "campaign") {
+      this.shotsThisShift++;
+      if (!this.firedFirstShot) { this.firedFirstShot = true; this.fireRadio("first-shot"); }
+    }
     // Tactical Stim: temporary fire-rate rush
     p.cd = 1 / (st.fireRate * (this.stimT > 0 ? 1.4 : 1));
     p.flash = 0.07;
@@ -2372,6 +2502,11 @@ export class Engine {
   // into stage 2, since power only reaches ~1.7 by the end of a 10-wave
   // stage 1. Every type now has some presence from wave 1, growing with power.
   private zombieWeights(power: number): Partial<Record<string, number>> {
+    // Story Campaign shifts are curated, one-shot content — each Shift's own
+    // enemyPool (Front Rows is walkers-only, The Hollow is a Screamer-heavy
+    // mix, etc.) IS the intended mix, not a byproduct of the power ramp.
+    if (this.runMode === "campaign") return this.campaignDef.enemyPool;
+
     // Runners (speed 128) are the only fodder that can stay with a moving
     // player at all — everything else is slower than a walk. On the boss
     // stages the cap is raised so the crowd actually applies pressure instead
@@ -2479,13 +2614,24 @@ export class Engine {
 
   private startWave(inStage: number) {
     this.waveInStage = inStage;
-    this.waveIndex = cumulativeWaveIndex(this.stage, inStage);
-    this.power = difficultyFor(this.stage, inStage);
+    if (this.runMode === "campaign") {
+      // Campaign's own non-wrapping index/curve — cumulativeWaveIndex/
+      // difficultyFor walk Endless's wrapping stageDefFor table, which would
+      // silently sum the wrong content for a shift number.
+      this.waveIndex = campaignWaveIndex(this.campaignDef.shift, inStage);
+      this.power = campaignDifficultyFor(this.campaignDef.shift, inStage);
+    } else {
+      this.waveIndex = cumulativeWaveIndex(this.stage, inStage);
+      this.power = difficultyFor(this.stage, inStage);
+    }
     const finalWave = inStage === this.stageDef.wavesPerStage;
     // stage 5 and 10 cap their final wave with a horde finale instead of a
     // normal fixed-size batch — a sustained, continuously-refilled swarm
-    // with a boss-tier zombie, see HORDE_STAGES and the "active" phase update
-    const hordeFinale = this.stageDef.bossId == null && finalWave && HORDE_STAGES.includes(this.stage);
+    // with a boss-tier zombie, see HORDE_STAGES and the "active" phase update.
+    // Campaign reuses stage numbers 1-8 for shifts, so it must never match
+    // Endless's HORDE_STAGES ([5, 10]) by coincidence.
+    const hordeFinale = this.runMode !== "campaign" &&
+      this.stageDef.bossId == null && finalWave && HORDE_STAGES.includes(this.stage);
     if (hordeFinale) {
       this.queue = [];
       this.waveTotal = 0;
@@ -2587,8 +2733,106 @@ export class Engine {
     });
   }
 
+  /** Called after Shift N's last wave clears — Story Campaign's equivalent of
+   * completeStage(), but a fixed 8-shift table has no analogue to Endless's
+   * bottomless loop: Shift 8 resolves the ending instead of ever showing a
+   * "Shift 9" stage-clear screen. */
+  private completeCampaignShift() {
+    const cleared = this.campaignDef.shift;
+    if (cleared === 1 && this.shotsThisShift === 0) this.campaignFlags.QUIET_S1 = true;
+    this.fireRadio("shift-clear");
+
+    if (cleared >= 8) {
+      this.finishCampaign(false);
+      return;
+    }
+
+    this.stageIntermission = true;
+    this.modals.add("stageclear");
+    this.phase = "break";
+    this.score += 300 * cleared;
+    this.pl.hp = this.st.maxHp;
+    for (const id of WEAPON_IDS) {
+      if (this.reserve[id] >= 0) this.reserve[id] = Math.max(this.reserve[id], Math.round(this.effWeapon(id).reserve * 0.5));
+    }
+    this.grantLoot(2);
+    this.writeCampaignCheckpoint((cleared + 1) as ShiftId);
+    this.sfx.levelup();
+    this.onEvent({
+      type: "stageclear", stage: cleared, next: cleared + 1,
+      stageName: this.campaignDef.name, stageSub: this.campaignDef.sub,
+      wavesPerStage: this.campaignDef.wavesPerStage,
+    });
+  }
+
+  /** Player confirmed the stage-clear screen after a campaign shift. */
+  private advanceCampaignShift() {
+    if (!this.stageIntermission) return;
+    const next = (this.campaignDef.shift + 1) as ShiftId;
+    this.setStage(next);
+    this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
+    this.pl.y = WORLD_H / 2;
+    this.pl.vx = 0;
+    this.pl.vy = 0;
+    this.cam = clamp(this.pl.x - this.viewW / 2, 0, this.worldW - this.viewW);
+    this.camY = clamp(this.pl.y - this.viewH / 2, 0, WORLD_H - this.viewH);
+    this.waveInStage = 0;
+    this.stageIntermission = false;
+    this.modals.delete("stageclear");
+    this.bullets = [];
+    this.eshots = [];
+    for (const id of WEAPON_IDS) this.ammo[id] = this.effWeapon(id).mag;
+    this.reloading = false;
+    this.reloadT = 0;
+    this.beginRest(2.6);
+    this.announce(`SHIFT ${next} — ${this.campaignDef.name}`, this.campaignDef.sub, 2.8);
+    this.fireRadio("enter");
+  }
+
+  private writeCampaignCheckpoint(nextShift: ShiftId) {
+    const data: CampaignSaveData = {
+      version: defaultCampaignSave().version,
+      shift: nextShift,
+      flags: { ...this.campaignFlags },
+      level: this.pl.level, xp: this.pl.xp, xpNext: this.pl.xpNext,
+      hp: this.st.maxHp,
+      shotsThisShift: 0,
+    };
+    saveCampaign(data);
+  }
+
+  /** Resolves and shows one of the 5 endings, then clears the campaign save —
+   * like Endless's clearRun() on a true game over, a finished campaign has no
+   * checkpoint to resume. `failed` is Shift 8's timer/chained-screamer fail
+   * state ("You Woke the Rows"), a gameplay outcome rather than a flag. */
+  private finishCampaign(failed: boolean) {
+    const ending = endingFor(this.campaignFlags, failed);
+    clearCampaign();
+    this.modals.add("campaignEnding");
+    this.phase = "break";
+    this.onEvent({ type: "campaign-ending", ending });
+  }
+
+  /** Freezes the sim behind a binary story choice (Diaz's cottage, the Vault's
+   * racks) and hands the resolver to pickChoice(). Wired up alongside each
+   * shift's own choice point (Shift 4's Diaz prompt, Shift 7's Vault prompt). */
+  promptChoice(prompt: string, options: ChoiceOption[], onPick: (id: string) => void) {
+    this.modals.add("choice");
+    this.pendingChoice = onPick;
+    this.onEvent({ type: "choice", prompt, options });
+  }
+
+  /** UI callback for the ChoicePrompt modal's pick. */
+  pickChoice(id: string) {
+    const resolve = this.pendingChoice;
+    this.pendingChoice = null;
+    this.modals.delete("choice");
+    resolve?.(id);
+  }
+
   /** Player confirmed the stage-clear screen. */
   advanceStage() {
+    if (this.runMode === "campaign") { this.advanceCampaignShift(); return; }
     if (!this.stageIntermission) return;
     this.setStage(this.stage + 1);
     // walk out of the safe house back onto the left side of the new stage —
@@ -2695,6 +2939,34 @@ export class Engine {
     }
   }
 
+  /** Reading time scales with line length — a one-word "Copy." shouldn't hold
+   * the queue as long as a full sentence. */
+  private radioDurFor(text: string): number {
+    return Math.max(2.2, Math.min(6, 1.4 + text.length * 0.045));
+  }
+
+  private radioLine(speaker: Speaker, text: string) {
+    const dur = this.radioDurFor(text);
+    this.radio.push({ speaker, text, t: dur, dur });
+    this.sfx.radioChirp();
+  }
+
+  /** Queues every cue for this trigger (a shift's "enter" is often several
+   * lines back-to-back) gated by the current story flags. No-ops outside
+   * Story Campaign runs. */
+  private fireRadio(trigger: RadioTrigger) {
+    if (this.runMode !== "campaign") return;
+    const cues = radioSequenceFor(this.campaignDef.shift, trigger, this.campaignFlags);
+    for (const cue of cues) this.radioLine(cue.speaker, cue.text);
+  }
+
+  private updateRadio(dt: number) {
+    if (this.radio.length > 0) {
+      this.radio[0].t -= dt;
+      if (this.radio[0].t <= 0) this.radio.shift();
+    }
+  }
+
   /* ---------------- hud ---------------- */
 
   getHud(): HudState {
@@ -2708,6 +2980,7 @@ export class Engine {
       level: p.level,
       stage: this.stage,
       stageName: this.stageDef.name,
+      isCampaign: this.runMode === "campaign",
       waveInStage: this.waveInStage,
       wavesPerStage: this.stageDef.wavesPerStage,
       bossWaves: this.stageDef.bossWaves,
@@ -3184,6 +3457,7 @@ export class Engine {
 
     /* --- banner --- */
     if (this.banners.length > 0) this.drawBanner(this.banners[0]);
+    if (this.radio.length > 0) this.drawRadio(this.radio[0]);
 
     /* --- next wave countdown --- */
     if (this.mode === "play" && !this.over && this.phase === "break" && !this.stageIntermission && this.waveIndex > 0) {
@@ -3251,6 +3525,62 @@ export class Engine {
     c.fillStyle = "#f59e0b";
     c.fillText(b.sub.toUpperCase(), 0, 36);
     (c as unknown as { letterSpacing: string }).letterSpacing = "0px";
+    c.restore();
+  }
+
+  private readonly RADIO_COLOR: Record<Speaker, string> = {
+    RHEE: "#7dd3fc", VALE: "#34d399", DIAZ: "#fb923c", UNK: "#f87171", CREW: "#f87171",
+  };
+
+  /** Radio subtitle: a lower-third transcript box, speaker-colored, word-wrapped.
+   * No spoken audio exists in this project (see radio.ts's doc comment) — this
+   * text plus `Sfx.radioChirp()` is the whole "incoming transmission" sell. */
+  private drawRadio(r: RadioLine) {
+    const c = this.ctx;
+    const p = 1 - r.t / r.dur;
+    const a = p < 0.08 ? p / 0.08 : p > 0.85 ? (1 - p) / 0.15 : 1;
+    const maxW = 760;
+    c.save();
+    c.globalAlpha = clamp(a, 0, 1);
+    c.font = '500 15px "Space Grotesk", sans-serif';
+    const words = r.text.split(" ");
+    const lines: string[] = [];
+    let cur = "";
+    for (const w of words) {
+      const test = cur ? `${cur} ${w}` : w;
+      if (cur && c.measureText(test).width > maxW) {
+        lines.push(cur);
+        cur = w;
+      } else {
+        cur = test;
+      }
+    }
+    if (cur) lines.push(cur);
+
+    const lineH = 21;
+    const boxH = lines.length * lineH + 34;
+    const textW = Math.max(...lines.map((l) => c.measureText(l).width), 120);
+    const boxW = Math.min(maxW + 40, textW + 40);
+    const boxY = H - 96 - boxH;
+    const boxX = W / 2 - boxW / 2;
+    const color = this.RADIO_COLOR[r.speaker];
+
+    c.fillStyle = "rgba(4,6,10,0.72)";
+    c.fillRect(boxX, boxY, boxW, boxH);
+    c.strokeStyle = color + "55";
+    c.lineWidth = 1;
+    c.strokeRect(boxX, boxY, boxW, boxH);
+
+    c.textAlign = "left";
+    c.fillStyle = color;
+    c.font = '700 12px "Space Grotesk", sans-serif';
+    (c as unknown as { letterSpacing: string }).letterSpacing = "2px";
+    c.fillText(r.speaker, boxX + 18, boxY + 20);
+    (c as unknown as { letterSpacing: string }).letterSpacing = "0px";
+
+    c.font = '500 15px "Space Grotesk", sans-serif';
+    c.fillStyle = "#f4efe6";
+    lines.forEach((line, i) => c.fillText(line, boxX + 18, boxY + 42 + i * lineH));
     c.restore();
   }
 

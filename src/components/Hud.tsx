@@ -84,7 +84,7 @@ export default function Hud({
       {/* top-center: stage + wave, or travel progress */}
       <div className="absolute left-1/2 top-4 -translate-x-1/2 text-center">
         <div className="text-[12px] font-bold tracking-[0.42em] text-white/45">
-          STAGE {hud.stage}
+          {hud.isCampaign ? "SHIFT" : "STAGE"} {hud.stage}
         </div>
         <div className="text-base font-semibold text-white">{hud.stageName}</div>
         {hud.phase === "break" && hud.breakT > 3 ? (
