@@ -169,6 +169,14 @@ interface Bullet {
 
 interface EShot { x: number; y: number; vx: number; vy: number; dmg: number; life: number }
 
+/** Shift 3's escorted civilian — a followed NPC with hp that can die
+ * (setting VALE_DEAD) rather than a normal combatant. */
+interface ValeState { x: number; y: number; hp: number; maxHp: number }
+
+/** Shift 3's interactable prop: lit by default, permanently extinguished by
+ * a bullet hit (no re-lighting — "kill the light or accept the acid"). */
+interface LanternState { x: number; y: number; lit: boolean }
+
 interface Particle {
   x: number; y: number; vx: number; vy: number;
   life: number; max: number; size: number; color: string; grav: number; add: boolean;
@@ -245,6 +253,13 @@ export class Engine {
   private shotSideT = 0;
   private firedLaneRedirect = false;
   private firedRunnerClose = false;
+  /** Shift 3's escort/lantern state — both null outside Shift 3 or once
+   * resolved (Vale dies, or never respawns after that). */
+  private vale: ValeState | null = null;
+  private lantern: LanternState | null = null;
+  private firedEscortSpit = false;
+  private firedLanternOff = false;
+  private firedLanternOn = false;
   /** resolver for whichever binary story choice (Diaz, Vault) is currently
    * prompted — set by promptChoice(), invoked by pickChoice() with the
    * option id the player picked. */
@@ -462,7 +477,7 @@ export class Engine {
     this.breakT = 2.2;
     this.breakMax = 2.2;
     this.announce(`SHIFT 1 — ${this.campaignDef.name}`, this.campaignDef.sub, 2.6);
-    this.fireRadio("enter");
+    this.onCampaignShiftEnter();
   }
 
   /** Story Campaign save's shift, or null if there's nothing to continue —
@@ -495,7 +510,7 @@ export class Engine {
     this.mode = "play";
     this.beginRest(2.4);
     this.announce(`SHIFT ${checkpoint.shift}`, `picking up where you left off — ${this.campaignDef.name}`, 2.8);
-    this.fireRadio("enter");
+    this.onCampaignShiftEnter();
     return true;
   }
 
@@ -733,6 +748,11 @@ export class Engine {
       this.shotSideT = 0;
       this.firedLaneRedirect = false;
       this.firedRunnerClose = false;
+      this.vale = null;
+      this.lantern = null;
+      this.firedEscortSpit = false;
+      this.firedLanternOff = false;
+      this.firedLanternOn = false;
       return;
     }
     this.stage = stageNum;
@@ -1192,11 +1212,18 @@ export class Engine {
             `WAVE ${this.waveInStage} CLEARED`,
             `${this.stageDef.wavesPerStage - this.waveInStage} to go — breathe while you can`
           );
+          // Shift 3's lantern nag: a mid-shift reminder if it's still lit —
+          // once, not every wave, so it reads as commentary, not a timer.
+          if (this.lantern?.lit && !this.firedLanternOn && this.waveInStage === 2) {
+            this.firedLanternOn = true;
+            this.fireRadio("lantern-on");
+          }
         }
       }
     }
 
     this.updateZombies(dt);
+    this.updateVale(dt);
     this.updateBoss(dt);
     this.updateBullets(dt);
     this.updateEshots(dt);
@@ -1585,8 +1612,13 @@ export class Engine {
           else { z.vx *= 0.85; z.vy *= 0.85; }
         }
         z.spit -= dt;
-        if (z.spit <= 0 && dist2d < 640) {
-          z.spit = R(2.1, 3.1);
+        // Shift 3's lantern: lit, the spitters "own the light" — they snipe
+        // from farther out and more often, so leaving it burning is a
+        // standing ranged threat, not just ambiance.
+        const litBoost = this.lantern?.lit === true;
+        const spitRange = litBoost ? 900 : 640;
+        if (z.spit <= 0 && dist2d < spitRange) {
+          z.spit = litBoost ? R(1.3, 2.0) : R(2.1, 3.1);
           this.spitAt(z);
         }
       } else {
@@ -1622,6 +1654,45 @@ export class Engine {
       }
     }
     this.zombies = zs.filter((z) => !z.dead);
+  }
+
+  /** Vale follows the player like a loose companion — closes the gap once
+   * she falls too far behind, otherwise stays put rather than crowding the
+   * player's feet. No combat AI: she's an escort target, not a fighter. */
+  private updateVale(dt: number) {
+    if (!this.vale) return;
+    const v = this.vale;
+    const p = this.pl;
+    const dx = p.x - v.x, dy = p.y - v.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const followDist = 70;
+    if (dist > followDist) {
+      const speed = 195;
+      const k = Math.min(1, (speed * dt) / dist);
+      v.x += dx * k;
+      v.y += dy * k;
+    }
+    v.x = clamp(v.x, 20, this.worldW - 20);
+    v.y = clamp(v.y, 20, WORLD_H - 20);
+  }
+
+  /** Spitter acid reaching Vale — fires the one-time "escort-spit" warning
+   * on first contact, and VALE_DEAD + "escort-fail" if it finishes her. */
+  private hurtVale(dmg: number) {
+    if (!this.vale) return;
+    if (!this.firedEscortSpit) { this.firedEscortSpit = true; this.fireRadio("escort-spit"); }
+    const v = this.vale;
+    v.hp -= dmg;
+    for (let i = 0; i < 6; i++)
+      this.particles.push({
+        x: v.x, y: v.y - 20, vx: R(-80, 80), vy: R(-130, -30),
+        life: R(0.25, 0.45), max: 0.45, size: R(2, 4), color: "#a3e635", grav: 700, add: false,
+      });
+    if (v.hp <= 0) {
+      this.vale = null;
+      this.campaignFlags.VALE_DEAD = true;
+      this.fireRadio("escort-fail");
+    }
   }
 
   private static readonly BOSS_PITCH: Record<BossAttack, number> = { slam: 90, mortar: 260, call: 170, shieldcharge: 130 };
@@ -1871,6 +1942,21 @@ export class Engine {
           else b.life = 0;
         }
       }
+      // Shift 3's lantern: one bullet permanently kills the light — "kill
+      // the light or accept the acid" is a one-way choice, no re-lighting.
+      if (b.life > 0 && this.lantern?.lit) {
+        const dx = b.x - this.lantern.x, dy = b.y - this.lantern.y;
+        if (dx * dx + dy * dy < 30 * 30) {
+          this.lantern.lit = false;
+          if (!this.firedLanternOff) { this.firedLanternOff = true; this.fireRadio("lantern-off"); }
+          b.life = 0;
+          for (let i = 0; i < 10; i++)
+            this.particles.push({
+              x: this.lantern.x, y: this.lantern.y, vx: R(-60, 60), vy: R(-110, -20),
+              life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#fde68a", grav: 500, add: true,
+            });
+        }
+      }
     }
     this.bullets = this.bullets.filter(
       (b) => b.life > 0 && b.x > -60 && b.x < this.worldW + 60 && b.y > -60 && b.y < WORLD_H + 60
@@ -1889,6 +1975,12 @@ export class Engine {
       if (dx * dx + dy * dy < 22 * 22) {
         s.life = 0;
         this.hurtPlayer(s.dmg, Math.sign(s.vx) * 110);
+      } else if (this.vale && s.life > 0) {
+        const vdx = s.x - this.vale.x, vdy = s.y - this.vale.y;
+        if (vdx * vdx + vdy * vdy < 24 * 24) {
+          s.life = 0;
+          this.hurtVale(s.dmg);
+        }
       }
     }
     this.eshots = this.eshots.filter((s) => s.life > 0);
@@ -2145,7 +2237,7 @@ export class Engine {
     this.mode = "play";
     this.beginRest(2.4);
     this.announce("YOU DIED", `back at the checkpoint — ${this.campaignDef.name}`, 2.8);
-    this.fireRadio("enter");
+    this.onCampaignShiftEnter();
   }
 
   /** reset() then restore progression from the last safe-house checkpoint. Shared
@@ -2815,6 +2907,12 @@ export class Engine {
   private completeCampaignShift() {
     const cleared = this.campaignDef.shift;
     if (cleared === 1 && this.shotsThisShift === 0) this.campaignFlags.QUIET_S1 = true;
+    // Vale surviving the whole shift is the "office reached" beat — her
+    // death already got its own escort-fail line, so this only fires when
+    // she made it through.
+    if (this.campaignDef.mechanic === "lantern-escort" && this.vale) {
+      this.fireRadio("escort-success");
+    }
     this.fireRadio("shift-clear");
 
     if (cleared >= 8) {
@@ -2861,7 +2959,7 @@ export class Engine {
     this.reloadT = 0;
     this.beginRest(2.6);
     this.announce(`SHIFT ${next} — ${this.campaignDef.name}`, this.campaignDef.sub, 2.8);
-    this.fireRadio("enter");
+    this.onCampaignShiftEnter();
   }
 
   private writeCampaignCheckpoint(nextShift: ShiftId) {
@@ -3051,6 +3149,20 @@ export class Engine {
     }
   }
 
+  /** Fires every "enter" line for the current shift, then runs whatever
+   * one-time setup that shift's mechanic needs — called from every path that
+   * lands the player at the start of a shift (fresh start, continue, death
+   * retry, advancing from the previous shift). Centralized here rather than
+   * duplicated at each of those 4 call sites. */
+  private onCampaignShiftEnter() {
+    this.fireRadio("enter");
+    if (this.campaignDef.mechanic === "lantern-escort") {
+      this.vale = { x: this.pl.x - 40, y: this.pl.y + 40, hp: 60, maxHp: 60 };
+      this.lantern = { x: this.worldW * 0.5, y: WORLD_H / 2, lit: true };
+      this.fireRadio("escort-start");
+    }
+  }
+
   /* ---------------- hud ---------------- */
 
   getHud(): HudState {
@@ -3150,6 +3262,7 @@ export class Engine {
     this.camTransform(cam, camY);
     for (const g of this.gems) this.drawGem(g, t);
     for (const cr of this.crates) if (!cr.opened) this.drawCrate(cr, t);
+    if (this.lantern) this.drawLantern(this.lantern, t);
     c.restore();
 
     // these three subtract `cam` themselves instead of drawing under a camera
@@ -3157,6 +3270,7 @@ export class Engine {
     c.save();
     this.applyZoom();
     for (const z of this.zombies) this.drawZombie(z, cam, camY, t);
+    if (this.vale) this.drawVale(this.vale, cam, camY, t);
     if (this.boss && !this.boss.dead) this.drawBoss(this.boss, cam, camY, t);
     if (this.mode === "play" && !this.over) this.drawPlayer(cam, camY, t);
     c.restore();
@@ -3741,6 +3855,43 @@ export class Engine {
     c.restore();
   }
 
+  /** Shift 3's shootable lantern — a simple post-lamp: warm glow and flame
+   * while lit, dark iron husk once shot out. World-space, same coordinate
+   * convention as drawGem/drawCrate in this block. */
+  private drawLantern(l: LanternState, t: number) {
+    const c = this.ctx;
+    c.save();
+    c.translate(l.x, l.y);
+    // post
+    c.fillStyle = "#2a2018";
+    c.fillRect(-3, -28, 6, 40);
+    // shadow
+    c.fillStyle = "rgba(0,0,0,0.4)";
+    c.beginPath();
+    c.ellipse(0, 14, 14, 4, 0, 0, TAU);
+    c.fill();
+    if (l.lit) {
+      const flicker = 0.85 + Math.sin(t * 11) * 0.1 + Math.sin(t * 23) * 0.05;
+      c.globalCompositeOperation = "lighter";
+      const gr = c.createRadialGradient(0, -32, 0, 0, -32, 60 * flicker);
+      gr.addColorStop(0, "rgba(253,230,138,0.55)");
+      gr.addColorStop(1, "rgba(253,230,138,0)");
+      c.fillStyle = gr;
+      c.fillRect(-60, -92, 120, 120);
+      c.globalCompositeOperation = "source-over";
+      c.fillStyle = "#fde68a";
+      c.beginPath();
+      c.arc(0, -32, 7 * flicker, 0, TAU);
+      c.fill();
+    } else {
+      c.fillStyle = "#1a1512";
+      c.beginPath();
+      c.arc(0, -32, 6, 0, TAU);
+      c.fill();
+    }
+    c.restore();
+  }
+
   private drawCrate(cr: Crate, t: number) {
     const c = this.ctx;
     const tierColor = cr.tier === 3 ? "#fbbf24" : cr.tier === 2 ? "#a78bfa" : "#94a3b8";
@@ -3789,6 +3940,44 @@ export class Engine {
   /** Zombie, seen from above: the whole body rotates to face its actual
    * heading (chase velocity, or the player when idle) instead of only
    * flipping left/right, so it reads correctly approaching from any angle. */
+  /** Shift 3's escorted civilian — a simple pixel-styled silhouette (no
+   * pixel-buffer sprite authored for her; she's a single-shift NPC, not a
+   * recurring enemy type) plus a health bar so her danger is legible during
+   * a firefight, same cam-subtracted coordinate convention as drawZombie. */
+  private drawVale(v: ValeState, cam: number, camY: number, t: number) {
+    const c = this.ctx;
+    const px = v.x - cam;
+    if (px < -60 || px > W + 60) return;
+    const py = v.y + camY;
+    const bob = Math.sin(t * 4) * 1.5;
+
+    c.fillStyle = "rgba(0,0,0,0.4)";
+    c.beginPath();
+    c.ellipse(px, py + 16, 10, 4, 0, 0, TAU);
+    c.fill();
+
+    c.save();
+    c.translate(px, py + bob);
+    // body
+    c.fillStyle = "#166534";
+    c.beginPath();
+    c.ellipse(0, 2, 8, 12, 0, 0, TAU);
+    c.fill();
+    // head
+    c.fillStyle = "#e7c9a3";
+    c.beginPath();
+    c.arc(0, -14, 6, 0, TAU);
+    c.fill();
+    c.restore();
+
+    // health bar
+    const pct = clamp(v.hp / v.maxHp, 0, 1);
+    c.fillStyle = "rgba(0,0,0,0.55)";
+    c.fillRect(px - 14, py - 30, 28, 4);
+    c.fillStyle = pct > 0.4 ? "#34d399" : "#f87171";
+    c.fillRect(px - 14, py - 30, 28 * pct, 4);
+  }
+
   private drawZombie(z: Zombie, cam: number, camY: number, t: number) {
     const c = this.ctx;
     const px = z.x - cam;
