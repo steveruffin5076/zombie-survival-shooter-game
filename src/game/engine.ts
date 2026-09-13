@@ -177,6 +177,11 @@ interface ValeState { x: number; y: number; hp: number; maxHp: number }
  * a bullet hit (no re-lighting — "kill the light or accept the acid"). */
 interface LanternState { x: number; y: number; lit: boolean }
 
+/** Shift 5's static "woman between the lanes" — not a combatant, just a
+ * stationary lure. `hit` flips permanently the first time a bullet finds
+ * her ("painted") and calls in a runner ambush; never re-triggers. */
+interface DecoyState { x: number; y: number; hit: boolean }
+
 interface Particle {
   x: number; y: number; vx: number; vy: number;
   life: number; max: number; size: number; color: string; grav: number; add: boolean;
@@ -264,6 +269,10 @@ export class Engine {
    * the mid-shift Diaz choice prompt. */
   private firedWallBreak = false;
   private firedDiazChoice = false;
+  /** Shift 5's decoy survivor + canister pickup. */
+  private decoy: DecoyState | null = null;
+  private firedDecoySeen = false;
+  private firedCanisterPickup = false;
   /** resolver for whichever binary story choice (Diaz, Vault) is currently
    * prompted — set by promptChoice(), invoked by pickChoice() with the
    * option id the player picked. */
@@ -759,6 +768,9 @@ export class Engine {
       this.firedLanternOn = false;
       this.firedWallBreak = false;
       this.firedDiazChoice = false;
+      this.decoy = null;
+      this.firedDecoySeen = false;
+      this.firedCanisterPickup = false;
       return;
     }
     this.stage = stageNum;
@@ -1245,6 +1257,12 @@ export class Engine {
 
     this.updateZombies(dt);
     this.updateVale(dt);
+    // Shift 5's decoy: a one-time flavor line the first time the player gets
+    // close enough to see her — she's static, so no per-frame AI needed.
+    if (this.decoy && !this.firedDecoySeen && Math.hypot(this.decoy.x - this.pl.x, this.decoy.y - this.pl.y) < 350) {
+      this.firedDecoySeen = true;
+      this.fireRadio("decoy-seen");
+    }
     this.updateBoss(dt);
     this.updateBullets(dt);
     this.updateEshots(dt);
@@ -1984,6 +2002,23 @@ export class Engine {
             });
         }
       }
+      // Shift 5's decoy: any bullet that finds her "paints" her — a one-way
+      // reveal that calls in an ambush, reusing the same runner-ambush system
+      // as a Screamer's shriek rather than a bespoke spawn.
+      if (b.life > 0 && this.decoy && !this.decoy.hit) {
+        const dx = b.x - this.decoy.x, dy = b.y - this.decoy.y;
+        if (dx * dx + dy * dy < 20 * 20) {
+          this.decoy.hit = true;
+          this.fireRadio("decoy-painted");
+          if (this.ambushT <= 0) this.triggerAmbush(3);
+          b.life = 0;
+          for (let i = 0; i < 10; i++)
+            this.particles.push({
+              x: this.decoy.x, y: this.decoy.y, vx: R(-60, 60), vy: R(-110, -20),
+              life: R(0.3, 0.6), max: 0.6, size: R(2, 4), color: "#7f1d1d", grav: 500, add: true,
+            });
+        }
+      }
     }
     this.bullets = this.bullets.filter(
       (b) => b.life > 0 && b.x > -60 && b.x < this.worldW + 60 && b.y > -60 && b.y < WORLD_H + 60
@@ -2557,6 +2592,12 @@ export class Engine {
 
   private openCrate(cr: Crate) {
     cr.opened = true;
+    // Shift 5's canister: the doc's beat is the pickup itself, not which
+    // crate it is — the first crate opened this shift stands in for it.
+    if (this.campaignDef.mechanic === "decoy-canister" && !this.firedCanisterPickup) {
+      this.firedCanisterPickup = true;
+      this.fireRadio("canister-pickup");
+    }
     const summary = this.grantLoot(cr.tier);
     this.sfx.levelup();
     this.shake(2);
@@ -2940,6 +2981,11 @@ export class Engine {
     if (this.campaignDef.mechanic === "lantern-escort" && this.vale) {
       this.fireRadio("escort-success");
     }
+    // Shift 5's decoy: surviving the whole shift without ever painting her
+    // gets its own "you didn't touch her" line.
+    if (this.campaignDef.mechanic === "decoy-canister" && this.decoy && !this.decoy.hit) {
+      this.fireRadio("decoy-passed");
+    }
     this.fireRadio("shift-clear");
 
     if (cleared >= 8) {
@@ -3205,6 +3251,8 @@ export class Engine {
       this.vale = { x: this.pl.x - 40, y: this.pl.y + 40, hp: 60, maxHp: 60 };
       this.lantern = { x: this.worldW * 0.5, y: WORLD_H / 2, lit: true };
       this.fireRadio("escort-start");
+    } else if (this.campaignDef.mechanic === "decoy-canister") {
+      this.decoy = { x: this.worldW * 0.6, y: WORLD_H / 2, hit: false };
     }
   }
 
@@ -3316,6 +3364,7 @@ export class Engine {
     this.applyZoom();
     for (const z of this.zombies) this.drawZombie(z, cam, camY, t);
     if (this.vale) this.drawVale(this.vale, cam, camY, t);
+    if (this.decoy) this.drawDecoy(this.decoy, cam, camY);
     if (this.boss && !this.boss.dead) this.drawBoss(this.boss, cam, camY, t);
     if (this.mode === "play" && !this.over) this.drawPlayer(cam, camY, t);
     c.restore();
@@ -4021,6 +4070,33 @@ export class Engine {
     c.fillRect(px - 14, py - 30, 28, 4);
     c.fillStyle = pct > 0.4 ? "#34d399" : "#f87171";
     c.fillRect(px - 14, py - 30, 28 * pct, 4);
+  }
+
+  /** Shift 5's decoy: a still, pale figure until "painted" by a bullet,
+   * then a dull red reveal — same silhouette as `drawVale`, no health bar
+   * since she isn't a combatant either way. */
+  private drawDecoy(d: DecoyState, cam: number, camY: number) {
+    const c = this.ctx;
+    const px = d.x - cam;
+    if (px < -60 || px > W + 60) return;
+    const py = d.y + camY;
+
+    c.fillStyle = "rgba(0,0,0,0.4)";
+    c.beginPath();
+    c.ellipse(px, py + 16, 10, 4, 0, 0, TAU);
+    c.fill();
+
+    c.save();
+    c.translate(px, py);
+    c.fillStyle = d.hit ? "#7f1d1d" : "#57534e";
+    c.beginPath();
+    c.ellipse(0, 2, 8, 12, 0, 0, TAU);
+    c.fill();
+    c.fillStyle = d.hit ? "#f87171" : "#d6d3d1";
+    c.beginPath();
+    c.arc(0, -14, 6, 0, TAU);
+    c.fill();
+    c.restore();
   }
 
   private drawZombie(z: Zombie, cam: number, camY: number, t: number) {
