@@ -260,6 +260,10 @@ export class Engine {
   private firedEscortSpit = false;
   private firedLanternOff = false;
   private firedLanternOn = false;
+  /** Shift 4's one-time beats: the first Brute slam through the wall, and
+   * the mid-shift Diaz choice prompt. */
+  private firedWallBreak = false;
+  private firedDiazChoice = false;
   /** resolver for whichever binary story choice (Diaz, Vault) is currently
    * prompted — set by promptChoice(), invoked by pickChoice() with the
    * option id the player picked. */
@@ -753,6 +757,8 @@ export class Engine {
       this.firedEscortSpit = false;
       this.firedLanternOff = false;
       this.firedLanternOn = false;
+      this.firedWallBreak = false;
+      this.firedDiazChoice = false;
       return;
     }
     this.stage = stageNum;
@@ -1218,6 +1224,21 @@ export class Engine {
             this.firedLanternOn = true;
             this.fireRadio("lantern-on");
           }
+          // Shift 4's Diaz choice: fires once, past the shift's midpoint so
+          // the wall-break beat and some fighting land first.
+          if (this.campaignDef.mechanic === "wall-break-choice" && !this.firedDiazChoice && this.waveInStage === 4) {
+            this.firedDiazChoice = true;
+            this.fireRadio("choice-prompt");
+            this.promptChoice(
+              "Diaz can't go on much longer.",
+              [
+                { id: "gunshot", label: "Finish it — gunshot" },
+                { id: "silent", label: "Finish it — quiet" },
+                { id: "spare", label: "Leave him. Bring him along." },
+              ],
+              (id) => this.resolveDiazChoice(id),
+            );
+          }
         }
       }
     }
@@ -1633,6 +1654,12 @@ export class Engine {
       if (Math.abs(dx) < z.r + 15 && Math.abs(p.y - z.y) < 56 && z.atk <= 0) {
         z.atk = z.type === "brute" ? 1.15 : 0.8;
         this.hurtPlayer(z.dmg * R(0.9, 1.1), dir * (z.type === "brute" ? 300 : 150));
+        // Shift 4's wall-break beat: the first Brute slam lands as the
+        // narrative "heavy came through the wall" moment, for free.
+        if (z.type === "brute" && this.campaignDef.mechanic === "wall-break-choice" && !this.firedWallBreak) {
+          this.firedWallBreak = true;
+          this.fireRadio("wall-break");
+        }
       }
     }
     // separation, in full 2D
@@ -3001,6 +3028,24 @@ export class Engine {
     this.pendingChoice = null;
     this.modals.delete("choice");
     resolve?.(id);
+  }
+
+  /** Resolver for Shift 4's Diaz choice — sets the flag combination the
+   * doc's three outcomes need (DIAZ_SILENT is only meaningful alongside
+   * DIAZ_DOWN) and plays the matching VO. */
+  private resolveDiazChoice(id: string) {
+    if (id === "gunshot") {
+      this.campaignFlags.DIAZ_DOWN = true;
+      this.campaignFlags.DIAZ_SILENT = false;
+      this.fireRadio("choice-gunshot");
+    } else if (id === "silent") {
+      this.campaignFlags.DIAZ_DOWN = true;
+      this.campaignFlags.DIAZ_SILENT = true;
+      this.fireRadio("choice-silent");
+    } else {
+      this.campaignFlags.DIAZ_TURNED = true;
+      this.fireRadio("choice-spare");
+    }
   }
 
   /** Player confirmed the stage-clear screen. */
