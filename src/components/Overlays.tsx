@@ -85,48 +85,48 @@ export function Menu({
         survivor. Every shot you fire tells them exactly where you are.
       </p>
 
-      {savedStage != null && (
+      {savedCampaignShift != null && (
         <button
-          onClick={onContinue}
+          onClick={onContinueCampaign}
           className="anim-rise group relative mt-9 flex items-center gap-3 overflow-hidden rounded-xl bg-gradient-to-b from-emerald-400 to-emerald-600 px-12 py-4 text-xl font-bold tracking-[0.25em] text-emerald-950 shadow-[0_0_50px_rgba(52,211,153,0.35)] transition-all duration-200 hover:scale-[1.04] hover:shadow-[0_0_70px_rgba(52,211,153,0.5)] active:scale-[0.98]"
           style={{ animationDelay: "180ms" }}
         >
           <FastForward className="h-5 w-5 transition-transform group-hover:translate-x-0.5" />
-          CONTINUE · STAGE {savedStage}
-        </button>
-      )}
-
-      <button
-        onClick={onEndless}
-        className={`anim-rise group relative flex items-center gap-3 overflow-hidden rounded-xl transition-all duration-200 hover:scale-[1.04] active:scale-[0.98] ${
-          savedStage != null
-            ? "mt-3 border border-white/12 bg-white/5 px-8 py-2.5 text-sm font-bold tracking-[0.2em] text-zinc-300 hover:border-white/30 hover:bg-white/10"
-            : "mt-9 bg-gradient-to-b from-amber-400 to-amber-600 px-12 py-4 text-xl font-bold tracking-[0.25em] text-amber-950 shadow-[0_0_50px_rgba(245,158,11,0.35)] hover:shadow-[0_0_70px_rgba(245,158,11,0.5)]"
-        }`}
-        style={{ animationDelay: savedStage != null ? "210ms" : "180ms" }}
-      >
-        <InfinityIcon className={savedStage != null ? "h-4 w-4" : "h-5 w-5 transition-transform group-hover:translate-x-0.5"} />
-        {savedStage != null ? "NEW RUN" : "ENDLESS MODE"}
-      </button>
-
-      {savedCampaignShift != null && (
-        <button
-          onClick={onContinueCampaign}
-          className="anim-rise group relative mt-3 flex items-center gap-2 overflow-hidden rounded-lg border border-violet-400/30 bg-violet-500/10 px-8 py-2.5 text-sm font-bold tracking-[0.2em] text-violet-200 transition-all duration-200 hover:scale-[1.03] hover:border-violet-400/60 hover:bg-violet-500/20 active:scale-[0.98]"
-          style={{ animationDelay: "225ms" }}
-        >
-          <Radio className="h-4 w-4" />
           CONTINUE · SHIFT {savedCampaignShift}
         </button>
       )}
 
       <button
         onClick={onCampaign}
-        className="anim-rise group relative mt-3 flex items-center gap-2 overflow-hidden rounded-lg border border-violet-400/25 bg-violet-500/5 px-8 py-2.5 text-sm font-bold tracking-[0.2em] text-violet-300 transition-all duration-200 hover:scale-[1.03] hover:border-violet-400/50 hover:bg-violet-500/15 active:scale-[0.98]"
+        className={`anim-rise group relative flex items-center gap-3 overflow-hidden rounded-xl transition-all duration-200 hover:scale-[1.04] active:scale-[0.98] ${
+          savedCampaignShift != null
+            ? "mt-3 border border-violet-400/30 bg-violet-500/10 px-8 py-2.5 text-sm font-bold tracking-[0.2em] text-violet-200 hover:border-violet-400/60 hover:bg-violet-500/20"
+            : "mt-9 bg-gradient-to-b from-violet-400 to-violet-600 px-12 py-4 text-xl font-bold tracking-[0.25em] text-violet-950 shadow-[0_0_50px_rgba(167,139,250,0.35)] hover:shadow-[0_0_70px_rgba(167,139,250,0.5)]"
+        }`}
+        style={{ animationDelay: savedCampaignShift != null ? "210ms" : "180ms" }}
+      >
+        <Radio className={savedCampaignShift != null ? "h-4 w-4" : "h-5 w-5 transition-transform group-hover:translate-x-0.5"} />
+        {savedCampaignShift != null ? "NEW CAMPAIGN" : "STORY CAMPAIGN"}
+      </button>
+
+      {savedStage != null && (
+        <button
+          onClick={onContinue}
+          className="anim-rise group relative mt-3 flex items-center gap-2 overflow-hidden rounded-lg border border-amber-400/30 bg-amber-500/10 px-8 py-2.5 text-sm font-bold tracking-[0.2em] text-amber-200 transition-all duration-200 hover:scale-[1.03] hover:border-amber-400/60 hover:bg-amber-500/20 active:scale-[0.98]"
+          style={{ animationDelay: "225ms" }}
+        >
+          <Radio className="h-4 w-4" />
+          CONTINUE · STAGE {savedStage}
+        </button>
+      )}
+
+      <button
+        onClick={onEndless}
+        className="anim-rise group relative mt-3 flex items-center gap-2 overflow-hidden rounded-lg border border-white/12 bg-white/5 px-8 py-2.5 text-sm font-bold tracking-[0.2em] text-zinc-300 transition-all duration-200 hover:scale-[1.03] hover:border-white/30 hover:bg-white/10 active:scale-[0.98]"
         style={{ animationDelay: "240ms" }}
       >
-        <Radio className="h-4 w-4" />
-        {savedCampaignShift != null ? "NEW CAMPAIGN" : "STORY CAMPAIGN"}
+        <InfinityIcon className="h-4 w-4" />
+        {savedStage != null ? "NEW RUN" : "ENDLESS MODE"}
       </button>
 
       <button

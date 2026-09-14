@@ -41,12 +41,19 @@ interface Props {
   onEquipAttachment: (weaponId: string, attachmentId: AttachmentId | null) => void;
   /** button label + icon context — "START" before a run, "CONTINUE" between stages */
   ctaLabel?: string;
+  /** Story Campaign's loadout: every weapon/attachment is available regardless
+   * of `profile.metaLevel`/`weaponXp` — those fields are still passed through
+   * for informational display, but every lock check short-circuits to open,
+   * and the meta-progression-only PROFILE tab is hidden. */
+  unlockAll?: boolean;
 }
 
 /** Opened from the Menu before an Endless run starts, and again between stages so
  * a level-up mid-run can actually be put to use — no more campaign, no walkable
- * hideout: just the weapon loadout (gated by lifetime meta level) and lifetime stats. */
-export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoadout, onEquipAttachment, ctaLabel = "START" }: Props) {
+ * hideout: just the weapon loadout (gated by lifetime meta level) and lifetime stats.
+ * Also reused, with `unlockAll`, for Story Campaign's fully-unlocked loadout screen. */
+export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoadout, onEquipAttachment, ctaLabel = "START", unlockAll = false }: Props) {
+  const tabs = unlockAll ? TABS.filter((t) => t !== "profile") : TABS;
   const [tab, setTab] = useState<Tab>("loadout");
   const [selectedClass, setSelectedClass] = useState<WeaponClass | null>(null);
   const xpPct = Math.max(0, Math.min(1, profile.metaXp / profile.metaXpNext));
@@ -58,7 +65,7 @@ export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoad
           * phones and would otherwise sit on top of the header text */}
         <div className="mb-2 flex items-start justify-between gap-3 px-6 pt-6">
           <div className="text-[12px] font-bold tracking-[0.4em] text-amber-400/70">
-            LEVEL {profile.metaLevel} · SURVIVOR PROFILE
+            {unlockAll ? "STORY CAMPAIGN LOADOUT" : `LEVEL ${profile.metaLevel} · SURVIVOR PROFILE`}
           </div>
           <button
             onClick={onClose}
@@ -70,7 +77,7 @@ export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoad
         </div>
 
         <div className="flex items-center gap-1 border-b border-white/10 px-6">
-          {TABS.map((k) => (
+          {tabs.map((k) => (
             <button
               key={k}
               onClick={() => setTab(k)}
@@ -86,7 +93,7 @@ export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoad
         <div className="flex flex-1 flex-col items-center overflow-y-auto p-6">
           {tab === "loadout" && (
             selectedClass === null ? (
-              <CategoryGrid profile={profile} onSelect={setSelectedClass} />
+              <CategoryGrid profile={profile} onSelect={setSelectedClass} unlockAll={unlockAll} />
             ) : (
               <CategoryPage
                 cls={selectedClass}
@@ -94,11 +101,12 @@ export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoad
                 onBack={() => setSelectedClass(null)}
                 onSelectLoadout={onSelectLoadout}
                 onEquipAttachment={onEquipAttachment}
+                unlockAll={unlockAll}
               />
             )
           )}
 
-          {tab === "profile" && (
+          {tab === "profile" && !unlockAll && (
             <div className="flex w-full flex-col items-center gap-6 pt-2">
               <div className="w-full max-w-sm">
                 <div className="mb-1 flex items-center justify-between text-[12px] font-bold tracking-[0.2em] text-amber-300">
@@ -186,8 +194,8 @@ export default function LoadoutProfile({ profile, onClose, onStart, onSelectLoad
 
 /** Screen A — four large category cards; picking one opens CategoryPage for it. */
 function CategoryGrid({
-  profile, onSelect,
-}: { profile: ProfileSnapshot; onSelect: (cls: WeaponClass) => void }) {
+  profile, onSelect, unlockAll = false,
+}: { profile: ProfileSnapshot; onSelect: (cls: WeaponClass) => void; unlockAll?: boolean }) {
   return (
     <div className="flex w-full flex-col items-center gap-5">
       <div className="text-[12px] font-bold tracking-[0.3em] text-zinc-500">
@@ -196,7 +204,7 @@ function CategoryGrid({
       <div className="grid w-full grid-cols-2 gap-4 md:grid-cols-4">
         {CLASS_ORDER.map((cls) => {
           const ids = unlockSorted(cls);
-          const unlockedCount = ids.filter((id) => profile.metaLevel >= (WEAPON_UNLOCK_LEVEL[id] ?? Infinity)).length;
+          const unlockedCount = unlockAll ? ids.length : ids.filter((id) => profile.metaLevel >= (WEAPON_UNLOCK_LEVEL[id] ?? Infinity)).length;
           const equippedId = profile.equipped[cls];
           const Icon = CLASS_ICON[cls];
           const hasUnlocked = unlockedCount > 0;
@@ -226,7 +234,7 @@ function CategoryGrid({
                     : "border-white/10 bg-white/5 text-zinc-500"
                 }`}
               >
-                {equippedId ? `EQUIPPED: ${WEAPONS[equippedId].short}` : "NONE UNLOCKED"}
+                {equippedId ? `EQUIPPED: ${WEAPONS[equippedId].short}` : unlockAll ? "NOT EQUIPPED" : "NONE UNLOCKED"}
               </div>
             </button>
           );
@@ -251,25 +259,26 @@ const statPct = (val: number, min: number, max: number, invert = false) => {
  * the right. Clicking a row previews it; clicking an unlocked row also
  * equips it immediately, same as the old single-page picker. */
 function CategoryPage({
-  cls, profile, onBack, onSelectLoadout, onEquipAttachment,
+  cls, profile, onBack, onSelectLoadout, onEquipAttachment, unlockAll = false,
 }: {
   cls: WeaponClass; profile: ProfileSnapshot; onBack: () => void; onSelectLoadout: (id: string) => void;
   onEquipAttachment: (weaponId: string, attachmentId: AttachmentId | null) => void;
+  unlockAll?: boolean;
 }) {
   const ids = unlockSorted(cls);
   const equippedId = profile.equipped[cls];
   const [previewId, setPreviewId] = useState(equippedId ?? ids[0]);
-  const unlockedCount = ids.filter((id) => profile.metaLevel >= (WEAPON_UNLOCK_LEVEL[id] ?? Infinity)).length;
+  const unlockedCount = unlockAll ? ids.length : ids.filter((id) => profile.metaLevel >= (WEAPON_UNLOCK_LEVEL[id] ?? Infinity)).length;
 
   const pick = (id: string) => {
     setPreviewId(id);
-    const unlocked = profile.metaLevel >= (WEAPON_UNLOCK_LEVEL[id] ?? Infinity);
+    const unlocked = unlockAll || profile.metaLevel >= (WEAPON_UNLOCK_LEVEL[id] ?? Infinity);
     if (unlocked) onSelectLoadout(id);
   };
 
   const w = WEAPONS[previewId];
   const previewUnlockLevel = WEAPON_UNLOCK_LEVEL[previewId] ?? Infinity;
-  const previewLocked = profile.metaLevel < previewUnlockLevel;
+  const previewLocked = !unlockAll && profile.metaLevel < previewUnlockLevel;
   const dmg = classStat(ids, (x) => x.damage);
   const rpm = classStat(ids, (x) => x.rpm);
   const mag = classStat(ids, (x) => x.mag);
@@ -298,7 +307,7 @@ function CategoryPage({
           {ids.map((wid) => {
             const wd = WEAPONS[wid];
             const unlockLevel = WEAPON_UNLOCK_LEVEL[wid] ?? Infinity;
-            const locked = profile.metaLevel < unlockLevel;
+            const locked = !unlockAll && profile.metaLevel < unlockLevel;
             const isEquipped = equippedId === wid;
             const isPreviewed = previewId === wid;
             return (
@@ -368,6 +377,7 @@ function CategoryPage({
               xp={profile.weaponXp[previewId] ?? 0}
               equippedAttachment={(profile.equippedAttachment[previewId] as AttachmentId | null) ?? null}
               onEquipAttachment={onEquipAttachment}
+              unlockAll={unlockAll}
             />
           )}
 
@@ -384,16 +394,17 @@ function CategoryPage({
  * attachment unlocks (see attachments.ts) — a third progression axis, separate
  * from in-run level-ups and lifetime account level. One slot, swap anytime. */
 function MasterySection({
-  weaponId, xp, equippedAttachment, onEquipAttachment,
+  weaponId, xp, equippedAttachment, onEquipAttachment, unlockAll = false,
 }: {
   weaponId: string; xp: number; equippedAttachment: AttachmentId | null;
   onEquipAttachment: (weaponId: string, attachmentId: AttachmentId | null) => void;
+  unlockAll?: boolean;
 }) {
   const level = weaponLevelFor(xp);
-  const maxed = level >= MAX_WEAPON_LEVEL;
+  const maxed = unlockAll || level >= MAX_WEAPON_LEVEL;
   const intoLevel = xp - level * WEAPON_XP_PER_LEVEL;
   const pct = maxed ? 100 : (intoLevel / WEAPON_XP_PER_LEVEL) * 100;
-  const unlocked = unlockedAttachments(xp);
+  const unlocked = unlockAll ? ATTACHMENT_ORDER : unlockedAttachments(xp);
 
   return (
     <div className="mt-5 border-t border-white/10 pt-4">

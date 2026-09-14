@@ -240,6 +240,14 @@ export class Engine {
    * "endless". */
   private runMode: "endless" | "campaign" = "endless";
   private campaignFlags: CampaignFlags = defaultCampaignFlags();
+  /** Story Campaign's own loadout choice — separate from `profile.equipped`/
+   * `equippedAttachment` (Endless's persistent, meta-level-gated unlocks) so
+   * picking a weapon here can never leak into or be blocked by Endless's
+   * progression. Set via setCampaignLoadout()/equipCampaignAttachment(),
+   * applied on top of `this.owned`/`this.equipped` in startCampaign()/
+   * continueCampaign(). */
+  private campaignEquipped: Partial<Record<WeaponClass, string>> = {};
+  private campaignEquippedAttachment: Record<string, AttachmentId | null> = {};
   /** current Shift's content when runMode is "campaign" — mirrors `stageDef`
    * but typed to the campaign's own shape; `stageDef`/`stage` still drive the
    * shared simulation (spawns, waves, world size) via setStage()'s branch. */
@@ -504,6 +512,7 @@ export class Engine {
     this.campaignFlags = defaultCampaignFlags();
     clearCampaign();
     this.reset();
+    this.applyCampaignLoadout();
     this.recompute();
     this.pl.hp = this.st.maxHp;
     this.mode = "play";
@@ -535,6 +544,9 @@ export class Engine {
     this.pl.xp = checkpoint.xp;
     this.pl.xpNext = checkpoint.xpNext;
     this.shotsThisShift = checkpoint.shotsThisShift;
+    this.campaignEquipped = { ...checkpoint.equipped };
+    this.campaignEquippedAttachment = { ...checkpoint.equippedAttachment };
+    this.applyCampaignLoadout();
     this.recompute();
     this.pl.hp = this.st.maxHp;
     this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
@@ -593,12 +605,47 @@ export class Engine {
     saveProfile(this.profile);
   }
 
+  /** Story Campaign's own loadout pick — no unlock gate (every weapon is
+   * available), and never touches `profile`/`saveProfile()` so it can't leak
+   * into or be blocked by Endless's lifetime progression. */
+  setCampaignLoadout(weaponId: string) {
+    const w = WDEF[weaponId];
+    if (!w) return;
+    this.campaignEquipped = { ...this.campaignEquipped, [w.cls]: weaponId };
+  }
+
+  /** Story Campaign's attachment pick — same "everything unlocked, nothing
+   * persisted to profile" shape as setCampaignLoadout(). */
+  equipCampaignAttachment(weaponId: string, attachmentId: AttachmentId | null) {
+    this.campaignEquippedAttachment = { ...this.campaignEquippedAttachment, [weaponId]: attachmentId };
+  }
+
+  /** Loadout screen data for Story Campaign — same shape as getProfile() so
+   * LoadoutProfile.tsx can render either, but `equipped`/`equippedAttachment`
+   * come from the campaign-only fields above rather than the lifetime
+   * profile. `metaLevel`/`weaponXp` are passed through for informational
+   * display only — LoadoutProfile's `unlockAll` prop is what actually makes
+   * every weapon/attachment selectable here, not these values. */
+  getCampaignLoadoutProfile(): ProfileSnapshot {
+    return {
+      metaLevel: this.profile.metaLevel,
+      metaXp: this.profile.metaXp,
+      metaXpNext: metaXpFor(this.profile.metaLevel),
+      totalKills: this.profile.totalKills,
+      bestWave: this.profile.bestWave,
+      totalScrap: this.profile.totalScrap,
+      equipped: { ...this.campaignEquipped },
+      weaponXp: { ...this.profile.weaponXp },
+      equippedAttachment: { ...this.campaignEquippedAttachment },
+    };
+  }
+
   /** Base weapon stats with its equipped attachment's modifiers applied —
    * every gameplay-affecting read of a weapon's mag/reload/reserve/range/
    * swap should go through this, not WDEF[id] directly. */
   private effWeapon(kind: string): WeaponDef {
     const base = WDEF[kind] ?? WDEF.pistol;
-    const att = this.profile.equippedAttachment[kind] as AttachmentId | null | undefined;
+    const att = (this.runMode === "campaign" ? this.campaignEquippedAttachment[kind] : this.profile.equippedAttachment[kind]) as AttachmentId | null | undefined;
     return applyAttachment(base, att);
   }
 
@@ -753,6 +800,22 @@ export class Engine {
     this.aimHold = null;
     this.pointerAims = false;
     this.mouse.down = false;
+  }
+
+  /** Overrides reset()'s meta-level-derived `owned`/`equipped`/`kind`/ammo
+   * with Story Campaign's own fully-unlocked loadout — called right after
+   * reset() in startCampaign()/continueCampaign()/retryCampaignShift(), before
+   * recompute() (which reads `this.kind`). Every weapon is available, so the
+   * `owned.has()` guard reset() uses when adopting a pick is unnecessary here. */
+  private applyCampaignLoadout() {
+    this.owned = new Set<string>(WEAPON_IDS);
+    this.equipped = { ...this.campaignEquipped };
+    this.kind = this.equipped.pistol ?? STARTER;
+    for (const id of WEAPON_IDS) {
+      const w = this.effWeapon(id);
+      this.ammo[id] = w.mag;
+      this.reserve[id] = w.reserve;
+    }
   }
 
   /** Switches to a stage's def/world width/theme and regenerates decor to fit. */
@@ -2375,6 +2438,9 @@ export class Engine {
     this.pl.xp = checkpoint.xp;
     this.pl.xpNext = checkpoint.xpNext;
     this.shotsThisShift = checkpoint.shotsThisShift;
+    this.campaignEquipped = { ...checkpoint.equipped };
+    this.campaignEquippedAttachment = { ...checkpoint.equippedAttachment };
+    this.applyCampaignLoadout();
     this.recompute();
     this.pl.hp = this.st.maxHp;
     this.pl.x = clamp(this.worldW * 0.12, 40, this.worldW - 40);
@@ -2474,6 +2540,9 @@ export class Engine {
   }
 
   private gainXp(v: number) {
+    // Story Campaign hides leveling entirely — no XP bar, no upgrade
+    // interrupt; power comes from the fully-unlocked loadout instead.
+    if (this.runMode === "campaign") return;
     const p = this.pl;
     p.xp += v;
     while (p.xp >= p.xpNext) {
@@ -3132,6 +3201,8 @@ export class Engine {
       level: this.pl.level, xp: this.pl.xp, xpNext: this.pl.xpNext,
       hp: this.st.maxHp,
       shotsThisShift: 0,
+      equipped: { ...this.campaignEquipped },
+      equippedAttachment: { ...this.campaignEquippedAttachment },
     };
     saveCampaign(data);
   }
@@ -3347,7 +3418,10 @@ export class Engine {
    * retry, advancing from the previous shift). Centralized here rather than
    * duplicated at each of those 4 call sites. */
   private onCampaignShiftEnter() {
-    this.fireRadio("enter");
+    // Shift 1's "enter" lines already played in the pre-loadout Prologue
+    // screen (App.tsx) — firing them again here would repeat the exact same
+    // 3 lines the instant gameplay starts.
+    if (this.campaignDef.shift !== 1) this.fireRadio("enter");
     if (this.campaignDef.mechanic === "lantern-escort") {
       this.vale = { x: this.pl.x - 40, y: this.pl.y + 40, hp: 60, maxHp: 60 };
       this.lantern = { x: this.worldW * 0.5, y: WORLD_H / 2, lit: true };

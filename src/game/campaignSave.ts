@@ -1,4 +1,6 @@
 import { defaultCampaignFlags, type CampaignFlags, type ShiftId } from "./campaign";
+import type { WeaponClass } from "./weapons";
+import type { AttachmentId } from "./attachments";
 
 export const CAMPAIGN_SAVE_VERSION = 1;
 
@@ -19,6 +21,12 @@ export interface CampaignSaveData {
    * 8's SHOT_BUDGET_LOW both read a live version of this from the engine,
    * but it's saved too so a mid-shift reload doesn't reset the count. */
   shotsThisShift: number;
+  /** Story Campaign's own loadout pick — separate from Endless's
+   * `profile.equipped`/`equippedAttachment` (every weapon/attachment is
+   * unlocked here regardless of lifetime meta-progression), saved so a
+   * reload/continue keeps the same gear. */
+  equipped: Partial<Record<WeaponClass, string>>;
+  equippedAttachment: Record<string, AttachmentId | null>;
 }
 
 const CAMPAIGN_SAVE_KEY = "graveyard-shift-campaign-save";
@@ -33,6 +41,8 @@ export function defaultCampaignSave(): CampaignSaveData {
     xpNext: 12,
     hp: 100,
     shotsThisShift: 0,
+    equipped: {},
+    equippedAttachment: {},
   };
 }
 
@@ -51,6 +61,8 @@ function migrateCampaignSave(raw: unknown): CampaignSaveData | null {
     xpNext: d.xpNext ?? base.xpNext,
     hp: d.hp ?? base.hp,
     shotsThisShift: d.shotsThisShift ?? base.shotsThisShift,
+    equipped: { ...base.equipped, ...d.equipped },
+    equippedAttachment: { ...base.equippedAttachment, ...d.equippedAttachment },
   };
 }
 

@@ -15,6 +15,7 @@ import LoadoutProfile from "./components/LoadoutProfile";
 import Tutorial from "./components/Tutorial";
 import Settings from "./components/Settings";
 import ChoicePrompt from "./components/ChoicePrompt";
+import Prologue from "./components/Prologue";
 import CampaignEndingScreen from "./components/CampaignEnding";
 import { isTouchCapable } from "./game/input";
 import { loadSettings, saveSettings } from "./game/settings";
@@ -33,6 +34,9 @@ export default function App() {
 
   const [screen, setScreen] = useState<"menu" | "game">("menu");
   const [showLoadout, setShowLoadout] = useState(false);
+  // shown once, between clicking STORY CAMPAIGN and the Loadout screen — not
+  // shown again on CONTINUE · SHIFT N, which resumes mid-campaign.
+  const [showPrologue, setShowPrologue] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [brightness, setBrightness] = useState(() => loadSettings().brightness);
@@ -40,6 +44,10 @@ export default function App() {
   const [zoom, setZoomState] = useState(() => loadSettings().zoom);
   const [hud, setHud] = useState<HudState | null>(null);
   const [profile, setProfile] = useState<ProfileSnapshot | null>(null);
+  // Story Campaign's own loadout snapshot — separate from `profile` (Endless's
+  // lifetime meta-progression) since every weapon/attachment here is always
+  // unlocked, sourced from the engine's campaign-only equipped/attachment state.
+  const [campaignProfile, setCampaignProfile] = useState<ProfileSnapshot | null>(null);
   const [choices, setChoices] = useState<UpgradeChoice[] | null>(null);
   const [over, setOver] = useState<GameStats | null>(null);
   const [paused, setPaused] = useState(false);
@@ -155,6 +163,7 @@ export default function App() {
   const enterGame = useCallback(() => {
     setScreen("game");
     setShowLoadout(false);
+    setShowPrologue(false);
     setShowTutorial(false);
     setShowSettings(false);
     setOver(null);
@@ -187,8 +196,24 @@ export default function App() {
   }, [enterGame]);
 
   const openLoadout = useCallback(() => { setPendingMode("endless"); setShowLoadout(true); }, []);
-  const openCampaignLoadout = useCallback(() => { setPendingMode("campaign"); setShowLoadout(true); }, []);
+  const openCampaignLoadout = useCallback(() => {
+    setPendingMode("campaign");
+    setShowPrologue(true);
+  }, []);
+  const confirmPrologue = useCallback(() => {
+    setShowPrologue(false);
+    setCampaignProfile(engineRef.current?.getCampaignLoadoutProfile() ?? null);
+    setShowLoadout(true);
+  }, []);
   const closeLoadout = useCallback(() => setShowLoadout(false), []);
+  const selectCampaignLoadout = useCallback((weaponId: string) => {
+    engineRef.current?.setCampaignLoadout(weaponId);
+    setCampaignProfile(engineRef.current?.getCampaignLoadoutProfile() ?? null);
+  }, []);
+  const equipCampaignAttachmentCb = useCallback((weaponId: string, attachmentId: AttachmentId | null) => {
+    engineRef.current?.equipCampaignAttachment(weaponId, attachmentId);
+    setCampaignProfile(engineRef.current?.getCampaignLoadoutProfile() ?? null);
+  }, []);
   const openTutorial = useCallback(() => setShowTutorial(true), []);
   const closeTutorial = useCallback(() => setShowTutorial(false), []);
   const openSettings = useCallback(() => setShowSettings(true), []);
@@ -367,7 +392,11 @@ export default function App() {
           />
         )}
 
-        {screen === "menu" && !showLoadout && !showTutorial && !showSettings && (
+        {screen === "menu" && showPrologue && (
+          <Prologue onBegin={confirmPrologue} />
+        )}
+
+        {screen === "menu" && !showLoadout && !showPrologue && !showTutorial && !showSettings && (
           <Menu
             onEndless={openLoadout}
             onTutorial={openTutorial}
@@ -401,14 +430,26 @@ export default function App() {
 
         {screen === "menu" && showTutorial && <Tutorial onClose={closeTutorial} />}
 
-        {showLoadout && profile && (
+        {showLoadout && pendingMode === "campaign" && campaignProfile && (
+          <LoadoutProfile
+            profile={campaignProfile}
+            onClose={closeLoadout}
+            onStart={start}
+            onSelectLoadout={selectCampaignLoadout}
+            onEquipAttachment={equipCampaignAttachmentCb}
+            ctaLabel="BEGIN SHIFT 1"
+            unlockAll
+          />
+        )}
+
+        {showLoadout && pendingMode === "endless" && profile && (
           <LoadoutProfile
             profile={profile}
             onClose={closeLoadout}
             onStart={start}
             onSelectLoadout={selectLoadout}
             onEquipAttachment={equipAttachment}
-            ctaLabel={pendingMode === "campaign" ? "BEGIN SHIFT 1" : "START"}
+            ctaLabel="START"
           />
         )}
 

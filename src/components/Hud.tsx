@@ -63,22 +63,24 @@ export default function Hud({
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center rounded-lg border border-violet-400/25 bg-black/50 font-bold text-violet-300 backdrop-blur-sm h-9 w-9 text-[12px]">
-            {hud.level}
-          </div>
-          <div>
-            <div className="overflow-hidden rounded-full border border-white/10 bg-black/60 h-2 w-56">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-400 transition-[width] duration-200"
-                style={{ width: `${xpPct * 100}%` }}
-              />
+        {!hud.isCampaign && (
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center rounded-lg border border-violet-400/25 bg-black/50 font-bold text-violet-300 backdrop-blur-sm h-9 w-9 text-[12px]">
+              {hud.level}
             </div>
-            <div className="font-semibold tracking-widest text-white/50 mt-1 text-[12px]">
-              LEVEL {hud.level}
+            <div>
+              <div className="overflow-hidden rounded-full border border-white/10 bg-black/60 h-2 w-56">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-400 transition-[width] duration-200"
+                  style={{ width: `${xpPct * 100}%` }}
+                />
+              </div>
+              <div className="font-semibold tracking-widest text-white/50 mt-1 text-[12px]">
+                LEVEL {hud.level}
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* top-center: stage + wave, or travel progress */}
