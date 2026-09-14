@@ -107,7 +107,7 @@ export default function Hud({
         ) : (
           <>
             <div
-              className={`font-display text-3xl tracking-[0.18em] ${
+              className={`font-display tracking-[0.18em] ${hud.isCampaign ? "text-xl" : "text-3xl"} ${
                 hud.hordeT > 0 || hud.isBossWave
                   ? "text-red-400 drop-shadow-[0_0_16px_rgba(239,68,68,0.6)] animate-pulse"
                   : "text-amber-300 drop-shadow-[0_0_14px_rgba(245,158,11,0.45)]"
@@ -115,37 +115,51 @@ export default function Hud({
             >
               {hud.hordeT > 0
                 ? (hud.isCampaign ? "DAWN" : "HORDE")
+                : hud.isCampaign ? hud.campaignObjective.toUpperCase()
                 : hud.isBossWave ? "BOSS WAVE" : `WAVE ${Math.max(1, hud.waveInStage)}`}
             </div>
-            {/* per-stage wave pips */}
-            <div className="mt-1.5 flex items-center justify-center gap-1">
-              {Array.from({ length: hud.wavesPerStage }).map((_, i) => {
-                const n = i + 1;
-                const done = n < hud.waveInStage;
-                const cur = n === hud.waveInStage;
-                const boss = hud.bossWaves.includes(n);
-                return (
-                  <span
-                    key={i}
-                    className={`h-1.5 rounded-full transition-all ${boss ? "w-3.5" : "w-2.5"} ${
-                      cur
-                        ? boss
-                          ? "bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.9)]"
-                          : "bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.9)]"
-                        : done
-                          ? boss ? "bg-red-500/60" : "bg-amber-500/50"
-                          : boss ? "bg-red-500/25" : "bg-white/15"
-                    }`}
+            {hud.isCampaign ? (
+              hud.hordeT <= 0 && (
+                <div className="mt-1.5 h-1.5 w-56 overflow-hidden rounded-full border border-white/10 bg-black/60">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-400 transition-[width] duration-200"
+                    style={{ width: `${hud.campaignProgress * 100}%` }}
                   />
-                );
-              })}
-            </div>
+                </div>
+              )
+            ) : (
+              /* per-stage wave pips */
+              <div className="mt-1.5 flex items-center justify-center gap-1">
+                {Array.from({ length: hud.wavesPerStage }).map((_, i) => {
+                  const n = i + 1;
+                  const done = n < hud.waveInStage;
+                  const cur = n === hud.waveInStage;
+                  const boss = hud.bossWaves.includes(n);
+                  return (
+                    <span
+                      key={i}
+                      className={`h-1.5 rounded-full transition-all ${boss ? "w-3.5" : "w-2.5"} ${
+                        cur
+                          ? boss
+                            ? "bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.9)]"
+                            : "bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.9)]"
+                          : done
+                            ? boss ? "bg-red-500/60" : "bg-amber-500/50"
+                            : boss ? "bg-red-500/25" : "bg-white/15"
+                      }`}
+                    />
+                  );
+                })}
+              </div>
+            )}
             <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[13px] font-semibold tracking-widest text-white/55">
               <Skull className="h-3.5 w-3.5" />
               {hud.hordeT > 0
                 ? hud.isCampaign
                   ? `SANITATION IN ${Math.ceil(hud.hordeT)}s`
                   : `SURVIVE ${Math.ceil(hud.hordeT)}s`
+                : hud.isCampaign
+                  ? `${Math.round(hud.campaignProgress * 100)}%`
                 : hud.waveInStage > 0 ? `${hud.remaining} REMAIN` : "GET READY"}
             </div>
           </>

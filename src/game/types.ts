@@ -25,8 +25,15 @@ export interface HudState {
   level: number;
   stage: number;
   stageName: string;
-  /** Story Campaign run — Hud swaps "STAGE" for "SHIFT" in its label */
+  /** Story Campaign run — Hud swaps "STAGE" for "SHIFT" in its label, and
+   * replaces the wave counter below with campaignObjective/campaignProgress. */
   isCampaign: boolean;
+  /** shift's mission-blurb text (campaign.ts's `sub` field) shown in place of
+   * "WAVE X" during a campaign run — meaningless outside campaign. */
+  campaignObjective: string;
+  /** 0..1 continuous kill-progress through the current shift, replacing the
+   * discrete wave counter — meaningless outside campaign. */
+  campaignProgress: number;
   waveInStage: number;
   wavesPerStage: number;
   /** in-stage wave numbers (1-based) that spawn a boss */

@@ -255,6 +255,18 @@ export class Engine {
   /** shots fired since the current shift started — Shift 1's QUIET_S1 and
    * Shift 8's SHOT_BUDGET_LOW both read this. */
   private shotsThisShift = 0;
+  /** Continuous kill-progress replaces discrete waves for campaign shifts —
+   * no "WAVE 3/6" HUD text, just one smoothly-advancing objective bar.
+   * `campaignKillTarget` is computed once at shift-enter by summing
+   * buildWave()'s per-wave fodder formula across the shift's wavesPerStage,
+   * so total content and difficulty ramp are identical to the old wave
+   * sequence — this is a presentation change, not a rebalance. See
+   * onCampaignShiftEnter() and killZombie()'s campaign branch. */
+  private campaignKillTarget = 0;
+  private campaignKillsThisShift = 0;
+  /** next kill count that grants a heal + crate, advanced by
+   * `campaignKillTarget * 0.2` each time crossed (5 reward beats/shift). */
+  private campaignNextRewardAt = 0;
   /** true once the current shift's "first-paint" / "first-shot" radio cues
    * have fired, so they only ever play once per shift. */
   private firedFirstPaint = false;
@@ -864,6 +876,9 @@ export class Engine {
       this.firedDawnGateBrute = false;
       this.dawnT = 0;
       this.dawnTotal = 0;
+      this.campaignKillTarget = 0;
+      this.campaignKillsThisShift = 0;
+      this.campaignNextRewardAt = 0;
       return;
     }
     this.stage = stageNum;
@@ -1281,14 +1296,30 @@ export class Engine {
     if (this.phase === "break") {
       if (!this.stageIntermission) {
         this.breakT -= dt;
-        if (this.breakT <= 0) this.startWave(this.waveInStage + 1);
+        if (this.breakT <= 0) {
+          // Campaign has no discrete waves to start — the break just ends
+          // into continuous spawning (see the "active" branch below).
+          if (this.runMode === "campaign") this.phase = "active";
+          else this.startWave(this.waveInStage + 1);
+        }
       }
     } else if (this.phase === "active") {
       if (this.spawnSuppressT > 0) this.spawnSuppressT -= dt;
       if (this.shotSideT > 0) this.shotSideT -= dt;
       this.spawnT -= dt;
       const cap = Math.min(42, 10 + this.power * 1.1);
-      if (this.hordeT > 0) {
+      if (this.runMode === "campaign") {
+        // Continuous trickle spawn toward campaignKillTarget instead of
+        // discrete queued waves — see that field's comment. Reward beats,
+        // the 4 kill-progress-anchored mechanic triggers, and shift
+        // completion all live in killZombie()'s campaign branch instead of
+        // here, since they're keyed off kills landing, not a per-frame check.
+        if (this.campaignKillsThisShift < this.campaignKillTarget
+            && this.spawnSuppressT <= 0 && this.spawnT <= 0 && this.zombies.length < cap) {
+          this.spawnT = Math.max(0.2, 1.15 - this.power * 0.08);
+          this.spawnZombie({ type: rollEnemy(this.zombieWeights(this.power)) as ZType });
+        }
+      } else if (this.hordeT > 0) {
         // continuously refilled stream instead of a fixed queue — the horde
         // doesn't run out until its timer does, not when a batch is dead
         this.hordeT = Math.max(0, this.hordeT - dt);
@@ -1301,14 +1332,13 @@ export class Engine {
         const n = this.power >= 4 && this.queue.length > 2 && chance(0.45) ? 2 : 1;
         for (let i = 0; i < n && this.queue.length > 0; i++) this.spawnZombie(this.queue.shift()!);
       }
-      if (this.hordeT <= 0 && this.queue.length === 0 && this.zombies.length === 0 && (!this.boss || this.boss.dead)) {
+      if (this.runMode !== "campaign" && this.hordeT <= 0 && this.queue.length === 0 && this.zombies.length === 0 && (!this.boss || this.boss.dead)) {
         this.score += 50 * this.power;
         if (this.waveInStage >= this.stageDef.wavesPerStage) {
           // clearing the last wave finishes the stage directly — no more
           // walk-to-the-safe-house corridor with gates to clear; that was a
           // side-scroller-era mechanic that doesn't fit open 2D exploration
-          if (this.runMode === "campaign") this.completeCampaignShift();
-          else this.completeStage();
+          this.completeStage();
         } else {
           const boss = this.stageDef.bossWaves.includes(this.waveInStage);
           // exploration stages carry no bossWaves at all, so without this,
@@ -1323,49 +1353,6 @@ export class Engine {
             `WAVE ${this.waveInStage} CLEARED`,
             `${this.stageDef.wavesPerStage - this.waveInStage} to go — breathe while you can`
           );
-          // Shift 3's lantern nag: a mid-shift reminder if it's still lit —
-          // once, not every wave, so it reads as commentary, not a timer.
-          if (this.lantern?.lit && !this.firedLanternOn && this.waveInStage === 2) {
-            this.firedLanternOn = true;
-            this.fireRadio("lantern-on");
-          }
-          // Shift 4's Diaz choice: fires once, past the shift's midpoint so
-          // the wall-break beat and some fighting land first.
-          if (this.campaignDef.mechanic === "wall-break-choice" && !this.firedDiazChoice && this.waveInStage === 4) {
-            this.firedDiazChoice = true;
-            this.fireRadio("choice-prompt");
-            this.promptChoice(
-              "Diaz can't go on much longer.",
-              [
-                { id: "gunshot", label: "Finish it — gunshot" },
-                { id: "silent", label: "Finish it — quiet" },
-                { id: "spare", label: "Leave him. Bring him along." },
-              ],
-              (id) => this.resolveDiazChoice(id),
-            );
-          }
-          // Shift 6's stray-traffic: a flavor-only mid-shift nag, no flag or
-          // mechanic attached — same shape as the lantern-on reminder.
-          if (this.campaignDef.mechanic === "badge-lore" && !this.firedStrayTraffic && this.waveInStage === 3) {
-            this.firedStrayTraffic = true;
-            this.fireRadio("stray-traffic");
-          }
-          // Shift 7's vault choice: "vault-terminal-solo" only adds a line
-          // when Vale is dead (gated in radio.ts), so firing it unconditionally
-          // alongside "rack-prompt" gets the right variant either way.
-          if (this.campaignDef.mechanic === "vault-choice" && !this.firedVaultChoice && this.waveInStage === 3) {
-            this.firedVaultChoice = true;
-            this.fireRadio("vault-terminal-solo");
-            this.fireRadio("rack-prompt");
-            this.promptChoice(
-              "Recover or deny.",
-              [
-                { id: "destroy", label: "Dump the racks" },
-                { id: "take", label: "Lift one vial" },
-              ],
-              (id) => this.resolveVaultChoice(id),
-            );
-          }
         }
       }
     }
@@ -2316,6 +2303,73 @@ export class Engine {
     // it drops on every stage rather than only on the old arena
     if (chance(0.22)) {
       this.gems.push({ x: cx + R(-10, 10), y: cy, vx: R(-90, 90), vy: R(-80, 80), val: 1, t: R(0, 9), age: 0, rest: false, kind: "scrap" });
+    }
+    if (this.runMode === "campaign") this.onCampaignKill();
+  }
+
+  /** Advances Story Campaign's continuous kill-progress after every kill:
+   * reward beats, the 4 mechanic triggers that used to fire at specific
+   * wave numbers (now fired at the equivalent kill-progress fraction), and
+   * shift completion once the target's hit and the field is clear. */
+  private onCampaignKill() {
+    this.campaignKillsThisShift++;
+    const wavesPerStage = this.campaignDef.wavesPerStage;
+    const effectiveWave = Math.min(
+      wavesPerStage,
+      1 + Math.floor((this.campaignKillsThisShift / this.campaignKillTarget) * wavesPerStage),
+    );
+    this.power = campaignDifficultyFor(this.campaignDef.shift, effectiveWave);
+    while (this.campaignNextRewardAt < this.campaignKillTarget && this.campaignKillsThisShift >= this.campaignNextRewardAt) {
+      this.campaignNextRewardAt += this.campaignKillTarget * 0.2;
+      this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + 12);
+      this.spawnCrate(1);
+    }
+    // Shift 3's lantern nag: was waveInStage === 2 of 6.
+    if (this.lantern?.lit && !this.firedLanternOn && this.campaignKillsThisShift >= this.campaignKillTarget * (2 / wavesPerStage)) {
+      this.firedLanternOn = true;
+      this.fireRadio("lantern-on");
+    }
+    // Shift 4's Diaz choice: was waveInStage === 4 of 6.
+    if (this.campaignDef.mechanic === "wall-break-choice" && !this.firedDiazChoice
+        && this.campaignKillsThisShift >= this.campaignKillTarget * (4 / wavesPerStage)) {
+      this.firedDiazChoice = true;
+      this.fireRadio("choice-prompt");
+      this.promptChoice(
+        "Diaz can't go on much longer.",
+        [
+          { id: "gunshot", label: "Finish it — gunshot" },
+          { id: "silent", label: "Finish it — quiet" },
+          { id: "spare", label: "Leave him. Bring him along." },
+        ],
+        (id) => this.resolveDiazChoice(id),
+      );
+    }
+    // Shift 6's stray-traffic: was waveInStage === 3 of 7.
+    if (this.campaignDef.mechanic === "badge-lore" && !this.firedStrayTraffic
+        && this.campaignKillsThisShift >= this.campaignKillTarget * (3 / wavesPerStage)) {
+      this.firedStrayTraffic = true;
+      this.fireRadio("stray-traffic");
+    }
+    // Shift 7's vault choice: was waveInStage === 3 of 6.
+    if (this.campaignDef.mechanic === "vault-choice" && !this.firedVaultChoice
+        && this.campaignKillsThisShift >= this.campaignKillTarget * (3 / wavesPerStage)) {
+      this.firedVaultChoice = true;
+      this.fireRadio("vault-terminal-solo");
+      this.fireRadio("rack-prompt");
+      this.promptChoice(
+        "Recover or deny.",
+        [
+          { id: "destroy", label: "Dump the racks" },
+          { id: "take", label: "Lift one vial" },
+        ],
+        (id) => this.resolveVaultChoice(id),
+      );
+    }
+    // `.every(dead)` rather than `.length === 0` — killZombie() runs before
+    // this frame's dead-zombie cleanup pass, so the zombie just killed is
+    // still in the array with `dead: true` at this point.
+    if (this.campaignKillsThisShift >= this.campaignKillTarget && this.zombies.every((zz) => zz.dead)) {
+      this.completeCampaignShift();
     }
   }
 
@@ -3418,6 +3472,19 @@ export class Engine {
    * retry, advancing from the previous shift). Centralized here rather than
    * duplicated at each of those 4 call sites. */
   private onCampaignShiftEnter() {
+    // Continuous kill-progress target: sum buildWave()'s own fodder formula
+    // across this shift's wavesPerStage (campaign's stageDef always carries
+    // bossWaves: [], so buildWave's boss branch never applies here) — same
+    // total content as the old discrete-wave sequence, just not shown as one.
+    let target = 0;
+    for (let i = 1; i <= this.campaignDef.wavesPerStage; i++) {
+      const power = campaignDifficultyFor(this.campaignDef.shift, i);
+      target += Math.min(72, Math.round(6 + power * 3.0 + power * power * 0.12 + i * 1.6));
+    }
+    this.campaignKillTarget = target;
+    this.campaignKillsThisShift = 0;
+    this.campaignNextRewardAt = target * 0.2;
+    this.power = campaignDifficultyFor(this.campaignDef.shift, 1);
     // Shift 1's "enter" lines already played in the pre-loadout Prologue
     // screen (App.tsx) — firing them again here would repeat the exact same
     // 3 lines the instant gameplay starts.
@@ -3456,6 +3523,8 @@ export class Engine {
       stage: this.stage,
       stageName: this.stageDef.name,
       isCampaign: this.runMode === "campaign",
+      campaignObjective: this.campaignDef.sub,
+      campaignProgress: this.campaignKillTarget > 0 ? clamp(this.campaignKillsThisShift / this.campaignKillTarget, 0, 1) : 0,
       waveInStage: this.waveInStage,
       wavesPerStage: this.stageDef.wavesPerStage,
       bossWaves: this.stageDef.bossWaves,
