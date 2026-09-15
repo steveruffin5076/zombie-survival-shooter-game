@@ -38,6 +38,7 @@ export default function App() {
   const [brightness, setBrightness] = useState(() => loadSettings().brightness);
   const [volume, setVolumeState] = useState(() => loadSettings().volume);
   const [zoom, setZoomState] = useState(() => loadSettings().zoom);
+  const [levelUpgradesEnabled, setLevelUpgradesEnabled] = useState(() => loadSettings().levelUpgradesEnabled ?? true);
   const [hud, setHud] = useState<HudState | null>(null);
   const [profile, setProfile] = useState<ProfileSnapshot | null>(null);
   const [choices, setChoices] = useState<UpgradeChoice[] | null>(null);
@@ -124,6 +125,7 @@ export default function App() {
     });
     engineRef.current = engine;
     engine.begin();
+    setLevelUpgradesEnabled(engine.getLevelUpgradesEnabled());
     setSavedStage(engine.savedRunStage());
     setSavedCampaignShift(engine.savedCampaignShift());
     // ?debug=1 exposes the engine on window for the same debug tooling that
@@ -205,6 +207,11 @@ export default function App() {
   const changeZoom = useCallback((v: number) => {
     setZoomState(v);
     engineRef.current?.setZoom(v);
+  }, []);
+  const changeLevelUpgrades = useCallback((v: boolean) => {
+    setLevelUpgradesEnabled(v);
+    engineRef.current?.setLevelUpgradesEnabled(v);
+    saveSettings({ ...loadSettings(), levelUpgradesEnabled: v });
   }, []);
   const selectLoadout = useCallback((weaponId: string) => {
     engineRef.current?.setLoadout(weaponId);
@@ -289,6 +296,7 @@ export default function App() {
     const handler = (ev: KeyboardEvent) => {
       const i = ["1", "2", "3"].indexOf(ev.key);
       if (i >= 0 && choices[i]) choose(choices[i].id);
+      if (ev.key.toLowerCase() === "r") engineRef.current?.rerollLevelChoices();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -392,9 +400,11 @@ export default function App() {
             volume={volume}
             brightness={brightness}
             zoom={zoom}
+            levelUpgradesEnabled={levelUpgradesEnabled}
             onVolumeChange={changeVolume}
             onBrightnessChange={changeBrightness}
             onZoomChange={changeZoom}
+            onLevelUpgradesChange={changeLevelUpgrades}
             onClose={closeSettings}
           />
         )}
@@ -412,7 +422,7 @@ export default function App() {
           />
         )}
 
-        {choices && <LevelUpModal choices={choices} level={hud?.level ?? 1} onPick={choose} />}
+        {choices && <LevelUpModal choices={choices} level={hud?.level ?? 1} onPick={choose} onReroll={() => engineRef.current?.rerollLevelChoices() ?? null} scrap={profile?.totalScrap ?? 0} />}
 
         {choicePrompt && (
           <ChoicePrompt

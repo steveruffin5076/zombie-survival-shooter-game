@@ -300,6 +300,10 @@ export class Engine {
   private pendingChoice: ((id: string) => void) | null = null;
   /** persistent lifetime progression — loaded once, survives every run in this session */
   private profile: ProfileData = loadProfile();
+  private levelUpgradesEnabled = loadSettings().levelUpgradesEnabled ?? true;
+  private rerollCount = 0;
+  private suppressLevelUpOnce = false;
+  private bombardmentUsed = false;
   private over = false;
   private paused = false;
   private modals = new Set<ModalKind>();
@@ -649,6 +653,15 @@ export class Engine {
     return this.zoomPref;
   }
 
+  getLevelUpgradesEnabled() {
+    return this.levelUpgradesEnabled;
+  }
+
+  setLevelUpgradesEnabled(v: boolean) {
+    this.levelUpgradesEnabled = v;
+    saveSettings({ ...loadSettings(), levelUpgradesEnabled: v });
+  }
+
   /** Settings-screen zoom slider. Magnifies the world only — the HUD lives in a
    * separately scaled DOM layer (see App.tsx) and is unaffected. */
   setZoom(v: number) {
@@ -687,6 +700,9 @@ export class Engine {
     this.pl = this.freshPlayer();
     this.st = this.baseStats();
     this.stacks = {};
+    this.bombardmentUsed = false;
+    this.rerollCount = 0;
+    this.suppressLevelUpOnce = false;
     // ownership is a function of lifetime meta level, not run state — every
     // weapon unlocked so far is available from the start of every run
     this.owned = new Set<string>(ownedWeaponsForLevel(this.profile.metaLevel));
@@ -809,6 +825,9 @@ export class Engine {
       this.noiseLevel = 0;
       this.noiseT = 0;
       this.tutorialQuietDone = false;
+      this.suppressLevelUpOnce = false;
+      this.rerollCount = 0;
+      this.bombardmentUsed = false;
       // Shift 1 tutorial setup: will create dormant walkers, see spawnZombie
       if (shift === 1) {
         // ensure Vale's quiet-tag line can fire even if first walker is shot loud initially
@@ -2259,7 +2278,7 @@ export class Engine {
     this.profile.totalKills++;
     this.gainMetaXp(1);
     this.gainWeaponXp(this.kind, 1);
-    this.score += Math.round(z.score * (1 + this.power * 0.06));
+    this.score += Math.round(z.score * (1 + this.power * 0.06) * (this.levelUpgradesEnabled ? 1 : 1.15));
     this.shake(z.type === "brute" ? 5 : 1.6);
     if (z.boss || z.type === "brute") this.hitStopT = Math.max(this.hitStopT, 0.09);
     else this.hitStopT = Math.max(this.hitStopT, 0.03);
@@ -2316,6 +2335,7 @@ export class Engine {
   private quietKill(z: Zombie) {
     if (this.runMode === "campaign" && this.campaignDef.shift === 1 && !this.tutorialQuietDone) {
       this.tutorialQuietDone = true;
+      this.suppressLevelUpOnce = true;
       this.fireRadio("quiet-tag");
       // nudge next wave faster as reward for staying quiet
       if (this.phase === "break" && this.breakT > 1) this.breakT = 1;
@@ -2513,6 +2533,8 @@ export class Engine {
   }
 
   private gainXp(v: number) {
+    // OFF mode: +15% score bonus is handled in killZombie/score, XP still levels but no modal
+    if (!this.levelUpgradesEnabled) v = Math.round(v * 0.85); // slightly slower leveling when skipping picks keeps pacing
     const p = this.pl;
     p.xp += v;
     while (p.xp >= p.xpNext) {
@@ -2521,7 +2543,25 @@ export class Engine {
       p.xpNext = this.xpFor(p.level);
       this.lvlPending++;
     }
-    if (this.lvlPending > 0 && !this.modalOpen) this.openLevelModal();
+    if (this.lvlPending > 0 && !this.modalOpen) {
+      if (!this.levelUpgradesEnabled) {
+        // consume levels silently with +15% score compensation
+        const levels = this.lvlPending;
+        this.lvlPending = 0;
+        this.score += Math.round(levels * 120 * 0.15);
+        this.texts.push({ x: this.pl.x, y: this.pl.y - 72, vy: -46, life: 0.7, max: 0.7, text: `LV ${p.level} (+15% BONUS)`, color: "#fbbf24", size: 12 });
+        return;
+      }
+      if (this.suppressLevelUpOnce) {
+        this.suppressLevelUpOnce = false;
+        // still level, but defer modal until wave 2 to avoid double-modal spam on tutorial
+        if (this.runMode === "campaign" && this.campaignDef.shift === 1 && this.waveInStage <= 1) {
+          this.banners.push({ text: "LEVEL UP QUEUED", sub: "pick after this wave", t: 2.2, dur: 2.2 });
+          return;
+        }
+      }
+      this.openLevelModal();
+    }
   }
 
   /** Lifetime account progression — permanently unlocks weapons in the Loadout
@@ -2541,6 +2581,7 @@ export class Engine {
   }
 
   private openLevelModal() {
+    this.rerollCount = 0;
     this.modals.add("levelup");
     this.sfx.levelup();
     this.onEvent({ type: "levelup", choices: this.rollChoices() });
@@ -2563,9 +2604,29 @@ export class Engine {
     return out;
   }
 
+  /** Reroll current level-up choices — 1 free per level, then costs 3 scrap */
+  rerollLevelChoices(): UpgradeChoice[] | null {
+    if (!this.modals.has("levelup")) return null;
+    if (this.rerollCount >= 1 && this.profile.totalScrap < 3) {
+      this.texts.push({ x: this.pl.x, y: this.pl.y - 88, vy: -46, life: 0.7, max: 0.7, text: "NEED 3 SCRAP TO REROLL", color: "#f87171", size: 11 });
+      return null;
+    }
+    if (this.rerollCount >= 1) {
+      this.profile.totalScrap -= 3;
+      saveProfile(this.profile);
+    }
+    this.rerollCount++;
+    const choices = this.rollChoices();
+    this.onEvent({ type: "levelup", choices });
+    this.sfx.click();
+    return choices;
+  }
+
   applyUpgrade(id: string) {
     if (!this.modalOpen) return;
+    if (id === "bombardment" && this.bombardmentUsed) return;
     this.stacks[id] = (this.stacks[id] || 0) + 1;
+    if (id === "bombardment") this.bombardmentUsed = true;
     this.recompute();
     if (id === "hp") this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + 30);
     if (id === "bombardment") this.executeBombardment();
