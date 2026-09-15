@@ -330,6 +330,9 @@ export class Engine {
   private shakeY = 0;
   private hitStopT = 0;
   private stageFadeT = 0;
+  private noiseLevel = 0;
+  private noiseT = 0;
+  private tutorialQuietDone = false;
 
   private pl = this.freshPlayer();
   private st = this.baseStats();
@@ -803,6 +806,14 @@ export class Engine {
       this.firedDawnGateBrute = false;
       this.dawnT = 0;
       this.dawnTotal = 0;
+      this.noiseLevel = 0;
+      this.noiseT = 0;
+      this.tutorialQuietDone = false;
+      // Shift 1 tutorial setup: will create dormant walkers, see spawnZombie
+      if (shift === 1) {
+        // ensure Vale's quiet-tag line can fire even if first walker is shot loud initially
+        this.firedFirstPaint = false;
+      }
       return;
     }
     this.stage = stageNum;
@@ -1119,6 +1130,10 @@ export class Engine {
       if (this.hitStopT > 0) return;
     }
     if (this.stageFadeT > 0) this.stageFadeT -= dt;
+    if (this.noiseT > 0) {
+      this.noiseT -= dt;
+      if (this.noiseT <= 0) this.noiseLevel = 0;
+    }
     const p = this.pl;
     this.playTime += dt;
     this.motes(dt);
@@ -1231,13 +1246,14 @@ export class Engine {
       if (this.spawnSuppressT > 0) this.spawnSuppressT -= dt;
       if (this.shotSideT > 0) this.shotSideT -= dt;
       this.spawnT -= dt;
-      const cap = Math.min(42, 10 + this.power * 1.1);
+      const noisyCapBonus = this.noiseT > 0 ? Math.round(this.noiseLevel * 3) : 0;
+      const cap = Math.min(42, 10 + this.power * 1.1 + noisyCapBonus);
       if (this.hordeT > 0) {
         // continuously refilled stream instead of a fixed queue — the horde
         // doesn't run out until its timer does, not when a batch is dead
         this.hordeT = Math.max(0, this.hordeT - dt);
         if (this.spawnSuppressT <= 0 && this.spawnT <= 0 && this.zombies.length < cap + 8) {
-          this.spawnT = Math.max(0.16, 1.0 - this.power * 0.07);
+          this.spawnT = Math.max(0.12, (1.0 - this.power * 0.07) / (1 + (this.noiseT > 0 ? this.noiseLevel * 0.3 : 0)));
           this.spawnZombie({ type: rollEnemy(this.zombieWeights(this.power)) as ZType });
         }
       } else if (this.spawnSuppressT <= 0 && this.spawnT <= 0 && this.queue.length > 0 && this.zombies.length < cap) {
@@ -1617,6 +1633,10 @@ export class Engine {
       return;
     }
     this.ammo[this.kind]--;
+    // noise hook: silent pistol vs loud shotgun attraction
+    const wNoise = this.effWeapon(this.kind).noise ?? 1;
+    this.noiseLevel = Math.max(this.noiseLevel, wNoise);
+    this.noiseT = Math.max(this.noiseT, 1.2 + wNoise * 2.2);
     if (this.runMode === "campaign") {
       this.shotsThisShift++;
       if (!this.firedFirstShot) { this.firedFirstShot = true; this.fireRadio("first-shot"); }
@@ -2294,6 +2314,12 @@ export class Engine {
 
   /** A suppressed hit on a still-dormant sleeper — instant takedown, nearby sleepers stay asleep. */
   private quietKill(z: Zombie) {
+    if (this.runMode === "campaign" && this.campaignDef.shift === 1 && !this.tutorialQuietDone) {
+      this.tutorialQuietDone = true;
+      this.fireRadio("quiet-tag");
+      // nudge next wave faster as reward for staying quiet
+      if (this.phase === "break" && this.breakT > 1) this.breakT = 1;
+    }
     z.hp = 0;
     z.flash = 0.14;
     this.texts.push({
@@ -3275,7 +3301,8 @@ export class Engine {
     // instant you shoot, not only while sprinting.
     const laneRedirect = this.runMode === "campaign"
       && this.campaignDef.mechanic === "lane-redirect" && this.shotSideT > 0 && chance(0.65);
-    const ahead = this.stageDef.bossId != null && moving && chance(0.55);
+    const noisy = this.noiseT > 0 ? this.noiseLevel : 0;
+    const ahead = (this.stageDef.bossId != null && moving && chance(0.55)) || (noisy > 0.8 && chance(0.35 + noisy * 0.18));
     const angle = laneRedirect
       ? (this.shotSide === 1 ? Math.PI : 0) + R(-0.6, 0.6)
       : ahead ? Math.atan2(p.vy, p.vx) + R(-0.7, 0.7) : Math.random() * TAU;
@@ -3289,6 +3316,10 @@ export class Engine {
 
     const z = this.mkZombie(it.type, x, y, hpMul, speedMul);
     z.dmg *= dmgMul;
+    // Shift 1 interactive tutorial: half the walkers are dormant sleepers for quiet-kill teaching
+    if (this.runMode === "campaign" && this.campaignDef.shift === 1 && it.type === "walker" && chance(0.55)) {
+      z.dormant = true;
+    }
     if (it.boss) {
       z.scale *= 1.32;
       z.r = 30 * z.scale;
@@ -3704,9 +3735,11 @@ export class Engine {
     c.restore();
 
     /* --- vignette (darkness beyond the player's light) --- */
+    const dawnShiftVig = this.runMode === "campaign" ? clamp((this.campaignDef.shift - 1) / 7, 0, 1) : 0;
+    const vigAlpha = 0.55 - dawnShiftVig * 0.10; // 0.55 -> 0.45 at dawn, avoid double-darken with amber tint
     const vg = c.createRadialGradient(px, py, H * 0.3, px, py, H * 0.74);
     vg.addColorStop(0, "rgba(0,0,0,0)");
-    vg.addColorStop(1, "rgba(0,0,0,0.55)");
+    vg.addColorStop(1, `rgba(0,0,0,${vigAlpha})`);
     c.fillStyle = vg;
     c.fillRect(0, 0, W, H);
 
@@ -4023,17 +4056,52 @@ export class Engine {
     c.lineWidth = 1;
     c.strokeRect(boxX, boxY, boxW, boxH);
 
-    // portrait chip
+    // portrait chip — small pixel head per speaker (16px spirit: distinct silhouette, not just letter)
     const portraitX = boxX + 22, portraitY = boxY + 22, pr = 14;
     c.fillStyle = color;
     c.beginPath();
     c.arc(portraitX, portraitY, pr, 0, TAU);
     c.fill();
+    // speaker-specific details (still simple canvas, no extra atlas)
+    c.fillStyle = "rgba(0,0,0,0.35)";
+    c.beginPath();
+    c.arc(portraitX, portraitY, pr * 0.72, 0, TAU);
+    c.fill();
+    if (r.speaker === "RHEE") {
+      // cap/visor
+      c.fillStyle = "#0f172a";
+      c.fillRect(portraitX - 7, portraitY - 6, 14, 4);
+      c.fillStyle = "#e2e8f0";
+      c.beginPath();
+      c.arc(portraitX - 3, portraitY + 2, 2, 0, TAU); c.arc(portraitX + 3, portraitY + 2, 2, 0, TAU); c.fill();
+    } else if (r.speaker === "VALE") {
+      // bob hair
+      c.fillStyle = "#064e3b";
+      c.beginPath();
+      c.arc(portraitX, portraitY - 2, 7, Math.PI, 0); c.fill();
+      c.fillStyle = "#fde68a";
+      c.beginPath();
+      c.arc(portraitX - 3, portraitY + 2, 1.8, 0, TAU); c.arc(portraitX + 3, portraitY + 2, 1.8, 0, TAU); c.fill();
+    } else if (r.speaker === "DIAZ") {
+      // stubble/beard
+      c.fillStyle = "#451a03";
+      c.fillRect(portraitX - 5, portraitY + 3, 10, 4);
+      c.fillStyle = "#fdba74";
+      c.beginPath();
+      c.arc(portraitX - 3, portraitY, 1.7, 0, TAU); c.arc(portraitX + 3, portraitY, 1.7, 0, TAU); c.fill();
+    } else if (r.speaker === "UNK" || r.speaker === "CREW") {
+      c.fillStyle = "#450a0a";
+      c.fillRect(portraitX - 6, portraitY - 2, 12, 2);
+      c.fillStyle = "#fca5a5";
+      c.beginPath();
+      c.arc(portraitX - 3, portraitY + 3, 1.6, 0, TAU); c.arc(portraitX + 3, portraitY + 3, 1.6, 0, TAU); c.fill();
+    }
+    // initial letter on top, small
     c.fillStyle = "#0a0a0a";
-    c.font = '800 13px "Space Grotesk", sans-serif';
+    c.font = '800 10px "Space Grotesk", sans-serif';
     c.textAlign = "center";
     c.textBaseline = "middle";
-    c.fillText(this.RADIO_PORTRAIT[r.speaker] ?? "?", portraitX, portraitY + 1);
+    c.fillText(this.RADIO_PORTRAIT[r.speaker] ?? "?", portraitX, portraitY + 9);
     c.textBaseline = "alphabetic";
 
     c.textAlign = "left";
