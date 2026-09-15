@@ -42,50 +42,50 @@ export interface CampaignStageDef {
 export const CAMPAIGN_STAGES: CampaignStageDef[] = [
   {
     shift: 1, name: "FRONT ROWS", sub: "21:10 — laser tutorial", clock: "21:10",
-    wavesPerStage: 4, worldW: 2000, themeId: "cemetery",
+    wavesPerStage: 3, worldW: 2000, themeId: "cemetery",
     enemyPool: { walker: 100 },
     mechanic: "quiet-tracking",
   },
   {
     shift: 2, name: "SERVICE ROAD", sub: "22:02 — Diaz is hurt", clock: "22:02",
-    wavesPerStage: 5, worldW: 2200, themeId: "cemetery",
+    wavesPerStage: 4, worldW: 2200, themeId: "cemetery",
     enemyPool: { walker: 40, runner: 60 },
     mechanic: "lane-redirect",
   },
   {
     shift: 3, name: "CHAPEL GROUNDS", sub: "22:47 — the ledger is wrong", clock: "22:47",
-    wavesPerStage: 6, worldW: 2400, themeId: "cemetery",
+    wavesPerStage: 5, worldW: 2400, themeId: "cemetery",
     enemyPool: { walker: 30, runner: 30, spitter: 40 },
     mechanic: "lantern-escort",
   },
   {
     shift: 4, name: "OLD ANNEX", sub: "23:40 — the wall doesn't hold", clock: "23:40",
-    wavesPerStage: 6, worldW: 2400, themeId: "cemetery",
+    wavesPerStage: 5, worldW: 2400, themeId: "cemetery",
     enemyPool: { walker: 30, runner: 30, spitter: 20, brute: 20 },
     mechanic: "wall-break-choice",
   },
   {
     shift: 5, name: "THE HOLLOW", sub: "00:15 — Helminth-09", clock: "00:15",
     titleStage: true,
-    wavesPerStage: 6, worldW: 2200, themeId: "arena",
+    wavesPerStage: 4, worldW: 2200, themeId: "arena",
     enemyPool: { walker: 25, runner: 25, spitter: 25, screamer: 25 },
     mechanic: "decoy-canister",
   },
   {
     shift: 6, name: "MAUSOLEUM STACK", sub: "01:05 — night security", clock: "01:05",
-    wavesPerStage: 7, worldW: 2600, themeId: "cemetery",
+    wavesPerStage: 5, worldW: 2400, themeId: "cemetery",
     enemyPool: { walker: 25, runner: 25, spitter: 25, brute: 15, screamer: 10 },
     mechanic: "badge-lore",
   },
   {
     shift: 7, name: "VAULT HELMINTH", sub: "02:20 — recover or deny", clock: "02:20",
-    wavesPerStage: 6, worldW: 2000, themeId: "arena",
+    wavesPerStage: 4, worldW: 2000, themeId: "arena",
     enemyPool: { walker: 20, runner: 20, spitter: 40, brute: 20 },
     mechanic: "vault-choice",
   },
   {
     shift: 8, name: "DAWN GATE", sub: "04:50 — clock out", clock: "04:50",
-    wavesPerStage: 6, worldW: 2600, themeId: "arena",
+    wavesPerStage: 4, worldW: 2400, themeId: "arena",
     enemyPool: { walker: 20, runner: 25, spitter: 15, brute: 15, screamer: 25 },
     mechanic: "dawn-escape",
   },
@@ -111,7 +111,7 @@ export function campaignWaveIndex(shift: ShiftId, inStage: number): number {
 }
 
 /** Campaign's own difficulty curve — gentle and hand-paced across 8 curated
- * shifts (max ~28 waves total), not Endless's up-to-40 grind ramp. */
+ * shifts (max ~34 waves total after shorten, not Endless's up-to-40 grind ramp). */
 export function campaignDifficultyFor(shift: ShiftId, inStage: number): number {
   return Math.min(15, campaignWaveIndex(shift, inStage) / 2);
 }

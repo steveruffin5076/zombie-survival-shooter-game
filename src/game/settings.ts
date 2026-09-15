@@ -9,10 +9,12 @@ export interface GameSettings {
   /** world magnification, 1..1.5, 1 = unchanged. Applied by the engine to the
    * canvas only; the HUD has its own scaling and is unaffected. */
   zoom: number;
+  /** level-up upgrade picks — true (default) shows the 3-choice modal, false skips it for a clean gunplay run with +15% score bonus */
+  levelUpgradesEnabled: boolean;
 }
 
 const KEY = "graveyard-shift-settings";
-const DEFAULTS: GameSettings = { volume: 0.45, brightness: 1, zoom: 1.3 };
+const DEFAULTS: GameSettings = { volume: 0.45, brightness: 1, zoom: 1.3, levelUpgradesEnabled: true };
 
 export function loadSettings(): GameSettings {
   try {
@@ -23,6 +25,7 @@ export function loadSettings(): GameSettings {
       volume: clamp01(typeof parsed.volume === "number" ? parsed.volume : DEFAULTS.volume),
       brightness: clampBrightness(typeof parsed.brightness === "number" ? parsed.brightness : DEFAULTS.brightness),
       zoom: clampZoom(typeof parsed.zoom === "number" ? parsed.zoom : DEFAULTS.zoom),
+      levelUpgradesEnabled: typeof parsed.levelUpgradesEnabled === "boolean" ? parsed.levelUpgradesEnabled : DEFAULTS.levelUpgradesEnabled,
     };
   } catch {
     return { ...DEFAULTS };

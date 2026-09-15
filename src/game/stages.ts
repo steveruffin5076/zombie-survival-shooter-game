@@ -91,15 +91,22 @@ export function cumulativeWaveIndex(stageNum: number, inStage: number): number {
 }
 
 /** The difficulty scalar every combat-balance formula reads (spawn count,
- * zombie hp/speed/dmg, boss hp...). Mission mode caps at ~40 by Act VI;
- * endless keeps its unbounded ramp. */
+ * zombie hp/speed/dmg, boss hp...). Mission caps at 40 by Act VI (wave 240);
+ * endless keeps climbing past 40 but *slowly* — the old unbounded
+ * `cumulativeWaveIndex` (216 at 24 stages) made HP 48x and one-shot the
+ * player. Endless now climbs 0.04 per wave after 40, capped at 60 so a
+ * 100-stage run is hard but not mathematically dead. Campaign has its own
+ * `campaignDifficultyFor` capped at 15. */
 export function difficultyFor(stageNum: number, inStage: number, mode: "mission" | "endless" = "mission"): number {
-  if (mode === "endless") return cumulativeWaveIndex(stageNum, inStage);
+  const idx = cumulativeWaveIndex(stageNum, inStage);
+  if (mode === "endless") {
+    if (idx <= 240) return idx / 6;
+    return Math.min(60, 40 + (idx - 240) * 0.04);
+  }
 
   // Linear curve: difficulty = waveIndex / 6, capping at 40 at the final wave (240 total)
   // This means: Act I stage 1 ≈ 1.7, Act VI stage 4 ≈ 40
-  const waveIndex = cumulativeWaveIndex(stageNum, inStage);
-  return Math.min(waveIndex / 6, 40);
+  return Math.min(idx / 6, 40);
 }
 
 /**

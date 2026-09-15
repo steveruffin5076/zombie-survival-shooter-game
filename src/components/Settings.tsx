@@ -1,12 +1,14 @@
-import { X, Sun, Volume2, Search } from "lucide-react";
+import { X, Sun, Volume2, Search, Sparkles, ZapOff } from "lucide-react";
 
 interface Props {
   volume: number;
   brightness: number;
   zoom: number;
+  levelUpgradesEnabled: boolean;
   onVolumeChange: (v: number) => void;
   onBrightnessChange: (v: number) => void;
   onZoomChange: (v: number) => void;
+  onLevelUpgradesChange: (v: boolean) => void;
   onClose: () => void;
 }
 
@@ -15,7 +17,7 @@ interface Props {
  * toggle), and world zoom (an engine-side magnification of the canvas). Safe to
  * open any time — from the main menu or paused mid-run. */
 export default function Settings({
-  volume, brightness, zoom, onVolumeChange, onBrightnessChange, onZoomChange, onClose,
+  volume, brightness, zoom, levelUpgradesEnabled, onVolumeChange, onBrightnessChange, onZoomChange, onLevelUpgradesChange, onClose,
 }: Props) {
   return (
     <div className="pointer-events-auto absolute inset-0 z-50 flex items-center-safe justify-center overflow-y-auto bg-black/85 p-3 backdrop-blur-[6px]">
@@ -80,6 +82,22 @@ export default function Settings({
             onChange={(e) => onZoomChange(Number(e.target.value))}
             className="accent-amber-400"
           />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between text-sm font-bold tracking-[0.1em] text-zinc-300">
+            <span className="flex items-center gap-2">{levelUpgradesEnabled ? <Sparkles className="h-4 w-4 text-amber-300" /> : <ZapOff className="h-4 w-4 text-zinc-500" />} LEVEL UPGRADES</span>
+            <button
+              onClick={() => onLevelUpgradesChange(!levelUpgradesEnabled)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${levelUpgradesEnabled ? "bg-amber-500" : "bg-zinc-700"}`}
+              aria-label="Toggle level upgrades"
+            >
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${levelUpgradesEnabled ? "translate-x-6" : "translate-x-1"}`} />
+            </button>
+          </div>
+          <div className="text-[11px] leading-relaxed text-zinc-500">
+            {levelUpgradesEnabled ? "ON — 3 choices each level (reroll 1× free)." : "OFF — clean gunplay, +15% score bonus. XP still tracks level."}
+          </div>
         </div>
 
         <div className="text-[11px] leading-relaxed text-zinc-600">

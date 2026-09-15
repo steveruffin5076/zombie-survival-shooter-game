@@ -300,6 +300,10 @@ export class Engine {
   private pendingChoice: ((id: string) => void) | null = null;
   /** persistent lifetime progression — loaded once, survives every run in this session */
   private profile: ProfileData = loadProfile();
+  private levelUpgradesEnabled = loadSettings().levelUpgradesEnabled ?? true;
+  private rerollCount = 0;
+  private suppressLevelUpOnce = false;
+  private bombardmentUsed = false;
   private over = false;
   private paused = false;
   private modals = new Set<ModalKind>();
@@ -328,6 +332,11 @@ export class Engine {
   private shakeMag = 0;
   private shakeX = 0;
   private shakeY = 0;
+  private hitStopT = 0;
+  private stageFadeT = 0;
+  private noiseLevel = 0;
+  private noiseT = 0;
+  private tutorialQuietDone = false;
 
   private pl = this.freshPlayer();
   private st = this.baseStats();
@@ -422,7 +431,7 @@ export class Engine {
   /** Pre-rendered pixel-art sprites, built lazily per entity type. */
   private atlas = new SpriteAtlas();
   private decor: Decor[] = [];
-  private tufts: { x: number; y: number; h: number; s: number }[] = [];
+  private tufts: { x: number; y: number; h: number; s: number; drift: number }[] = [];
 
   constructor(canvas: HTMLCanvasElement, onEvent: (e: EngineEvent) => void) {
     this.canvas = canvas;
@@ -644,6 +653,15 @@ export class Engine {
     return this.zoomPref;
   }
 
+  getLevelUpgradesEnabled() {
+    return this.levelUpgradesEnabled;
+  }
+
+  setLevelUpgradesEnabled(v: boolean) {
+    this.levelUpgradesEnabled = v;
+    saveSettings({ ...loadSettings(), levelUpgradesEnabled: v });
+  }
+
   /** Settings-screen zoom slider. Magnifies the world only — the HUD lives in a
    * separately scaled DOM layer (see App.tsx) and is unaffected. */
   setZoom(v: number) {
@@ -682,6 +700,9 @@ export class Engine {
     this.pl = this.freshPlayer();
     this.st = this.baseStats();
     this.stacks = {};
+    this.bombardmentUsed = false;
+    this.rerollCount = 0;
+    this.suppressLevelUpOnce = false;
     // ownership is a function of lifetime meta level, not run state — every
     // weapon unlocked so far is available from the start of every run
     this.owned = new Set<string>(ownedWeaponsForLevel(this.profile.metaLevel));
@@ -801,6 +822,17 @@ export class Engine {
       this.firedDawnGateBrute = false;
       this.dawnT = 0;
       this.dawnTotal = 0;
+      this.noiseLevel = 0;
+      this.noiseT = 0;
+      this.tutorialQuietDone = false;
+      this.suppressLevelUpOnce = false;
+      this.rerollCount = 0;
+      this.bombardmentUsed = false;
+      // Shift 1 tutorial setup: will create dormant walkers, see spawnZombie
+      if (shift === 1) {
+        // ensure Vale's quiet-tag line can fire even if first walker is shot loud initially
+        this.firedFirstPaint = false;
+      }
       return;
     }
     this.stage = stageNum;
@@ -858,7 +890,7 @@ export class Engine {
     // ground tufts, scattered the same way (world coords, no parallax)
     const tuftCount = Math.round(area / 9000);
     for (let i = 0; i < tuftCount; i++) {
-      this.tufts.push({ x: R(0, worldW), y: R(0, WORLD_H), h: R(5, 14), s: R(0.6, 1.3) });
+      this.tufts.push({ x: R(0, worldW), y: R(0, WORLD_H), h: R(5, 14), s: R(0.6, 1.3), drift: R(0, TAU) });
     }
   }
 
@@ -1112,6 +1144,15 @@ export class Engine {
   /* ---------------- core update ---------------- */
 
   private update(dt: number) {
+    if (this.hitStopT > 0) {
+      this.hitStopT -= dt;
+      if (this.hitStopT > 0) return;
+    }
+    if (this.stageFadeT > 0) this.stageFadeT -= dt;
+    if (this.noiseT > 0) {
+      this.noiseT -= dt;
+      if (this.noiseT <= 0) this.noiseLevel = 0;
+    }
     const p = this.pl;
     this.playTime += dt;
     this.motes(dt);
@@ -1224,13 +1265,14 @@ export class Engine {
       if (this.spawnSuppressT > 0) this.spawnSuppressT -= dt;
       if (this.shotSideT > 0) this.shotSideT -= dt;
       this.spawnT -= dt;
-      const cap = Math.min(42, 10 + this.power * 1.1);
+      const noisyCapBonus = this.noiseT > 0 ? Math.round(this.noiseLevel * 3) : 0;
+      const cap = Math.min(42, 10 + this.power * 1.1 + noisyCapBonus);
       if (this.hordeT > 0) {
         // continuously refilled stream instead of a fixed queue — the horde
         // doesn't run out until its timer does, not when a batch is dead
         this.hordeT = Math.max(0, this.hordeT - dt);
         if (this.spawnSuppressT <= 0 && this.spawnT <= 0 && this.zombies.length < cap + 8) {
-          this.spawnT = Math.max(0.16, 1.0 - this.power * 0.07);
+          this.spawnT = Math.max(0.12, (1.0 - this.power * 0.07) / (1 + (this.noiseT > 0 ? this.noiseLevel * 0.3 : 0)));
           this.spawnZombie({ type: rollEnemy(this.zombieWeights(this.power)) as ZType });
         }
       } else if (this.spawnSuppressT <= 0 && this.spawnT <= 0 && this.queue.length > 0 && this.zombies.length < cap) {
@@ -1342,6 +1384,8 @@ export class Engine {
     this.updateGems(dt);
     this.updateParticles(dt);
     this.updateTexts(dt);
+    // tuft drift — slow wind through grass
+    for (const tu of this.tufts) tu.drift += dt * 0.4;
 
     // decals fade
     for (const d of this.decals) d.a -= dt * 0.02;
@@ -1608,6 +1652,10 @@ export class Engine {
       return;
     }
     this.ammo[this.kind]--;
+    // noise hook: silent pistol vs loud shotgun attraction
+    const wNoise = this.effWeapon(this.kind).noise ?? 1;
+    this.noiseLevel = Math.max(this.noiseLevel, wNoise);
+    this.noiseT = Math.max(this.noiseT, 1.2 + wNoise * 2.2);
     if (this.runMode === "campaign") {
       this.shotsThisShift++;
       if (!this.firedFirstShot) { this.firedFirstShot = true; this.fireRadio("first-shot"); }
@@ -1978,7 +2026,7 @@ export class Engine {
 
   private hitBoss(b: Boss, bullet: Bullet) {
     b.hp -= bullet.dmg;
-    b.flash = 0.09;
+    b.flash = 0.14;
     b.hurtT = 0.3;
     const dir = Math.sign(bullet.vx);
     for (let i = 0; i < (bullet.crit ? 8 : 5); i++)
@@ -1986,6 +2034,7 @@ export class Engine {
     this.texts.push({ x: b.x + R(-8, 8), y: b.y - 30 * b.scale, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(bullet.dmg)), color: bullet.crit ? "#fbbf24" : "rgba(255,255,255,.8)", size: bullet.crit ? 17 : 12 });
     if (this.st.lifesteal > 0) this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + bullet.dmg * this.st.lifesteal);
     this.sfx.zhit();
+    this.hitStopT = Math.max(this.hitStopT, bullet.crit ? 0.08 : 0.05);
     if (b.hp <= 0) this.killBoss(b);
   }
 
@@ -2162,7 +2211,7 @@ export class Engine {
         g.val = -g.val; // mark collected
         if (g.kind === "scrap") {
           this.profile.totalScrap += Math.abs(g.val);
-          this.gainMetaXp(2);
+          this.gainMetaXp(3);
           this.particles.push({ x: p.x, y: p.y - 34, vx: R(-30, 30), vy: R(-60, -10), life: 0.3, max: 0.3, size: 3, color: "#94a3b8", grav: 0, add: true });
         } else {
           this.gainXp(Math.abs(g.val));
@@ -2201,7 +2250,7 @@ export class Engine {
 
   private hitZombie(z: Zombie, b: Bullet) {
     z.hp -= b.dmg;
-    z.flash = 0.09;
+    z.flash = 0.14;
     // weapon-specific stagger (Deagle/shotguns hurl zombies backwards)
     const kb = WDEF[this.kind]?.knock ?? 60;
     z.vx += (Math.sign(b.vx) * kb * (b.crit ? 1.6 : 1)) / (z.scale * (z.boss ? 3 : 1));
@@ -2211,6 +2260,7 @@ export class Engine {
     this.texts.push({ x: z.x + R(-8, 8), y: z.y - 18 * z.scale, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(b.dmg)), color: b.crit ? "#fbbf24" : "rgba(255,255,255,.8)", size: b.crit ? 17 : 12 });
     if (this.st.lifesteal > 0) this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + b.dmg * this.st.lifesteal);
     this.sfx.zhit();
+    this.hitStopT = Math.max(this.hitStopT, b.crit ? 0.07 : 0.04);
     const incendiary = this.stacks["incendiary"] || 0;
     if (incendiary > 0) {
       // refreshes on every hit rather than stacking additively — keeps
@@ -2228,8 +2278,10 @@ export class Engine {
     this.profile.totalKills++;
     this.gainMetaXp(1);
     this.gainWeaponXp(this.kind, 1);
-    this.score += Math.round(z.score * (1 + this.power * 0.06));
+    this.score += Math.round(z.score * (1 + this.power * 0.06) * (this.levelUpgradesEnabled ? 1 : 1.15));
     this.shake(z.type === "brute" ? 5 : 1.6);
+    if (z.boss || z.type === "brute") this.hitStopT = Math.max(this.hitStopT, 0.09);
+    else this.hitStopT = Math.max(this.hitStopT, 0.03);
     this.sfx.zdie();
     // the top-down body is flat, so the zombie's own y is the burst origin
     const cx = z.x, cy = z.y;
@@ -2281,8 +2333,15 @@ export class Engine {
 
   /** A suppressed hit on a still-dormant sleeper — instant takedown, nearby sleepers stay asleep. */
   private quietKill(z: Zombie) {
+    if (this.runMode === "campaign" && this.campaignDef.shift === 1 && !this.tutorialQuietDone) {
+      this.tutorialQuietDone = true;
+      this.suppressLevelUpOnce = true;
+      this.fireRadio("quiet-tag");
+      // nudge next wave faster as reward for staying quiet
+      if (this.phase === "break" && this.breakT > 1) this.breakT = 1;
+    }
     z.hp = 0;
-    z.flash = 0.09;
+    z.flash = 0.14;
     this.texts.push({
       x: z.x, y: z.y - 74 * z.scale, vy: -60, life: 0.6, max: 0.6,
       text: "QUIET KILL", color: "#67e8f9", size: 12,
@@ -2474,6 +2533,8 @@ export class Engine {
   }
 
   private gainXp(v: number) {
+    // OFF mode: +15% score bonus is handled in killZombie/score, XP still levels but no modal
+    if (!this.levelUpgradesEnabled) v = Math.round(v * 0.85); // slightly slower leveling when skipping picks keeps pacing
     const p = this.pl;
     p.xp += v;
     while (p.xp >= p.xpNext) {
@@ -2482,7 +2543,25 @@ export class Engine {
       p.xpNext = this.xpFor(p.level);
       this.lvlPending++;
     }
-    if (this.lvlPending > 0 && !this.modalOpen) this.openLevelModal();
+    if (this.lvlPending > 0 && !this.modalOpen) {
+      if (!this.levelUpgradesEnabled) {
+        // consume levels silently with +15% score compensation
+        const levels = this.lvlPending;
+        this.lvlPending = 0;
+        this.score += Math.round(levels * 120 * 0.15);
+        this.texts.push({ x: this.pl.x, y: this.pl.y - 72, vy: -46, life: 0.7, max: 0.7, text: `LV ${p.level} (+15% BONUS)`, color: "#fbbf24", size: 12 });
+        return;
+      }
+      if (this.suppressLevelUpOnce) {
+        this.suppressLevelUpOnce = false;
+        // still level, but defer modal until wave 2 to avoid double-modal spam on tutorial
+        if (this.runMode === "campaign" && this.campaignDef.shift === 1 && this.waveInStage <= 1) {
+          this.banners.push({ text: "LEVEL UP QUEUED", sub: "pick after this wave", t: 2.2, dur: 2.2 });
+          return;
+        }
+      }
+      this.openLevelModal();
+    }
   }
 
   /** Lifetime account progression — permanently unlocks weapons in the Loadout
@@ -2502,6 +2581,7 @@ export class Engine {
   }
 
   private openLevelModal() {
+    this.rerollCount = 0;
     this.modals.add("levelup");
     this.sfx.levelup();
     this.onEvent({ type: "levelup", choices: this.rollChoices() });
@@ -2524,9 +2604,29 @@ export class Engine {
     return out;
   }
 
+  /** Reroll current level-up choices — 1 free per level, then costs 3 scrap */
+  rerollLevelChoices(): UpgradeChoice[] | null {
+    if (!this.modals.has("levelup")) return null;
+    if (this.rerollCount >= 1 && this.profile.totalScrap < 3) {
+      this.texts.push({ x: this.pl.x, y: this.pl.y - 88, vy: -46, life: 0.7, max: 0.7, text: "NEED 3 SCRAP TO REROLL", color: "#f87171", size: 11 });
+      return null;
+    }
+    if (this.rerollCount >= 1) {
+      this.profile.totalScrap -= 3;
+      saveProfile(this.profile);
+    }
+    this.rerollCount++;
+    const choices = this.rollChoices();
+    this.onEvent({ type: "levelup", choices });
+    this.sfx.click();
+    return choices;
+  }
+
   applyUpgrade(id: string) {
     if (!this.modalOpen) return;
+    if (id === "bombardment" && this.bombardmentUsed) return;
     this.stacks[id] = (this.stacks[id] || 0) + 1;
+    if (id === "bombardment") this.bombardmentUsed = true;
     this.recompute();
     if (id === "hp") this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + 30);
     if (id === "bombardment") this.executeBombardment();
@@ -2771,7 +2871,7 @@ export class Engine {
       if (d < blast) {
         const dmg = 140 * (1 - d / blast);
         z.hp -= dmg;
-        z.flash = 0.09;
+        z.flash = 0.14;
         const dir = Math.sign(z.x - g.x) || 1;
         z.vx += dir * 260;
         this.texts.push({ x: z.x, y: z.y - 74 * z.scale, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(dmg)), color: "#fbbf24", size: 14 });
@@ -3119,6 +3219,7 @@ export class Engine {
     for (const id of WEAPON_IDS) this.ammo[id] = this.effWeapon(id).mag;
     this.reloading = false;
     this.reloadT = 0;
+    this.stageFadeT = 0.45;
     this.beginRest(2.6);
     this.announce(`SHIFT ${next} — ${this.campaignDef.name}`, this.campaignDef.sub, 2.8);
     this.onCampaignShiftEnter();
@@ -3219,6 +3320,7 @@ export class Engine {
     this.reloadT = 0;
     // the boss stage gets a real countdown to settle in; ordinary stages keep
     // the brisk opener they already had
+    this.stageFadeT = 0.45;
     this.beginRest(this.stageDef.bossId != null ? 10 : 2.6);
     this.announce(`STAGE ${this.stage} — ${this.stageDef.name}`, this.stageDef.sub, 2.8);
   }
@@ -3260,7 +3362,8 @@ export class Engine {
     // instant you shoot, not only while sprinting.
     const laneRedirect = this.runMode === "campaign"
       && this.campaignDef.mechanic === "lane-redirect" && this.shotSideT > 0 && chance(0.65);
-    const ahead = this.stageDef.bossId != null && moving && chance(0.55);
+    const noisy = this.noiseT > 0 ? this.noiseLevel : 0;
+    const ahead = (this.stageDef.bossId != null && moving && chance(0.55)) || (noisy > 0.8 && chance(0.35 + noisy * 0.18));
     const angle = laneRedirect
       ? (this.shotSide === 1 ? Math.PI : 0) + R(-0.6, 0.6)
       : ahead ? Math.atan2(p.vy, p.vx) + R(-0.7, 0.7) : Math.random() * TAU;
@@ -3274,6 +3377,10 @@ export class Engine {
 
     const z = this.mkZombie(it.type, x, y, hpMul, speedMul);
     z.dmg *= dmgMul;
+    // Shift 1 interactive tutorial: half the walkers are dormant sleepers for quiet-kill teaching
+    if (this.runMode === "campaign" && this.campaignDef.shift === 1 && it.type === "walker" && chance(0.55)) {
+      z.dormant = true;
+    }
     if (it.boss) {
       z.scale *= 1.32;
       z.r = 30 * z.scale;
@@ -3635,12 +3742,12 @@ export class Engine {
     c.save();
     this.camTransform(cam, camY);
 
-    // ground tufts (world-space, no parallax — the ground is directly beneath you)
+    // ground tufts (world-space, no parallax — slow wind drift via tu.drift)
     c.strokeStyle = "rgba(52,84,56,0.7)";
     c.lineWidth = 1.4;
     for (const tu of this.tufts) {
       if (tu.x < wx0 || tu.x > wx1 || tu.y < wy0 || tu.y > wy1) continue;
-      const sway = Math.sin(t * 1.4 + tu.x) * 1.4;
+      const sway = Math.sin(t * 1.0 + tu.x * 0.7 + tu.drift) * 1.6;
       c.beginPath();
       c.moveTo(tu.x, tu.y + 1);
       c.quadraticCurveTo(tu.x + sway, tu.y - tu.h * 0.6, tu.x - 3 * tu.s + sway, tu.y - tu.h);
@@ -3689,11 +3796,30 @@ export class Engine {
     c.restore();
 
     /* --- vignette (darkness beyond the player's light) --- */
+    const dawnShiftVig = this.runMode === "campaign" ? clamp((this.campaignDef.shift - 1) / 7, 0, 1) : 0;
+    const vigAlpha = 0.55 - dawnShiftVig * 0.10; // 0.55 -> 0.45 at dawn, avoid double-darken with amber tint
     const vg = c.createRadialGradient(px, py, H * 0.3, px, py, H * 0.74);
     vg.addColorStop(0, "rgba(0,0,0,0)");
-    vg.addColorStop(1, "rgba(0,0,0,0.55)");
+    vg.addColorStop(1, `rgba(0,0,0,${vigAlpha})`);
     c.fillStyle = vg;
     c.fillRect(0, 0, W, H);
+
+    // campaign dawn lerp — 21:10 deep night blue -> 04:50 pre-dawn amber, subtle 8% overlay
+    if (this.runMode === "campaign") {
+      const dawnShift = clamp((this.campaignDef.shift - 1) / 7, 0, 1);
+      // lerp between night blue (21:10) and warm amber (04:50)
+      const night = [14, 18, 38] as const, dawn = [58, 42, 28] as const;
+      const r = Math.round(lerp(night[0], dawn[0], dawnShift));
+      const g = Math.round(lerp(night[1], dawn[1], dawnShift));
+      const b = Math.round(lerp(night[2], dawn[2], dawnShift));
+      c.fillStyle = `rgba(${r},${g},${b},${0.06 + dawnShift * 0.04})`;
+      c.fillRect(0, 0, W, H);
+      // per-2-Shifts accent tint — re-tint ground mid via overlay
+      const accentShift = Math.floor((this.campaignDef.shift - 1) / 2);
+      const accents = ["rgba(74,124,82,0.04)", "rgba(138,109,58,0.04)", "rgba(107,114,128,0.04)", "rgba(185,28,28,0.04)"];
+      c.fillStyle = accents[accentShift % accents.length];
+      c.fillRect(0, 0, W, H);
+    }
 
     // flashlight-style vision cone, anchored to the player's real screen
     // position and aimed with them
@@ -3896,6 +4022,13 @@ export class Engine {
       c.fill();
     }
 
+    // stage transition fade — final overlay, after every world + HUD element
+    if (this.stageFadeT > 0) {
+      const a = clamp(this.stageFadeT / 0.45, 0, 1) * 0.9;
+      c.fillStyle = `rgba(0,0,0,${a})`;
+      c.fillRect(0, 0, W, H);
+    }
+
     /* --- debug overlay (?debug=1) --- */
     if (this.debug) {
       c.save();
@@ -3939,9 +4072,15 @@ export class Engine {
     RHEE: "#7dd3fc", VALE: "#34d399", DIAZ: "#fb923c", UNK: "#f87171", CREW: "#f87171",
   };
 
+  private readonly RADIO_PORTRAIT: Record<Speaker, string> = {
+    RHEE: "R", VALE: "V", DIAZ: "D", UNK: "?", CREW: "C",
+  };
+
   /** Radio subtitle: a lower-third transcript box, speaker-colored, word-wrapped.
    * No spoken audio exists in this project (see radio.ts's doc comment) — this
-   * text plus `Sfx.radioChirp()` is the whole "incoming transmission" sell. */
+   * text plus `Sfx.radioChirp()` is the whole "incoming transmission" sell.
+   * Now with a small portrait chip per speaker (colored circle + initial) so
+   * Rhee/Vale/Diaz are instantly recognizable without reading the label. */
   private drawRadio(r: RadioLine) {
     const c = this.ctx;
     const p = 1 - r.t / r.dur;
@@ -3965,29 +4104,77 @@ export class Engine {
     if (cur) lines.push(cur);
 
     const lineH = 21;
-    const boxH = lines.length * lineH + 34;
+    const boxH = lines.length * lineH + 36;
     const textW = Math.max(...lines.map((l) => c.measureText(l).width), 120);
-    const boxW = Math.min(maxW + 40, textW + 40);
+    const boxW = Math.min(maxW + 60, textW + 72);
     const boxY = H - 96 - boxH;
     const boxX = W / 2 - boxW / 2;
     const color = this.RADIO_COLOR[r.speaker];
 
-    c.fillStyle = "rgba(4,6,10,0.72)";
+    c.fillStyle = "rgba(4,6,10,0.78)";
     c.fillRect(boxX, boxY, boxW, boxH);
     c.strokeStyle = color + "55";
     c.lineWidth = 1;
     c.strokeRect(boxX, boxY, boxW, boxH);
 
+    // portrait chip — small pixel head per speaker (16px spirit: distinct silhouette, not just letter)
+    const portraitX = boxX + 22, portraitY = boxY + 22, pr = 14;
+    c.fillStyle = color;
+    c.beginPath();
+    c.arc(portraitX, portraitY, pr, 0, TAU);
+    c.fill();
+    // speaker-specific details (still simple canvas, no extra atlas)
+    c.fillStyle = "rgba(0,0,0,0.35)";
+    c.beginPath();
+    c.arc(portraitX, portraitY, pr * 0.72, 0, TAU);
+    c.fill();
+    if (r.speaker === "RHEE") {
+      // cap/visor
+      c.fillStyle = "#0f172a";
+      c.fillRect(portraitX - 7, portraitY - 6, 14, 4);
+      c.fillStyle = "#e2e8f0";
+      c.beginPath();
+      c.arc(portraitX - 3, portraitY + 2, 2, 0, TAU); c.arc(portraitX + 3, portraitY + 2, 2, 0, TAU); c.fill();
+    } else if (r.speaker === "VALE") {
+      // bob hair
+      c.fillStyle = "#064e3b";
+      c.beginPath();
+      c.arc(portraitX, portraitY - 2, 7, Math.PI, 0); c.fill();
+      c.fillStyle = "#fde68a";
+      c.beginPath();
+      c.arc(portraitX - 3, portraitY + 2, 1.8, 0, TAU); c.arc(portraitX + 3, portraitY + 2, 1.8, 0, TAU); c.fill();
+    } else if (r.speaker === "DIAZ") {
+      // stubble/beard
+      c.fillStyle = "#451a03";
+      c.fillRect(portraitX - 5, portraitY + 3, 10, 4);
+      c.fillStyle = "#fdba74";
+      c.beginPath();
+      c.arc(portraitX - 3, portraitY, 1.7, 0, TAU); c.arc(portraitX + 3, portraitY, 1.7, 0, TAU); c.fill();
+    } else if (r.speaker === "UNK" || r.speaker === "CREW") {
+      c.fillStyle = "#450a0a";
+      c.fillRect(portraitX - 6, portraitY - 2, 12, 2);
+      c.fillStyle = "#fca5a5";
+      c.beginPath();
+      c.arc(portraitX - 3, portraitY + 3, 1.6, 0, TAU); c.arc(portraitX + 3, portraitY + 3, 1.6, 0, TAU); c.fill();
+    }
+    // initial letter on top, small
+    c.fillStyle = "#0a0a0a";
+    c.font = '800 10px "Space Grotesk", sans-serif';
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    c.fillText(this.RADIO_PORTRAIT[r.speaker] ?? "?", portraitX, portraitY + 9);
+    c.textBaseline = "alphabetic";
+
     c.textAlign = "left";
     c.fillStyle = color;
     c.font = '700 12px "Space Grotesk", sans-serif';
     (c as unknown as { letterSpacing: string }).letterSpacing = "2px";
-    c.fillText(r.speaker, boxX + 18, boxY + 20);
+    c.fillText(r.speaker, boxX + 44, boxY + 20);
     (c as unknown as { letterSpacing: string }).letterSpacing = "0px";
 
     c.font = '500 15px "Space Grotesk", sans-serif';
     c.fillStyle = "#f4efe6";
-    lines.forEach((line, i) => c.fillText(line, boxX + 18, boxY + 42 + i * lineH));
+    lines.forEach((line, i) => c.fillText(line, boxX + 44, boxY + 42 + i * lineH));
     c.restore();
   }
 
@@ -4468,13 +4655,19 @@ export class Engine {
   private drawPlayer(cam: number, camY: number, t: number) {
     const c = this.ctx;
     const p = this.pl;
-    const px = p.x - cam;
-    const py = p.y + camY;
+    // walk bob + subtle lean into movement
+    const vel = Math.hypot(p.vx, p.vy);
+    const run = vel > 26;
+    const bob = run ? Math.sin(p.walk * 2.2) * 1.8 : Math.sin(t * 1.6) * 0.5;
+    const leanX = run ? Math.cos(Math.atan2(p.vy, p.vx)) * 1.2 : 0;
+    const leanY = run ? Math.sin(Math.atan2(p.vy, p.vx)) * 0.8 : 0;
+    const px = p.x - cam + leanX;
+    const py = p.y + camY + bob + leanY;
 
     // soft contact shadow, directly beneath — no side-view foot offset needed
     c.fillStyle = "rgba(0,0,0,0.45)";
     c.beginPath();
-    c.ellipse(px, py + 6, SOLDIER_HALF * 0.6, SOLDIER_HALF * 0.5, 0, 0, TAU);
+    c.ellipse(p.x - cam, p.y + camY + 6, SOLDIER_HALF * 0.6, SOLDIER_HALF * 0.5, 0, 0, TAU);
     c.fill();
 
     c.save();
@@ -4484,8 +4677,6 @@ export class Engine {
     // Body points along the movement heading, the weapon along the aim angle —
     // they are separate sprites precisely so the two can disagree, which is
     // what makes twin-stick aiming read.
-    const vel = Math.hypot(p.vx, p.vy);
-    const run = vel > 26;
     const heading = run ? Math.atan2(p.vy, p.vx) : p.aim;
     const bodyDir = dirFor(heading, DIRS);
     const frame = run ? Math.floor(p.walk / (Math.PI / 2)) % FRAMES : 0;
