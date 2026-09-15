@@ -89,7 +89,7 @@ export default function Hud({
         <div className="text-base font-semibold text-white">{hud.stageName}</div>
         {hud.phase === "break" && hud.breakT > 3 ? (
           <>
-            <div className="font-display text-3xl tracking-[0.18em] text-emerald-300 drop-shadow-[0_0_14px_rgba(52,211,153,0.45)]">
+            <div className="font-display text-2xl tracking-[0.16em] text-emerald-300 drop-shadow-[0_0_14px_rgba(52,211,153,0.45)]">
               GET READY — WAVE {Math.max(1, hud.waveInStage + 1)}
             </div>
             <div className="mx-auto mt-1.5 h-1.5 w-56 overflow-hidden rounded-full border border-white/10 bg-black/60">
@@ -105,7 +105,7 @@ export default function Hud({
         ) : (
           <>
             <div
-              className={`font-display text-3xl tracking-[0.18em] ${
+              className={`font-display text-2xl tracking-[0.16em] ${
                 hud.hordeT > 0 || hud.isBossWave
                   ? "text-red-400 drop-shadow-[0_0_16px_rgba(239,68,68,0.6)] animate-pulse"
                   : "text-amber-300 drop-shadow-[0_0_14px_rgba(245,158,11,0.45)]"
@@ -125,14 +125,14 @@ export default function Hud({
                 return (
                   <span
                     key={i}
-                    className={`h-1.5 rounded-full transition-all ${boss ? "w-3.5" : "w-2.5"} ${
+                    className={`h-1 rounded-full transition-all ${boss ? "w-3" : "w-2"} ${
                       cur
                         ? boss
-                          ? "bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.9)]"
-                          : "bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.9)]"
+                          ? "bg-red-400 shadow-[0_0_6px_rgba(248,113,113,0.8)]"
+                          : "bg-amber-300 shadow-[0_0_6px_rgba(252,211,77,0.8)]"
                         : done
-                          ? boss ? "bg-red-500/60" : "bg-amber-500/50"
-                          : boss ? "bg-red-500/25" : "bg-white/15"
+                          ? boss ? "bg-red-500/50" : "bg-amber-500/40"
+                          : boss ? "bg-red-500/20" : "bg-white/12"
                     }`}
                   />
                 );
@@ -150,9 +150,9 @@ export default function Hud({
         )}
       </div>
 
-      {/* boss bar — 3 segments (one per enrage phase), the attack telegraph, and the E-lock hint */}
+      {/* boss bar — compact 3-seg, shaved from 420px centered to 360px to de-clutter the center */}
       {hud.bossActive && (
-        <div className="absolute left-1/2 top-24 w-[420px] -translate-x-1/2">
+        <div className="absolute left-1/2 top-[84px] w-[360px] -translate-x-1/2 backdrop-blur-[2px]">
           <div className="mb-1 flex items-center justify-between text-[12px] font-bold tracking-[0.2em] text-red-300">
             <span>{hud.bossName ? `◤ ${hud.bossName} ◢` : ""}</span>
             <span className="text-white/40">{hud.bossAttack ? ATTACK_LABELS[hud.bossAttack] : ""}</span>
@@ -303,7 +303,7 @@ export default function Hud({
               disabled={!w.owned}
               className={`relative flex flex-col items-center justify-center rounded-lg border transition-all duration-150 h-16 w-[4.2rem] text-[11px] ${
                 w.active
-                  ? "border-amber-400/70 bg-amber-400/15 shadow-[0_0_20px_rgba(245,158,11,0.3)]"
+                  ? "border-amber-400/70 bg-amber-400/15 shadow-[0_0_14px_rgba(245,158,11,0.25)]"
                   : w.owned
                     ? "border-white/12 bg-black/50 hover:border-white/30 hover:bg-white/5"
                     : "border-white/5 bg-black/40 opacity-35"

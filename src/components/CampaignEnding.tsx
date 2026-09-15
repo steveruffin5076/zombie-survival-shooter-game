@@ -1,16 +1,27 @@
 import type { CampaignEnding } from "../game/campaign";
 import { ENDING_COPY } from "../game/campaign";
-import { Home, Radio } from "lucide-react";
+import { Home, Radio, Skull, Shield, FlaskConical } from "lucide-react";
+
+const RECAP: Record<CampaignEnding, { diaz: string; vale: string; vial: string }> = {
+  "lights-out": { diaz: "DIAZ QUIET", vale: "VALE SAVED", vial: "STACKS BURNED" },
+  "second-site": { diaz: "DIAZ SPARED", vale: "VALE SAVED", vial: "VIAL TAKEN" },
+  "second-site-vale-dead": { diaz: "DIAZ DOWN", vale: "VALE LOST", vial: "VIAL TAKEN" },
+  "woke-the-rows": { diaz: "OVERRUN", vale: "ROWS WOKE", vial: "NO EXTRACTION" },
+  "quiet-clockout": { diaz: "DIAZ SILENT", vale: "VALE SAVED", vial: "STACKS BURNED" },
+};
 
 /**
  * Story Campaign's closing screen — one of the doc's 5 ending stingers,
  * shown as radio sign-off copy plus the printed card text, in place of the
  * normal GameOver flow (there's nothing to retry; the campaign is over).
+ * Now with a 3-icon recap row (Diaz / Vale / Vial) so the flags that got
+ * you here are legible at a glance.
  */
 export default function CampaignEndingScreen({
   ending, onQuit,
 }: { ending: CampaignEnding; onQuit: () => void }) {
   const copy = ENDING_COPY[ending];
+  const recap = RECAP[ending];
   return (
     <div className="pointer-events-auto absolute inset-0 z-50 flex items-center-safe justify-center overflow-y-auto bg-gradient-to-b from-violet-950/30 via-black/85 to-black/95 py-4 backdrop-blur-[4px]">
       <div className="anim-pop flex w-full max-w-lg flex-col items-center px-8 text-center">
@@ -30,7 +41,23 @@ export default function CampaignEndingScreen({
           {copy.sub.toUpperCase()}
         </p>
 
-        <div className="anim-rise mt-8 w-full rounded-xl border border-white/10 bg-black/40 px-6 py-5" style={{ animationDelay: "180ms" }}>
+        {/* 3-icon flag recap */}
+        <div className="anim-rise mt-6 flex w-full justify-center gap-3" style={{ animationDelay: "150ms" }}>
+          <span className="flex flex-col items-center rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[10px] font-bold tracking-[0.14em] text-zinc-400">
+            <Skull className="mb-1 h-4 w-4 text-amber-300" />
+            {recap.diaz}
+          </span>
+          <span className="flex flex-col items-center rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[10px] font-bold tracking-[0.14em] text-zinc-400">
+            <Shield className={`mb-1 h-4 w-4 ${recap.vale.includes("LOST") ? "text-red-400" : "text-emerald-300"}`} />
+            {recap.vale}
+          </span>
+          <span className="flex flex-col items-center rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[10px] font-bold tracking-[0.14em] text-zinc-400">
+            <FlaskConical className={`mb-1 h-4 w-4 ${recap.vial.includes("TAKEN") ? "text-violet-300" : "text-zinc-500"}`} />
+            {recap.vial}
+          </span>
+        </div>
+
+        <div className="anim-rise mt-6 w-full rounded-xl border border-white/10 bg-black/40 px-6 py-5" style={{ animationDelay: "180ms" }}>
           <p className="font-display text-lg tracking-[0.05em] text-zinc-300">{copy.card}</p>
         </div>
 

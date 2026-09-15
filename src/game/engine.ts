@@ -328,6 +328,8 @@ export class Engine {
   private shakeMag = 0;
   private shakeX = 0;
   private shakeY = 0;
+  private hitStopT = 0;
+  private stageFadeT = 0;
 
   private pl = this.freshPlayer();
   private st = this.baseStats();
@@ -422,7 +424,7 @@ export class Engine {
   /** Pre-rendered pixel-art sprites, built lazily per entity type. */
   private atlas = new SpriteAtlas();
   private decor: Decor[] = [];
-  private tufts: { x: number; y: number; h: number; s: number }[] = [];
+  private tufts: { x: number; y: number; h: number; s: number; drift: number }[] = [];
 
   constructor(canvas: HTMLCanvasElement, onEvent: (e: EngineEvent) => void) {
     this.canvas = canvas;
@@ -858,7 +860,7 @@ export class Engine {
     // ground tufts, scattered the same way (world coords, no parallax)
     const tuftCount = Math.round(area / 9000);
     for (let i = 0; i < tuftCount; i++) {
-      this.tufts.push({ x: R(0, worldW), y: R(0, WORLD_H), h: R(5, 14), s: R(0.6, 1.3) });
+      this.tufts.push({ x: R(0, worldW), y: R(0, WORLD_H), h: R(5, 14), s: R(0.6, 1.3), drift: R(0, TAU) });
     }
   }
 
@@ -1112,6 +1114,11 @@ export class Engine {
   /* ---------------- core update ---------------- */
 
   private update(dt: number) {
+    if (this.hitStopT > 0) {
+      this.hitStopT -= dt;
+      if (this.hitStopT > 0) return;
+    }
+    if (this.stageFadeT > 0) this.stageFadeT -= dt;
     const p = this.pl;
     this.playTime += dt;
     this.motes(dt);
@@ -1342,6 +1349,8 @@ export class Engine {
     this.updateGems(dt);
     this.updateParticles(dt);
     this.updateTexts(dt);
+    // tuft drift — slow wind through grass
+    for (const tu of this.tufts) tu.drift += dt * 0.4;
 
     // decals fade
     for (const d of this.decals) d.a -= dt * 0.02;
@@ -1978,7 +1987,7 @@ export class Engine {
 
   private hitBoss(b: Boss, bullet: Bullet) {
     b.hp -= bullet.dmg;
-    b.flash = 0.09;
+    b.flash = 0.14;
     b.hurtT = 0.3;
     const dir = Math.sign(bullet.vx);
     for (let i = 0; i < (bullet.crit ? 8 : 5); i++)
@@ -1986,6 +1995,7 @@ export class Engine {
     this.texts.push({ x: b.x + R(-8, 8), y: b.y - 30 * b.scale, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(bullet.dmg)), color: bullet.crit ? "#fbbf24" : "rgba(255,255,255,.8)", size: bullet.crit ? 17 : 12 });
     if (this.st.lifesteal > 0) this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + bullet.dmg * this.st.lifesteal);
     this.sfx.zhit();
+    this.hitStopT = Math.max(this.hitStopT, bullet.crit ? 0.08 : 0.05);
     if (b.hp <= 0) this.killBoss(b);
   }
 
@@ -2162,7 +2172,7 @@ export class Engine {
         g.val = -g.val; // mark collected
         if (g.kind === "scrap") {
           this.profile.totalScrap += Math.abs(g.val);
-          this.gainMetaXp(2);
+          this.gainMetaXp(3);
           this.particles.push({ x: p.x, y: p.y - 34, vx: R(-30, 30), vy: R(-60, -10), life: 0.3, max: 0.3, size: 3, color: "#94a3b8", grav: 0, add: true });
         } else {
           this.gainXp(Math.abs(g.val));
@@ -2201,7 +2211,7 @@ export class Engine {
 
   private hitZombie(z: Zombie, b: Bullet) {
     z.hp -= b.dmg;
-    z.flash = 0.09;
+    z.flash = 0.14;
     // weapon-specific stagger (Deagle/shotguns hurl zombies backwards)
     const kb = WDEF[this.kind]?.knock ?? 60;
     z.vx += (Math.sign(b.vx) * kb * (b.crit ? 1.6 : 1)) / (z.scale * (z.boss ? 3 : 1));
@@ -2211,6 +2221,7 @@ export class Engine {
     this.texts.push({ x: z.x + R(-8, 8), y: z.y - 18 * z.scale, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(b.dmg)), color: b.crit ? "#fbbf24" : "rgba(255,255,255,.8)", size: b.crit ? 17 : 12 });
     if (this.st.lifesteal > 0) this.pl.hp = Math.min(this.st.maxHp, this.pl.hp + b.dmg * this.st.lifesteal);
     this.sfx.zhit();
+    this.hitStopT = Math.max(this.hitStopT, b.crit ? 0.07 : 0.04);
     const incendiary = this.stacks["incendiary"] || 0;
     if (incendiary > 0) {
       // refreshes on every hit rather than stacking additively — keeps
@@ -2230,6 +2241,8 @@ export class Engine {
     this.gainWeaponXp(this.kind, 1);
     this.score += Math.round(z.score * (1 + this.power * 0.06));
     this.shake(z.type === "brute" ? 5 : 1.6);
+    if (z.boss || z.type === "brute") this.hitStopT = Math.max(this.hitStopT, 0.09);
+    else this.hitStopT = Math.max(this.hitStopT, 0.03);
     this.sfx.zdie();
     // the top-down body is flat, so the zombie's own y is the burst origin
     const cx = z.x, cy = z.y;
@@ -2282,7 +2295,7 @@ export class Engine {
   /** A suppressed hit on a still-dormant sleeper — instant takedown, nearby sleepers stay asleep. */
   private quietKill(z: Zombie) {
     z.hp = 0;
-    z.flash = 0.09;
+    z.flash = 0.14;
     this.texts.push({
       x: z.x, y: z.y - 74 * z.scale, vy: -60, life: 0.6, max: 0.6,
       text: "QUIET KILL", color: "#67e8f9", size: 12,
@@ -2771,7 +2784,7 @@ export class Engine {
       if (d < blast) {
         const dmg = 140 * (1 - d / blast);
         z.hp -= dmg;
-        z.flash = 0.09;
+        z.flash = 0.14;
         const dir = Math.sign(z.x - g.x) || 1;
         z.vx += dir * 260;
         this.texts.push({ x: z.x, y: z.y - 74 * z.scale, vy: -60, life: 0.55, max: 0.55, text: String(Math.round(dmg)), color: "#fbbf24", size: 14 });
@@ -3119,6 +3132,7 @@ export class Engine {
     for (const id of WEAPON_IDS) this.ammo[id] = this.effWeapon(id).mag;
     this.reloading = false;
     this.reloadT = 0;
+    this.stageFadeT = 0.45;
     this.beginRest(2.6);
     this.announce(`SHIFT ${next} — ${this.campaignDef.name}`, this.campaignDef.sub, 2.8);
     this.onCampaignShiftEnter();
@@ -3219,6 +3233,7 @@ export class Engine {
     this.reloadT = 0;
     // the boss stage gets a real countdown to settle in; ordinary stages keep
     // the brisk opener they already had
+    this.stageFadeT = 0.45;
     this.beginRest(this.stageDef.bossId != null ? 10 : 2.6);
     this.announce(`STAGE ${this.stage} — ${this.stageDef.name}`, this.stageDef.sub, 2.8);
   }
@@ -3635,12 +3650,12 @@ export class Engine {
     c.save();
     this.camTransform(cam, camY);
 
-    // ground tufts (world-space, no parallax — the ground is directly beneath you)
+    // ground tufts (world-space, no parallax — slow wind drift via tu.drift)
     c.strokeStyle = "rgba(52,84,56,0.7)";
     c.lineWidth = 1.4;
     for (const tu of this.tufts) {
       if (tu.x < wx0 || tu.x > wx1 || tu.y < wy0 || tu.y > wy1) continue;
-      const sway = Math.sin(t * 1.4 + tu.x) * 1.4;
+      const sway = Math.sin(t * 1.0 + tu.x * 0.7 + tu.drift) * 1.6;
       c.beginPath();
       c.moveTo(tu.x, tu.y + 1);
       c.quadraticCurveTo(tu.x + sway, tu.y - tu.h * 0.6, tu.x - 3 * tu.s + sway, tu.y - tu.h);
@@ -3694,6 +3709,23 @@ export class Engine {
     vg.addColorStop(1, "rgba(0,0,0,0.55)");
     c.fillStyle = vg;
     c.fillRect(0, 0, W, H);
+
+    // campaign dawn lerp — 21:10 deep night blue -> 04:50 pre-dawn amber, subtle 8% overlay
+    if (this.runMode === "campaign") {
+      const dawnShift = clamp((this.campaignDef.shift - 1) / 7, 0, 1);
+      // lerp between night blue (21:10) and warm amber (04:50)
+      const night = [14, 18, 38] as const, dawn = [58, 42, 28] as const;
+      const r = Math.round(lerp(night[0], dawn[0], dawnShift));
+      const g = Math.round(lerp(night[1], dawn[1], dawnShift));
+      const b = Math.round(lerp(night[2], dawn[2], dawnShift));
+      c.fillStyle = `rgba(${r},${g},${b},${0.06 + dawnShift * 0.04})`;
+      c.fillRect(0, 0, W, H);
+      // per-2-Shifts accent tint — re-tint ground mid via overlay
+      const accentShift = Math.floor((this.campaignDef.shift - 1) / 2);
+      const accents = ["rgba(74,124,82,0.04)", "rgba(138,109,58,0.04)", "rgba(107,114,128,0.04)", "rgba(185,28,28,0.04)"];
+      c.fillStyle = accents[accentShift % accents.length];
+      c.fillRect(0, 0, W, H);
+    }
 
     // flashlight-style vision cone, anchored to the player's real screen
     // position and aimed with them
@@ -3896,6 +3928,13 @@ export class Engine {
       c.fill();
     }
 
+    // stage transition fade — final overlay, after every world + HUD element
+    if (this.stageFadeT > 0) {
+      const a = clamp(this.stageFadeT / 0.45, 0, 1) * 0.9;
+      c.fillStyle = `rgba(0,0,0,${a})`;
+      c.fillRect(0, 0, W, H);
+    }
+
     /* --- debug overlay (?debug=1) --- */
     if (this.debug) {
       c.save();
@@ -3939,9 +3978,15 @@ export class Engine {
     RHEE: "#7dd3fc", VALE: "#34d399", DIAZ: "#fb923c", UNK: "#f87171", CREW: "#f87171",
   };
 
+  private readonly RADIO_PORTRAIT: Record<Speaker, string> = {
+    RHEE: "R", VALE: "V", DIAZ: "D", UNK: "?", CREW: "C",
+  };
+
   /** Radio subtitle: a lower-third transcript box, speaker-colored, word-wrapped.
    * No spoken audio exists in this project (see radio.ts's doc comment) — this
-   * text plus `Sfx.radioChirp()` is the whole "incoming transmission" sell. */
+   * text plus `Sfx.radioChirp()` is the whole "incoming transmission" sell.
+   * Now with a small portrait chip per speaker (colored circle + initial) so
+   * Rhee/Vale/Diaz are instantly recognizable without reading the label. */
   private drawRadio(r: RadioLine) {
     const c = this.ctx;
     const p = 1 - r.t / r.dur;
@@ -3965,29 +4010,42 @@ export class Engine {
     if (cur) lines.push(cur);
 
     const lineH = 21;
-    const boxH = lines.length * lineH + 34;
+    const boxH = lines.length * lineH + 36;
     const textW = Math.max(...lines.map((l) => c.measureText(l).width), 120);
-    const boxW = Math.min(maxW + 40, textW + 40);
+    const boxW = Math.min(maxW + 60, textW + 72);
     const boxY = H - 96 - boxH;
     const boxX = W / 2 - boxW / 2;
     const color = this.RADIO_COLOR[r.speaker];
 
-    c.fillStyle = "rgba(4,6,10,0.72)";
+    c.fillStyle = "rgba(4,6,10,0.78)";
     c.fillRect(boxX, boxY, boxW, boxH);
     c.strokeStyle = color + "55";
     c.lineWidth = 1;
     c.strokeRect(boxX, boxY, boxW, boxH);
 
+    // portrait chip
+    const portraitX = boxX + 22, portraitY = boxY + 22, pr = 14;
+    c.fillStyle = color;
+    c.beginPath();
+    c.arc(portraitX, portraitY, pr, 0, TAU);
+    c.fill();
+    c.fillStyle = "#0a0a0a";
+    c.font = '800 13px "Space Grotesk", sans-serif';
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    c.fillText(this.RADIO_PORTRAIT[r.speaker] ?? "?", portraitX, portraitY + 1);
+    c.textBaseline = "alphabetic";
+
     c.textAlign = "left";
     c.fillStyle = color;
     c.font = '700 12px "Space Grotesk", sans-serif';
     (c as unknown as { letterSpacing: string }).letterSpacing = "2px";
-    c.fillText(r.speaker, boxX + 18, boxY + 20);
+    c.fillText(r.speaker, boxX + 44, boxY + 20);
     (c as unknown as { letterSpacing: string }).letterSpacing = "0px";
 
     c.font = '500 15px "Space Grotesk", sans-serif';
     c.fillStyle = "#f4efe6";
-    lines.forEach((line, i) => c.fillText(line, boxX + 18, boxY + 42 + i * lineH));
+    lines.forEach((line, i) => c.fillText(line, boxX + 44, boxY + 42 + i * lineH));
     c.restore();
   }
 
@@ -4468,13 +4526,19 @@ export class Engine {
   private drawPlayer(cam: number, camY: number, t: number) {
     const c = this.ctx;
     const p = this.pl;
-    const px = p.x - cam;
-    const py = p.y + camY;
+    // walk bob + subtle lean into movement
+    const vel = Math.hypot(p.vx, p.vy);
+    const run = vel > 26;
+    const bob = run ? Math.sin(p.walk * 2.2) * 1.8 : Math.sin(t * 1.6) * 0.5;
+    const leanX = run ? Math.cos(Math.atan2(p.vy, p.vx)) * 1.2 : 0;
+    const leanY = run ? Math.sin(Math.atan2(p.vy, p.vx)) * 0.8 : 0;
+    const px = p.x - cam + leanX;
+    const py = p.y + camY + bob + leanY;
 
     // soft contact shadow, directly beneath — no side-view foot offset needed
     c.fillStyle = "rgba(0,0,0,0.45)";
     c.beginPath();
-    c.ellipse(px, py + 6, SOLDIER_HALF * 0.6, SOLDIER_HALF * 0.5, 0, 0, TAU);
+    c.ellipse(p.x - cam, p.y + camY + 6, SOLDIER_HALF * 0.6, SOLDIER_HALF * 0.5, 0, 0, TAU);
     c.fill();
 
     c.save();
@@ -4484,8 +4548,6 @@ export class Engine {
     // Body points along the movement heading, the weapon along the aim angle —
     // they are separate sprites precisely so the two can disagree, which is
     // what makes twin-stick aiming read.
-    const vel = Math.hypot(p.vx, p.vy);
-    const run = vel > 26;
     const heading = run ? Math.atan2(p.vy, p.vx) : p.aim;
     const bodyDir = dirFor(heading, DIRS);
     const frame = run ? Math.floor(p.walk / (Math.PI / 2)) % FRAMES : 0;

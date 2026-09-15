@@ -104,17 +104,25 @@ describe("difficultyFor mission mode", () => {
 });
 
 describe("difficultyFor endless mode", () => {
-  it("climbs unbounded past 40", () => {
+  it("climbs past 40 but caps at 60", () => {
     const diff50 = difficultyFor(50, 5, "endless");
     expect(diff50).toBeGreaterThan(40);
+    expect(diff50).toBeLessThanOrEqual(60);
+    expect(difficultyFor(200, 10, "endless")).toBe(60);
   });
 
-  it("matches cumulativeWaveIndex", () => {
+  it("matches mission curve through wave 240", () => {
     for (let stage = 1; stage <= 10; stage++) {
       for (let wave = 1; wave <= 10; wave++) {
-        expect(difficultyFor(stage, wave, "endless")).toBe(cumulativeWaveIndex(stage, wave));
+        if (cumulativeWaveIndex(stage, wave) <= 240) {
+          expect(difficultyFor(stage, wave, "endless")).toBe(cumulativeWaveIndex(stage, wave) / 6);
+        }
       }
     }
+  });
+
+  it("grows slowly after 240 (0.04 per wave)", () => {
+    expect(difficultyFor(25, 10, "endless")).toBeCloseTo(40 + (cumulativeWaveIndex(25, 10) - 240) * 0.04, 6);
   });
 });
 
