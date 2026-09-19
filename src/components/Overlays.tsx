@@ -174,8 +174,8 @@ export function Menu({
 /* ------------------------------------------------------------------ */
 
 export function LevelUpModal({
-  choices, level, onPick,
-}: { choices: UpgradeChoice[]; level: number; onPick: (id: string) => void }) {
+  choices, level, onPick, onReroll, scrap,
+}: { choices: UpgradeChoice[]; level: number; onPick: (id: string) => void; onReroll?: () => void; scrap?: number }) {
   return (
     <div className="pointer-events-auto absolute inset-0 z-40 flex items-center-safe justify-center overflow-y-auto bg-black/75 py-4 backdrop-blur-[6px]">
       <div className="anim-pop w-full max-w-3xl px-8">
@@ -185,9 +185,17 @@ export function LevelUpModal({
         <h2 className="title-blood mb-1 text-center font-display text-5xl tracking-[0.1em]">
           CHOOSE AN UPGRADE
         </h2>
-        <p className="mb-8 text-center text-sm tracking-widest text-zinc-500">
+        <p className="mb-2 text-center text-sm tracking-widest text-zinc-500">
           PRESS 1 · 2 · 3 OR CLICK TO EQUIP
         </p>
+        <div className="mb-6 flex justify-center">
+          <button
+            onClick={() => onReroll?.()}
+            className="flex items-center gap-2 rounded-full border border-violet-400/30 bg-violet-500/10 px-4 py-1.5 text-xs font-bold tracking-[0.15em] text-violet-200 transition hover:border-violet-400/60 hover:bg-violet-500/20 active:scale-[0.98]"
+          >
+            ↻ REROLL <span className="text-zinc-500">· R</span> <span className="text-amber-300/80">{scrap !== undefined && scrap < 3 ? "(1 FREE)" : "(FREE → 3 SCRAP)"}</span>
+          </button>
+        </div>
 
         <div className="grid grid-cols-3 gap-5">
           {choices.map((u, i) => {

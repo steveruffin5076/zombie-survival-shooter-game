@@ -19,7 +19,7 @@ import { PixelBuf } from "../pixel";
 export const TILE_PX = 32;
 
 /** Authored variants per theme. */
-export const TILE_VARIANTS = 5;
+export const TILE_VARIANTS = 7;
 
 export type GroundTheme = "cemetery" | "suburbs" | "highway" | "arena";
 
@@ -137,6 +137,20 @@ export function buildTileBufs(theme: GroundTheme): PixelBuf[] {
           b.px(Math.floor(r() * TILE_PX), Math.floor(r() * TILE_PX), p.mid);
         }
         crack(b, p, r, 12 + Math.floor(r() * 8));
+        break;
+      case 5:
+        // scattered pebble grit — tiny dark specks, denser than the base slab
+        for (let i = 0; i < 22; i++) {
+          const x = Math.floor(r() * TILE_PX);
+          const y = Math.floor(r() * TILE_PX);
+          b.px(x, y, p.dark);
+          if (r() < 0.4) b.px((x + 1) % TILE_PX, y, p.mid);
+        }
+        break;
+      case 6:
+        // diagonal hairline crack + faint accent wash
+        crack(b, p, r, 2 + Math.floor(r() * 4));
+        blotch(b, r, 18 + r() * 10, 18 + r() * 10, 4 + r() * 2, p.accent + "50");
         break;
     }
     out.push(b);
