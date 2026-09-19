@@ -136,6 +136,8 @@ export function drawSoldier(b: PixelBuf, dir: number, frame: number): void {
   // chest rig pouches
   blob(b, ax, 3.9, 2.5, 1.8, 2.1, rig[0]);
   blob(b, ax, 3.9, -2.5, 1.8, 2.1, rig[0]);
+  // chest LED, on the far-left pouch strap — the suit's second glow point
+  blob(b, ax, 3.9, -4.9, 0.8, 0.8, RAMPS.visor[0]);
 
   // ---- helmet, sitting on top of the torso and slightly forward ----
   blob(b, ax, 1.3, 0, 4.6, 4.6, hat[2]);
