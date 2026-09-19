@@ -6,25 +6,27 @@
  * owns per-MATERIAL shading — the 3-4 step ramps a sprite needs to read as a
  * solid object under a single overhead light.
  *
- * Values continue the palette already on screen (the player's teal rig, the
- * SKIN/CLOTH arrays in engine.ts) rather than starting a new one, so the
- * pixel sprites don't clash with the effects still drawn as vectors.
+ * Values continue the palette already on screen (cyan accents in engine.ts's
+ * effects, the SKIN/CLOTH arrays there) rather than starting a new one, so the
+ * pixel sprites don't clash with the effects still drawn as vectors. The
+ * player is the Night Ops read: near-dark charcoal gear whose cyan visor/LED
+ * glow is the one thing that carries color.
  */
 
 /** Light -> dark, 4 steps. Index 0 is the lit top, index 3 the shadow side. */
 export type Ramp = readonly [string, string, string, string];
 
 export const RAMPS = {
-  /** Player fatigues — the existing #0e7490/#0a3542 teal rig. */
-  playerSuit: ["#1596b4", "#0e7490", "#0b5567", "#083845"],
-  /** Player vest/webbing, a shade off the suit so gear reads separately. */
-  playerRig: ["#12627a", "#0c4a5e", "#093846", "#062832"],
-  /** Combat helmet — dark olive so it doesn't outshout the body at 24x24. */
-  playerHelmet: ["#5c6b4e", "#44503a", "#2f382a", "#1d231a"],
-  /** Squad marking. The one saturated accent, so the player reads instantly. */
-  playerMark: ["#dc2626", "#a82626", "#7f1d1d", "#5b1414"],
+  /** Player fatigues — Night Ops charcoal-navy, near-dark against the night stages. */
+  playerSuit: ["#4c566e", "#333b4c", "#232a38", "#161b25"],
+  /** Player vest/webbing, matte black so only the glow accents carry color. */
+  playerRig: ["#2c3442", "#1f2530", "#161b24", "#0e1119"],
+  /** Combat helmet — matte black-grey, a step behind the suit's lit edge. */
+  playerHelmet: ["#3c4351", "#2a303c", "#1c212a", "#11141b"],
+  /** Squad marking. Cyan, part of the player's single glow accent. */
+  playerMark: ["#9ff6ff", "#4fe8f7", "#12b5c9", "#0a7f92"],
   /** Visor glow — the player's signature cue for which way they face. */
-  visor: ["#67e8f9", "#22d3ee", "#0e7490", "#083845"],
+  visor: ["#9ff6ff", "#4fe8f7", "#12b5c9", "#0a7f92"],
   /** Bare skin — face sliver, hands. */
   skin: ["#f0c9a4", "#e8b892", "#c2906c", "#8f6748"],
 

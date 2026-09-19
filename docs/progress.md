@@ -7,7 +7,7 @@
 - **Completed plan (Phases 0–7):** `~/.claude/plans/can-you-check-my-noble-catmull.md`
 - **Prior plan (done):** `docs/superpowers/plans/2026-09-08-android-touch-and-packaging.md`
 - **Design doc driving Phases 8+:** `enhancement-1.md` (repo root, on `main`)
-- **Last updated:** 2026-09-12 (stage 4 retuned after playtest — the boss chases for real; pixel-art Phases 3-4 outlined at the end of this file)
+- **Last updated:** 2026-09-19 (player sprite restyled to the "Night Ops" read; stage 4 retune from 2026-09-12 still awaiting a re-playtest; pixel-art Phases 3-4 outlined at the end of this file)
 - ⚠ **`~/.claude/plans/logical-moseying-reddy.md` has been recycled.** That one path has held three unrelated plans now (Phases 8-12, then the pixel-art overhaul, then the shotgun reload). It is *not* an archive — whatever it holds is just the most recent planning session. This file is the durable record; don't send anyone to that path for history.
 
 ---
@@ -17,6 +17,15 @@
 **As of Phase 21, the campaign/mission system (Phases 8–20, the whole `enhancement-1.md` Aetheris/Redshift arc) is gone.** The user's explicit direction: "remove all campaign and its features, it's not suitable for this." The game is now Endless-mode-only, with a persistent, lifetime meta-progression system replacing the old campaign's fixed Hideout loadout, and the noise/threat/suppressor system removed outright (a same-session follow-up request). Everything below Phase 21 in this file is history — kept for context on decisions made along the way, not a description of the current build.
 
 **Immediate next action:** re-playtest stage 4. It was rebuilt as a 2D boss stage, played too easy, and has now been retuned aggressively — the user asked for "the hardest thing in the rotation", so overshooting is a live possibility and the main levers are single constants. After that, pixel-art **Phase 3 — enemy labels**; the Phase 3-4 outline is at the end of this file.
+
+### 2026-09-19 — Player sprite restyled to "Night Ops" — DONE
+
+The teal soldier read as the brightest object on screen — brighter than the zombies he fights. Chosen via a 4-option comparison sheet (night-ops / crimson-veteran / riot-heavy / hooded-survivor, all prototyped on the real `blob()` pipeline before applying); the user picked **Night Ops**: near-dark charcoal-navy gear whose only color is the glow — cyan visor, cyan squad mark, and a new cyan chest LED — so the eye goes straight to *where he's facing*, and the green/brown/tan zombie flesh owns the "creature" register instead of competing with a teal player.
+
+- [x] `palette.ts`: `playerSuit` → charcoal-navy ramp, `playerRig` → matte black, `playerHelmet` → black-grey, `playerMark`/`visor` → the same cyan ramp (`#9ff6ff → #0a7f92`), replacing red — the suit no longer carries a second accent color
+- [x] `soldier.ts` `drawSoldier()`: added the chest LED blob on the far-left pouch strap; geometry, stride, and the body/gun split untouched
+- [x] No engine/HUD/test changes needed: the player ramps are consumed only by `drawSoldier`, and engine effects already used `#67e8f9` cyan (pickups, quiet-kill text, muzzle smoke), so the sprite now matches the effects palette
+- **Verified:** `tsc --noEmit` clean · 130/130 tests · `vite build` succeeds — sprites compared side-by-side with walker/runner/brute buffers to confirm the player still pops off dark ground
 
 ### Phase 21 — Major pivot: campaign removed, Endless-only with persistent progression — DONE (2026-09-10)
 
